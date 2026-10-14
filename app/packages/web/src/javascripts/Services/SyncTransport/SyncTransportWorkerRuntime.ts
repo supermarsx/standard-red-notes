@@ -481,6 +481,7 @@ type ParkedRefreshOperation =
   | { kind: 'rpc'; clientRequestId: string }
   /** A collaboration authorization the gateway refused `SESSION_STALE`. */
   | { kind: 'collaboration'; clientRequestId: string }
+  | { kind: 'invite'; clientRequestId: string; subscription: ActiveInviteSubscription }
   /**
    * Nothing to resume: repair the SOCKET's credential and stop.
    *
@@ -516,6 +517,8 @@ type ActiveInviteSubscription = {
   sent: boolean
   awaitingAck?: string
   ackReady?: boolean
+  /** Do not ACK an applied old batch until the refreshed subscription replays it. */
+  awaitingRefreshReplay?: boolean
   /**
    * True once this subscription's owner has been told the lane is not carrying it
    * right now — an `INVITE_ERROR` or an `INVITE_DEFERRED` went out.
@@ -1408,6 +1411,8 @@ export class SyncTransportWorkerRuntime {
     if (
       this.inviteSubscription !== subscription ||
       !subscription.ackReady ||
+      !subscription.sent ||
+      subscription.awaitingRefreshReplay === true ||
       !cursor ||
       this.socket?.readyState !== 1 ||
       this.state !== 'READY'
@@ -2936,6 +2941,8 @@ export class SyncTransportWorkerRuntime {
         await this.resumeRefreshedRpc(parked.clientRequestId, outcome)
       } else if (parked.kind === 'collaboration') {
         await this.resumeRefreshedCollaboration(parked.clientRequestId, outcome)
+      } else if (parked.kind === 'invite') {
+        await this.resumeRefreshedInvite(parked.subscription, outcome)
       } else if (parked.kind === 'command') {
         await this.resumeRefreshedCommand(outcome)
       }
@@ -3091,6 +3098,24 @@ export class SyncTransportWorkerRuntime {
    * keeps the frames unambiguous and cannot defeat a dedupe that is keyed on the
    * absent idempotency key.
    */
+  private async resumeRefreshedInvite(
+    subscription: ActiveInviteSubscription,
+    outcome: 'refreshed' | 'failed' | 'revoked',
+  ): Promise<void> {
+    if (this.inviteSubscription !== subscription || subscription.settled) {
+      return
+    }
+    if (outcome === 'refreshed' && this.state === 'READY' && this.socket?.readyState === 1) {
+      await this.sendInviteSubscription(subscription)
+      return
+    }
+    this.failInviteSubscription(
+      subscription,
+      outcome === 'revoked' ? 'NOT_AUTHORIZED' : 'SESSION_STALE',
+      outcome !== 'revoked',
+    )
+  }
+
   private async resumeRefreshedRpc(
     clientRequestId: string,
     outcome: 'refreshed' | 'failed' | 'revoked',
@@ -3285,12 +3310,14 @@ export class SyncTransportWorkerRuntime {
             this.failInviteSubscription(subscription, 'INVALID_RESPONSE', false)
             return
           }
+          subscription.awaitingRefreshReplay = false
           // Reconnect may replay the still-unacknowledged batch while the main
           // thread is applying it. Do not deliver a duplicate. If application
           // already completed while disconnected, acknowledge this replay now.
           void this.sendInviteAckIfReady(subscription)
           return
         }
+        subscription.awaitingRefreshReplay = false
         subscription.awaitingAck = frame.payload.nextCursor
         subscription.ackReady = false
         this.dependencies.postMessage({
@@ -3320,6 +3347,18 @@ export class SyncTransportWorkerRuntime {
         })
         return
       case 'ERROR':
+        if (frame.payload.code === 'SESSION_STALE' && this.canRefreshSession()) {
+          // Retire the refusing wire identity before asking for repair. Late or
+          // duplicate ERROR frames from that subscription cannot start another refresh.
+          subscription.commandId = this.uuid()
+          subscription.sent = false
+          subscription.awaitingRefreshReplay = true
+          if (
+            this.requestSessionRefresh({ kind: 'invite', clientRequestId: subscription.clientRequestId, subscription })
+          ) {
+            return
+          }
+        }
         this.failInviteSubscription(
           subscription,
           typeof frame.payload.code === 'string' ? frame.payload.code : 'INVITE_ERROR',

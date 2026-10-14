@@ -6726,4 +6726,254 @@ describe('SyncTransportWorkerRuntime', () => {
       expect(socket.closes).toContainEqual({ code: 4000, reason: 'ack-timeout' })
     })
   })
+
+  describe('invite subscription stale-session repair', () => {
+    const frames = (socket: FakeSocket, type: string) =>
+      socket.sent
+        .map((entry) => JSON.parse(entry) as { type: string; commandId: string; payload: Record<string, unknown> })
+        .filter((frame) => frame.type === type)
+    const asks = (harness: ReturnType<typeof setup>) =>
+      harness.messages.filter((message) => message.type === 'NEED_SESSION_REFRESH') as Extract<
+        SyncWorkerToMainMessage,
+        { type: 'NEED_SESSION_REFRESH' }
+      >[]
+    const openInvite = async (harness: ReturnType<typeof setup>) => {
+      await harness.runtime.handle({
+        type: 'SUBSCRIBE_INVITE_EVENTS',
+        clientRequestId: 'invite-repair',
+        sessionScope: SESSION_A,
+        cursor: 'cursor-0',
+        limit: 1,
+      })
+      await harness.runtime.handle({
+        type: 'CONNECT',
+        clientRequestId: 'invite-repair',
+        sessionScope: SESSION_A,
+        authorization: {
+          endpoint: 'wss://sync.example.test/sockets/sync',
+          ticket: 'i'.repeat(40),
+          expiresAt: Date.now() + 30000,
+          deviceId: 'device-1',
+        },
+      })
+      const socket = harness.sockets[0]
+      socket.open()
+      socket.receive(
+        serverFrame('AUTHENTICATED', frames(socket, 'AUTH')[0].commandId, {
+          capability: 'ws-sync',
+          protocolVersion: 1,
+          operations: ['SYNC_ITEMS', 'INVITE_EVENTS'],
+          nextClientSequence: 1,
+        }),
+      )
+      await flush()
+      return socket
+    }
+    const stale = (socket: FakeSocket) =>
+      socket.receive(
+        serverFrame('ERROR', frames(socket, 'INVITE_SUBSCRIBE').at(-1)!.commandId, {
+          code: 'SESSION_STALE',
+          retryable: true,
+        }),
+      )
+    const mint = async (harness: ReturnType<typeof setup>) => {
+      await harness.runtime.handle({
+        type: 'SESSION_REFRESH_TICKET',
+        refreshId: asks(harness).at(-1)!.refreshId,
+        ticket: 'f'.repeat(40),
+        deviceId: 'device-1',
+      })
+      await flush()
+    }
+    const repair = async (harness: ReturnType<typeof setup>, socket: FakeSocket) => {
+      await mint(harness)
+      socket.receive(serverFrame('REAUTHENTICATED', frames(socket, 'REAUTH').at(-1)!.commandId, {}))
+      await flush()
+    }
+    const batch = {
+      previousCursor: 'cursor-0',
+      nextCursor: 'cursor-1',
+      hasMore: false,
+      events: [
+        {
+          version: 1 as const,
+          eventId: '11111111-1111-4111-8111-111111111111',
+          streamPosition: 'cursor-1',
+          kind: 'subscription-invite' as const,
+          action: 'created' as const,
+          inviteUuid: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          occurredAt: 1,
+        },
+      ],
+    }
+
+    it('repairs on the same socket once and ignores duplicate old refusal frames', async () => {
+      const h = setup(),
+        socket = await openInvite(h),
+        old = frames(socket, 'INVITE_SUBSCRIBE')[0]
+      stale(socket)
+      socket.receive(serverFrame('ERROR', old.commandId, { code: 'SESSION_STALE', retryable: true }))
+      await flush()
+      expect(asks(h)).toHaveLength(1)
+      expect(h.messages.some((m) => m.type === 'INVITE_ERROR')).toBe(false)
+      await repair(h, socket)
+      expect(frames(socket, 'INVITE_SUBSCRIBE')).toHaveLength(2)
+      expect(frames(socket, 'INVITE_SUBSCRIBE')[1].commandId).not.toBe(old.commandId)
+      expect(frames(socket, 'INVITE_SUBSCRIBE')[1].payload.cursor).toBe('cursor-0')
+      socket.receive(serverFrame('ERROR', old.commandId, { code: 'SESSION_STALE', retryable: true }))
+      await flush()
+      expect(asks(h)).toHaveLength(1)
+      expect(socket.readyState).toBe(1)
+      expect(socket.closes).toEqual([])
+    })
+    it('never refreshes an explicit authorization denial', async () => {
+      const h = setup(),
+        socket = await openInvite(h)
+      socket.receive(
+        serverFrame('ERROR', frames(socket, 'INVITE_SUBSCRIBE')[0].commandId, {
+          code: 'NOT_AUTHORIZED',
+          retryable: false,
+        }),
+      )
+      await flush()
+      expect(asks(h)).toHaveLength(0)
+      expect(h.messages).toContainEqual({
+        type: 'INVITE_ERROR',
+        clientRequestId: 'invite-repair',
+        code: 'NOT_AUTHORIZED',
+        retryable: false,
+      })
+    })
+    it.each(['failed', 'revoked'] as const)(
+      'uses existing bounded error semantics when refresh is %s',
+      async (outcome) => {
+        const h = setup(),
+          socket = await openInvite(h)
+        stale(socket)
+        await flush()
+        if (outcome === 'failed') {
+          await h.runtime.handle({ type: 'SESSION_REFRESH_UNAVAILABLE', refreshId: asks(h)[0].refreshId })
+        } else {
+          await mint(h)
+          socket.receive({
+            ...serverFrame('ERROR', 'protocol', { code: 'NOT_AUTHORIZED', retryable: false }),
+            requestId: 'protocol',
+          })
+        }
+        await flush()
+        expect(frames(socket, 'INVITE_SUBSCRIBE')).toHaveLength(1)
+        expect(h.messages).toContainEqual({
+          type: 'INVITE_ERROR',
+          clientRequestId: 'invite-repair',
+          code: outcome === 'revoked' ? 'NOT_AUTHORIZED' : 'SESSION_STALE',
+          retryable: outcome !== 'revoked',
+        })
+      },
+    )
+    it('respects the existing socket refresh budget', async () => {
+      const h = setup(),
+        socket = await openInvite(h)
+      for (let count = 0; count < 4; count++) {
+        stale(socket)
+        await flush()
+        await repair(h, socket)
+      }
+      stale(socket)
+      await flush()
+      expect(asks(h)).toHaveLength(4)
+      expect(h.messages).toContainEqual({
+        type: 'INVITE_ERROR',
+        clientRequestId: 'invite-repair',
+        code: 'SESSION_STALE',
+        retryable: true,
+      })
+    })
+    it.each([false, true])(
+      'does not resurrect an unsubscribed or replaced subscription (replace=%s)',
+      async (replace) => {
+        const h = setup(),
+          socket = await openInvite(h)
+        stale(socket)
+        await flush()
+        await h.runtime.handle({ type: 'UNSUBSCRIBE_INVITE_EVENTS', clientRequestId: 'invite-repair' })
+        if (replace) {
+          await h.runtime.handle({
+            type: 'SUBSCRIBE_INVITE_EVENTS',
+            clientRequestId: 'invite-repair',
+            sessionScope: SESSION_A,
+            cursor: 'replacement-cursor',
+            limit: 1,
+          })
+        }
+        await repair(h, socket)
+        expect(frames(socket, 'INVITE_SUBSCRIBE')).toHaveLength(replace ? 2 : 1)
+        if (replace) {
+          expect(frames(socket, 'INVITE_SUBSCRIBE')[1].payload.cursor).toBe('replacement-cursor')
+        }
+      },
+    )
+    it('ignores a late repair ticket after socket closure', async () => {
+      const h = setup(),
+        socket = await openInvite(h)
+      stale(socket)
+      await flush()
+      socket.close(1006)
+      await flush()
+      await mint(h)
+      expect(frames(socket, 'REAUTH')).toHaveLength(0)
+      expect(frames(socket, 'INVITE_SUBSCRIBE')).toHaveLength(1)
+    })
+    it.each([false, true])(
+      'retains pending application/ACK and acknowledges only the refreshed replay (earlyAck=%s)',
+      async (earlyAck) => {
+        const h = setup(),
+          socket = await openInvite(h)
+        socket.receive(serverFrame('INVITE_BATCH', frames(socket, 'INVITE_SUBSCRIBE')[0].commandId, batch))
+        await flush()
+        stale(socket)
+        await flush()
+        if (earlyAck) {
+          await h.runtime.handle({ type: 'ACK_INVITE_EVENTS', clientRequestId: 'invite-repair', cursor: 'cursor-1' })
+        }
+        expect(frames(socket, 'INVITE_ACK')).toHaveLength(0)
+        await repair(h, socket)
+        expect(frames(socket, 'INVITE_ACK')).toHaveLength(0)
+        socket.receive(serverFrame('INVITE_BATCH', frames(socket, 'INVITE_SUBSCRIBE').at(-1)!.commandId, batch))
+        await flush()
+        if (!earlyAck) {
+          expect(frames(socket, 'INVITE_ACK')).toHaveLength(0)
+          await h.runtime.handle({ type: 'ACK_INVITE_EVENTS', clientRequestId: 'invite-repair', cursor: 'cursor-1' })
+        }
+        expect(h.messages.filter((m) => m.type === 'INVITE_BATCH')).toHaveLength(1)
+        expect(frames(socket, 'INVITE_ACK')).toHaveLength(1)
+        expect(frames(socket, 'INVITE_ACK')[0].payload.cursor).toBe('cursor-1')
+      },
+    )
+    it('joins a repair already requested by a sync command', async () => {
+      const h = setup(),
+        socket = await openInvite(h)
+      await h.runtime.handle({
+        type: 'EXECUTE',
+        clientRequestId: 'shared-repair-sync',
+        sessionScope: SESSION_A,
+        body: body('shared'),
+      })
+      await flush()
+      const command = frames(socket, 'COMMAND')[0]
+      socket.receive(
+        serverFrame(
+          'ERROR',
+          command.commandId,
+          { code: 'SESSION_STALE', retryable: true },
+          (command as { digest?: string }).digest,
+        ),
+      )
+      await flush()
+      stale(socket)
+      await flush()
+      expect(asks(h)).toHaveLength(1)
+      await repair(h, socket)
+      expect(frames(socket, 'INVITE_SUBSCRIBE')).toHaveLength(2)
+    })
+  })
 })
