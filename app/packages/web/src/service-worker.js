@@ -23,8 +23,8 @@ const DEPLOYMENT_MARKER_PATH = '/.well-known/srn-deployment.json'
 
 // Minimal set of files that make up the bootable shell. Everything else
 // (components, editors, fonts, etc.) is cached on first use by the runtime
-// fetch handler below. Libsodium is not among them: it is bundled into app.js
-// through @standardnotes/sncrypto-web, not served as a separate asset.
+// fetch handler below. The hashed libsodium WASM asset is cached there on first
+// use, alongside its JavaScript wrapper.
 const CORE_SHELL = ['/', '/index.html', SANDBOX_PATH, '/app.js', '/app.css', '/manifest.webmanifest']
 
 function unavailableSandboxResponse() {

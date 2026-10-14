@@ -219,6 +219,10 @@ module.exports = (env) => {
       },
       rules: [
         {
+          test: /libsodium-sumo[\\/]dist[\\/]modules-sumo[\\/]libsodium-sumo\.js$/,
+          use: path.resolve(__dirname, 'scripts/LibsodiumWasmLoader.cjs'),
+        },
+        {
           test: /\.sharedworker\.tsx?$/,
           use: [
             { loader: require.resolve('./shared-worker-url-loader.cjs') },
