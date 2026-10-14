@@ -156,6 +156,12 @@ export class NotificationsController extends AbstractViewController {
 
     // New achievement unlocks land in the persisted feed; fold them in live.
     this.disposers.push(subscribeAchievementNotifications(() => this.recompute()))
+    this.disposers.push(
+      reaction(
+        () => this.application.autoVaultRulesService?.problems.length ?? 0,
+        () => this.recompute(),
+      ),
+    )
 
     // A reminder toast must never outlive the unread items it advertises: as
     // soon as everything is read/dismissed/cleared, retract it.
@@ -308,6 +314,17 @@ export class NotificationsController extends AbstractViewController {
           dismissable: true,
         })
       }
+    }
+    if (application.autoVaultRulesService?.problems.length) {
+      notifications.push({
+        id: 'vault-rule-problems',
+        title: 'Vault assignments need attention',
+        message:
+          'Some notes could not be assigned safely. Review conflicting rules, linked items, vault access or sync before retrying.',
+        level: 'warning',
+        action: { label: 'Resolve assignments', run: () => application.openPreferences('vaults') },
+        dismissable: true,
+      })
     }
 
     // Unlocked achievements (persisted event feed; newest first, after alerts).

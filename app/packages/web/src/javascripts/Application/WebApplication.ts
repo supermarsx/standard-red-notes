@@ -101,6 +101,7 @@ import { AutoEmptyTrashService } from '@/Services/AutoEmptyTrash/AutoEmptyTrashS
 import { UpdateCheckService } from '@/Services/UpdateCheck/UpdateCheckService'
 import { WorkspaceStartupService } from '@/Services/WorkspaceStartup/WorkspaceStartupService'
 import { SessionActivityService } from '@/Services/SessionActivity/SessionActivityService'
+import { AutoVaultRulesService } from '@/Services/AutoVaultRules/AutoVaultRulesService'
 import { PendingMfaApprovalsNotifier } from '@/Services/PendingMfaApprovals/PendingMfaApprovalsNotifier'
 import { CommandService } from '../Components/CommandPalette/CommandService'
 import { CrossTabCoordinator } from './CrossTab/CrossTabCoordinator'
@@ -157,6 +158,7 @@ export class WebApplication extends SNApplication implements WebApplicationInter
   private _updateCheckService?: UpdateCheckService
   private _workspaceStartupService?: WorkspaceStartupService
   private _sessionActivityService?: SessionActivityService
+  private _autoVaultRulesService?: AutoVaultRulesService
   // Standard Red Notes: push-MFA approvals app-wide notifier. Created in
   // createBackgroundServices() so a "new sign-in awaiting your approval" toast
   // reaches the user even when the Security preferences pane is closed;
@@ -253,6 +255,7 @@ export class WebApplication extends SNApplication implements WebApplicationInter
     this._proofOfWorkSolver = new WebProofOfWorkSolver()
     this.sessions.setProofOfWorkSolver(this._proofOfWorkSolver)
 
+    void this.autoVaultRulesService
     this.installWebSocketSyncTransport()
 
     void this.mobileWebReceiver
@@ -851,6 +854,8 @@ export class WebApplication extends SNApplication implements WebApplicationInter
     this._workspaceStartupService = undefined
     this._sessionActivityService?.deinit()
     this._sessionActivityService = undefined
+    this._autoVaultRulesService?.deinit()
+    this._autoVaultRulesService = undefined
     if (!this.isNativeMobileWeb()) {
       this.webOrDesktopDevice.removeApplication(this)
     }
@@ -1447,6 +1452,10 @@ export class WebApplication extends SNApplication implements WebApplicationInter
 
   get sessionActivityService(): SessionActivityService {
     return (this._sessionActivityService ??= new SessionActivityService(this))
+  }
+
+  get autoVaultRulesService(): AutoVaultRulesService {
+    return (this._autoVaultRulesService ??= new AutoVaultRulesService(this))
   }
 
   // Standard Red Notes: the push-MFA approvals app-wide notifier. Lazily

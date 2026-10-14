@@ -106,6 +106,18 @@ describe('NotificationsController', () => {
     }
   })
 
+  it('routes blocked vault assignments to the rule resolver without exposing internal identifiers', () => {
+    const { application } = createApplication({ signedOut: false })
+    Object.assign(application, {
+      autoVaultRulesService: { problems: [{ noteUuid: 'private-opaque-note', reason: 'conflict' }] },
+    })
+    controller = new NotificationsController(application)
+    const notification = controller.notifications.find((entry) => entry.id === 'vault-rule-problems')!
+    expect(notification.message).not.toContain('private-opaque-note')
+    notification.action!.run()
+    expect(application.openPreferences).toHaveBeenCalledWith('vaults')
+  })
+
   it('surfaces the signed-out alert as unread, with badge equal to listed unread rows', () => {
     const { application } = createApplication({ signedOut: true })
     controller = new NotificationsController(application)

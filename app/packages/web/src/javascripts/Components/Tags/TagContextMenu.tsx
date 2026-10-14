@@ -15,6 +15,7 @@ import MenuSection from '../Menu/MenuSection'
 import DecoratedInput from '../Input/DecoratedInput'
 import { KeyboardKey } from '@standardnotes/ui-services'
 import TagColorPicker from './TagColorPicker'
+import AutoVaultRuleControl from './AutoVaultRuleControl'
 
 type ContextMenuProps = {
   navigationController: NavigationController
@@ -203,6 +204,7 @@ const TagContextMenu = ({ navigationController, selectedTag }: ContextMenuProps)
           </MenuItem>
         </MenuSection>
       </Menu>
+      <AutoVaultRuleControl source={selectedTag} kind="tag" />
       <HorizontalSeparator classes="my-2" />
       <div className="text-neutral px-4 pt-1 pb-1.5 text-sm font-medium md:px-3 lg:text-xs">
         <div className="mb-1">

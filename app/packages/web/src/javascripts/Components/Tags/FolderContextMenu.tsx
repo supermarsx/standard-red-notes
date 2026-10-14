@@ -1,4 +1,5 @@
 import { observer } from 'mobx-react-lite'
+import AutoVaultRuleControl from './AutoVaultRuleControl'
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 import Icon from '@/Components/Icon/Icon'
 import Menu from '@/Components/Menu/Menu'
@@ -205,6 +206,7 @@ const FolderContextMenu = ({ navigationController, isEntitledToFolders, selected
           </MenuItem>
         </MenuSection>
       </Menu>
+      <AutoVaultRuleControl source={selectedFolder} kind="folder" />
       <HorizontalSeparator classes="my-2" />
       <div className="text-neutral px-4 pt-1 pb-1.5 text-sm font-medium md:px-3 lg:text-xs">
         <div className="mb-1">

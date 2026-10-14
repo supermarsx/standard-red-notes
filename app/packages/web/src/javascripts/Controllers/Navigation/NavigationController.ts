@@ -536,6 +536,9 @@ export class NavigationController
 
   setContextMenuTag(tag: SNTag | undefined, section: TagListSectionType = 'all'): void {
     this.contextMenuTag = tag
+    if (tag) {
+      this.contextMenuFolder = undefined
+    }
     this.contextMenuTagSection = section
   }
 
@@ -915,6 +918,9 @@ export class NavigationController
 
   setContextMenuFolder(folder: SNFolder | undefined, section: TagListSectionType = 'folders'): void {
     this.contextMenuFolder = folder
+    if (folder) {
+      this.contextMenuTag = undefined
+    }
     this.contextMenuTagSection = section
   }
 

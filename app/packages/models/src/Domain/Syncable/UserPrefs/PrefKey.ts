@@ -9,6 +9,8 @@ import { SuperToolbarIconSize } from './SuperToolbarIconSize'
 import { AllComponentPreferences } from './ComponentPreferences'
 import { BlockTypeKey, TypographyProfile } from './TypographyProfile'
 
+export type AutoVaultRulePreference = { kind: 'tag' | 'folder'; sourceUuid: string; vaultUuid: string }
+
 /**
  * Versioned, encrypted account preference for the base appearance selection.
  * Device-local appearance keys remain the launch/offline cache; this aggregate
@@ -209,6 +211,7 @@ export enum PrefKey {
   RecentNotesHistory = 'recentNotesHistory',
   RecentNotesRecordingEnabled = 'recentNotesRecordingEnabled',
   RecentNotesHistoryLimit = 'recentNotesHistoryLimit',
+  AutoVaultRules = 'autoVaultRules',
   // Standard Red Notes: explicit user-defined ("custom") manual orderings, each
   // stored as an array of item uuids. These drive ordering when the Custom sort
   // mode is selected, and are rewritten when the user drags to reorder.
@@ -493,6 +496,7 @@ export type PrefValue = {
   [PrefKey.RecentNotesHistory]: RecentNoteEntry[]
   [PrefKey.RecentNotesRecordingEnabled]: boolean
   [PrefKey.RecentNotesHistoryLimit]: number
+  [PrefKey.AutoVaultRules]: AutoVaultRulePreference[]
   [PrefKey.CustomNotesOrder]: string[]
   [PrefKey.CustomFoldersOrder]: string[]
   [PrefKey.CustomTagsOrder]: string[]

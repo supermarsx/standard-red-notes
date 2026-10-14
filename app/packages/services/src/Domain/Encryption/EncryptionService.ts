@@ -71,6 +71,8 @@ import { ValidateAccountPasswordResult } from '../RootKeyManager/ValidateAccount
 import { ValidatePasscodeResult } from '../RootKeyManager/ValidatePasscodeResult'
 import { EncryptionProviderInterface } from './EncryptionProviderInterface'
 import { KeyMode } from '../RootKeyManager/KeyMode'
+import { ContentType } from '@standardnotes/domain-core'
+import { DecryptErroredTypeAPayloads } from './UseCase/TypeA/DecryptErroredPayloads'
 
 /**
  * The encryption service is responsible for the encryption and decryption of payloads, and
@@ -103,6 +105,12 @@ export class EncryptionService
   extends AbstractService<EncryptionServiceEvent>
   implements EncryptionProviderInterface, InternalEventHandlerInterface
 {
+  private removeKeySystemObserver: () => void
+  private keySystemRetryRunning = false
+  private keySystemRetryRequested = false
+  private keySystemRetryDisposed = false
+  private keySystemRetryPromise?: Promise<void>
+
   constructor(
     private items: ItemManagerInterface,
     private mutator: MutatorClientInterface,
@@ -126,6 +134,59 @@ export class EncryptionService
     internalEventBus.addEventHandler(this, RootKeyManagerEvent.RootKeyManagerKeyStatusChanged)
 
     UuidGenerator.SetGenerator(this.crypto.generateUUID)
+    this.removeKeySystemObserver = this.items.addObserver(
+      [ContentType.TYPES.KeySystemRootKey, ContentType.TYPES.KeySystemItemsKey],
+      ({ changed, inserted }) => {
+        if (changed.length + inserted.length === 0 || this.keySystemRetryDisposed) {
+          return
+        }
+        this.keySystemRetryRequested = true
+        this.startKeySystemDecryptionRetry()
+      },
+    )
+  }
+
+  private startKeySystemDecryptionRetry(): void {
+    if (this.keySystemRetryPromise || this.keySystemRetryDisposed) {
+      return
+    }
+    this.keySystemRetryPromise = this.retryKeySystemDecryption()
+      .catch(() => {
+        // Failed payloads remain encrypted and locked; a later key arrival can retry them.
+      })
+      .finally(() => {
+        this.keySystemRetryPromise = undefined
+        if (this.keySystemRetryRequested && !this.keySystemRetryDisposed) {
+          this.startKeySystemDecryptionRetry()
+        }
+      })
+  }
+
+  private async retryKeySystemDecryption(): Promise<void> {
+    if (this.keySystemRetryRunning || this.keySystemRetryDisposed) {
+      return
+    }
+    this.keySystemRetryRunning = true
+    try {
+      while (this.keySystemRetryRequested && !this.keySystemRetryDisposed) {
+        this.keySystemRetryRequested = false
+        // A retrieved system items key may precede its system root key in the sync pages.
+        // Register the decrypted system items keys before retrying their notes and files.
+        await new DecryptErroredTypeAPayloads(this.payloads, this._rootKeyDecryptPayloadWithKeyLookup).execute()
+        if (!this.keySystemRetryDisposed) {
+          await this.itemsEncryption.decryptErroredItemPayloads()
+        }
+      }
+    } finally {
+      this.keySystemRetryRunning = false
+    }
+  }
+
+  public override async blockDeinit(): Promise<void> {
+    await super.blockDeinit()
+    while (this.keySystemRetryPromise) {
+      await this.keySystemRetryPromise
+    }
   }
 
   async handleEvent(event: InternalEventInterface): Promise<void> {
@@ -136,6 +197,9 @@ export class EncryptionService
   }
 
   public override deinit(): void {
+    this.keySystemRetryDisposed = true
+    this.keySystemRetryRequested = false
+    this.removeKeySystemObserver()
     ;(this.items as unknown) = undefined
     ;(this.payloads as unknown) = undefined
     ;(this.operators as unknown) = undefined

@@ -26,6 +26,7 @@ import Button from '@/Components/Button/Button'
 import InviteItem from './Invites/InviteItem'
 import EditVaultModal from './Vaults/VaultModal/EditVaultModal'
 import PreferencesPane from '../../PreferencesComponents/PreferencesPane'
+import AutoVaultRulesPanel from './AutoVaultRulesPanel'
 
 const Vaults = observer(() => {
   const application = useApplication()
@@ -144,6 +145,7 @@ const Vaults = observer(() => {
 
   return (
     <PreferencesPane>
+      <AutoVaultRulesPanel />
       <ModalOverlay isOpen={isAddContactModalOpen} close={closeAddContactModal}>
         <EditContactModal onCloseDialog={closeAddContactModal} />
       </ModalOverlay>
