@@ -111,7 +111,7 @@ const ignoredFilePattern =
 export const reviewedSafeLoggingAllowlist = [
   {
     file: "server/packages/syncing-server/src/Infra/TypeORM/SQLItemRepository.ts",
-    line: 390,
+    line: 444,
     rule: "raw-domain-result-error",
     call: [
       "this.logger.error(",

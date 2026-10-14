@@ -43,7 +43,7 @@ export class ContainerConfigLoader {
 
     const container = new Container()
 
-    const winstonFormatters = [winston.format.splat(), winston.format.json()]
+    const winstonFormatters = [winston.format.timestamp(), winston.format.splat(), winston.format.json()]
 
     const logger = winston.createLogger({
       level: env.get('LOG_LEVEL', true) || 'info',

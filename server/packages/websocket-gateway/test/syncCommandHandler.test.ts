@@ -3902,3 +3902,50 @@ describe('sync command ingress queue', () => {
     handler.disconnect()
   })
 })
+
+describe('sync failure operational context', () => {
+  it.each(['authorization', 'backend-execute', 'backend-status'] as const)(
+    'reports %s failures without credentials, payloads or identifiers',
+    async (phase) => {
+      const logRefusal = vi.fn()
+      const secret = 'private-body-credential-fixture'
+      const backend: SyncCommandBackendAdapter = {
+        ready: () => true,
+        execute: vi.fn(async (input) => {
+          if (phase === 'backend-execute') throw new Error(secret)
+          return { digest: input.digest }
+        }),
+        status: vi.fn(async () => {
+          throw new Error(secret)
+        }),
+      }
+      const authorization: SyncLiveAuthorizationAdapter = {
+        ready: () => true,
+        authorize: vi.fn(async () => {
+          if (phase === 'authorization') throw new Error(secret)
+          return { authorized: true as const }
+        }),
+      }
+      const { handler, socket } = await authenticatedHandler({ backend, authorization, logRefusal })
+      try {
+        const frame = commandFrame('private-command-fixture', 1, { items: [], privateValue: secret })
+        enqueue(
+          handler,
+          phase === 'backend-status' ? statusFrame('private-command-fixture', 1, frame.digest as string) : frame,
+        )
+        await vi.waitFor(() => expect(socket.frames.at(-1)?.payload).toMatchObject({ code: 'BACKEND_ERROR' }))
+        expect(logRefusal).toHaveBeenCalledWith(
+          '[ws-sync] operation did not complete',
+          expect.stringContaining(phase),
+          expect.objectContaining({ phase, outcome: 'error', elapsedMs: expect.any(Number) }),
+        )
+        const emitted = JSON.stringify(logRefusal.mock.calls)
+        for (const value of [secret, 'private-command-fixture', 'user-1', 'session-token']) {
+          expect(emitted).not.toContain(value)
+        }
+      } finally {
+        await handler.stop()
+      }
+    },
+  )
+})

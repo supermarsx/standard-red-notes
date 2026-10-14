@@ -2202,6 +2202,8 @@ export class SyncCommandHandler {
     const identity = this.identity as SyncTicketIdentity
     const controller = new AbortController()
     this.activeOperations.add(controller)
+    const startedAt = Date.now()
+    let phase = 'authorization'
     try {
       const authorization = await this.withTimeout(
         (signal) =>
@@ -2222,6 +2224,7 @@ export class SyncCommandHandler {
         this.sendError(frame.requestId, frame.commandId, publicAuthorizationCode(authorization.code))
         return
       }
+      phase = 'backend-status'
       const status = await this.withTimeout(
         (signal) =>
           this.options.backend.status(
@@ -2247,6 +2250,7 @@ export class SyncCommandHandler {
         frame.digest,
       )
     } catch {
+      this.logSyncFailure('status', phase, startedAt, controller.signal.aborted ? 'timeout' : 'error')
       this.options.metrics?.increment('backend', controller.signal.aborted ? 'timeout' : 'error')
       this.sendError(frame.requestId, frame.commandId, controller.signal.aborted ? 'BACKEND_TIMEOUT' : 'BACKEND_ERROR')
     } finally {
@@ -2276,10 +2280,13 @@ export class SyncCommandHandler {
     }
     const firstCommandOnSocket = this.commandsAttempted === 0
     this.commandsAttempted += 1
+    const startedAt = Date.now()
+    let phase = 'lease-acquisition'
     let lease
     try {
       lease = await this.options.leases.acquire(leaseInput, this.lifecycleAbort.signal)
     } catch {
+      this.logSyncFailure('command', phase, startedAt, this.closed ? 'socket-closed' : 'error')
       // The lease store did not answer (not ready, timed out, transport error).
       // That is one command's problem, not the socket's: answer BUSY, which the
       // client retries after backoff. If the acquire did land, the 30 s lease
@@ -2316,6 +2323,7 @@ export class SyncCommandHandler {
 
     try {
       await this.withLeaseRenewal(controller, async () => {
+        phase = 'authorization'
         const firstAuthorization = await this.authorizeCommand(identity, frame, controller)
         if (!firstAuthorization.authorized) {
           this.options.metrics?.increment('authorization', firstAuthorization.code)
@@ -2330,6 +2338,7 @@ export class SyncCommandHandler {
         // Re-run the complete live policy after ACCEPTED and immediately before
         // the durable write. Session/vault/read-only state may change while a
         // command waits behind authorization or distributed coordination.
+        phase = 'pre-execute-authorization'
         const executeAuthorization = await this.authorizeCommand(identity, frame, controller)
         if (!executeAuthorization.authorized) {
           this.options.metrics?.increment('authorization', executeAuthorization.code)
@@ -2339,6 +2348,7 @@ export class SyncCommandHandler {
 
         // The session validated by the pre-execute authorization is handed to
         // the backend so it need not validate a third time (R8).
+        phase = 'backend-execute'
         const committed = await this.withTimeout(
           (signal) =>
             this.options.backend.execute(
@@ -2363,8 +2373,15 @@ export class SyncCommandHandler {
           frame.digest,
         )
         this.options.metrics?.increment('command', 'committed')
+        this.options.metrics?.observe?.('command', 'duration_ms', Math.max(0, Date.now() - startedAt))
       })
     } catch (error) {
+      this.logSyncFailure(
+        'command',
+        phase,
+        startedAt,
+        this.closed ? 'socket-closed' : controller.signal.aborted ? 'aborted' : 'error',
+      )
       if (error instanceof Error && error.name === 'SyncCommandBackendRefusalError') {
         this.options.metrics?.increment('authorization', 'NOT_AUTHORIZED')
         this.sendError(frame.requestId, frame.commandId, 'NOT_AUTHORIZED')
@@ -2385,6 +2402,15 @@ export class SyncCommandHandler {
       this.activeOperations.delete(controller)
       await this.releaseActiveLease()
     }
+  }
+
+  private logSyncFailure(operation: 'command' | 'status', phase: string, startedAt: number, outcome: string): void {
+    // Closed metadata only: never log frames, identifiers, credentials or thrown text.
+    this.options.logRefusal?.(
+      '[ws-sync] operation did not complete',
+      `sync-failure:${operation}:${phase}`,
+      { operation, phase, outcome, elapsedMs: Math.max(0, Date.now() - startedAt) },
+    )
   }
 
   private authorizeCommand(

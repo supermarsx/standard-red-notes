@@ -1826,7 +1826,7 @@ export class HomeServer implements HomeServerInterface {
       this.logStream.on('data', configuration.logStreamCallback)
     }
 
-    const winstonFormatters = [winston.format.splat(), winston.format.json()]
+    const winstonFormatters = [winston.format.timestamp(), winston.format.splat(), winston.format.json()]
 
     const level = env.get('LOG_LEVEL', true) || 'info'
 

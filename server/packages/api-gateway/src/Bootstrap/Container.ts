@@ -160,7 +160,12 @@ export class ContainerConfigLoader {
         )
     }
 
-    const winstonFormatters = [winston.format.splat(), createSafeLogFormat(), winston.format.json()]
+    const winstonFormatters = [
+      winston.format.timestamp(),
+      winston.format.splat(),
+      createSafeLogFormat(),
+      winston.format.json(),
+    ]
 
     let logger: winston.Logger
     if (configuration?.logger) {

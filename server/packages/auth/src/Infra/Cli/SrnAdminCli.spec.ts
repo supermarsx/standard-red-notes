@@ -258,6 +258,28 @@ describe('SrnAdminCli helpers', () => {
   })
 
   describe('tailLogFiles', () => {
+    it('uses the shared capture parser and optional bounded chronological filters', async () => {
+      const rows = '[2026-10-14T12:00:00Z] [auth] [stdout] newer\n[2026-10-14T10:00:00Z] [auth] [stderr] info: older\n'
+      const fileSystem: LogFileSystemLike = {
+        readdir: async () => ['auth.log'],
+        readFile: async () => rows,
+        joinPath: (...parts) => parts.join('/'),
+      }
+      expect((await tailLogFiles(fileSystem, '/logs', { limit: 2 })).entries.map((entry) => entry.message)).toEqual([
+        'newer',
+        'older',
+      ])
+      expect(
+        (
+          await tailLogFiles(fileSystem, '/logs', {
+            limit: 2,
+            order: 'asc',
+            search: 'OLDER',
+            since: '2026-10-14T10:00:00Z',
+          })
+        ).entries,
+      ).toEqual([expect.objectContaining({ level: 'info', message: 'older' })])
+    })
     const fileSystemWith = (files: Record<string, string>): LogFileSystemLike => ({
       readdir: async () => Object.keys(files),
       readFile: async (filePath: string) => {

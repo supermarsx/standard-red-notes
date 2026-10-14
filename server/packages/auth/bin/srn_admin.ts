@@ -1,3 +1,4 @@
+import { normalizeLogTimestamp, readServerLogTail } from '@standardnotes/domain-core/dist/src/ServerLogs'
 import 'reflect-metadata'
 
 /**
@@ -2827,25 +2828,49 @@ async function cmdStatus(args: ParsedArgs): Promise<number> {
 
 async function cmdLogs(args: ParsedArgs): Promise<number> {
   const { options } = args
+  for (const flag of ['order', 'search', 'since']) {
+    if (options[flag] !== undefined && typeof options[flag] !== 'string') {
+      throw new UsageError(`--${flag} requires a value`)
+    }
+  }
   const tailRaw = stringOption(options, 'tail')
   const limit = tailRaw !== undefined ? Number.parseInt(tailRaw, 10) : 100
   if (!Number.isFinite(limit) || limit <= 0) {
     throw new UsageError('--tail must be a positive integer')
   }
 
+  const order = stringOption(options, 'order') ?? 'desc'
+  const search = stringOption(options, 'search')
+  const since = stringOption(options, 'since')
+  if (order !== 'asc' && order !== 'desc') {
+    throw new UsageError('--order must be asc or desc')
+  }
+  if (search !== undefined && search.length > 256) {
+    throw new UsageError('--search must not exceed256characters')
+  }
+  if (since !== undefined && !normalizeLogTimestamp(since)) {
+    throw new UsageError('--since must be an ISO timestamp or Unix seconds/milliseconds')
+  }
   const logsDirectory = process.env.SERVER_LOGS_PATH ?? '/var/lib/server/logs'
   const result = await tailLogFiles(
     {
       readdir: (directory) => fsPromises.readdir(directory),
       readFile: (filePath) => fsPromises.readFile(filePath, 'utf8'),
+      readTail: readServerLogTail,
       joinPath: (...parts) => path.join(...parts),
     },
     logsDirectory,
-    { limit, service: stringOption(options, 'service'), level: stringOption(options, 'level') },
+    {
+      limit: Math.min(limit, 500),
+      service: stringOption(options, 'service'),
+      level: stringOption(options, 'level'),
+      order,
+      search,
+      since,
+    },
   )
 
-  // Chronological (oldest first) for reading, like `tail`.
-  const entries = [...result.entries].reverse()
+  const entries = result.entries
 
   if (options.json === true) {
     outJson({ entries, truncated: result.truncated, logsDirectory })
@@ -2864,7 +2889,7 @@ async function cmdLogs(args: ParsedArgs): Promise<number> {
     outLine(`${time}  ${(entry.service ?? '-').padEnd(22)} ${level.padEnd(5)} ${entry.message}`)
   }
   if (result.truncated) {
-    outLine('... (older matching lines exist — raise --tail)')
+    outLine('... (results limited to the bounded recent tail; adjust filters or --tail, max500)')
   }
 
   return 0

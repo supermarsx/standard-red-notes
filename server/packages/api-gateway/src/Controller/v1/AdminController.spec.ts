@@ -363,6 +363,36 @@ describe('AdminController server-status', () => {
     expect(tail).toHaveBeenCalledWith({ limit: 500, service: 'auth', level: 'error' })
     expect(jsonMock).toHaveBeenCalledWith({ entries: [{ message: 'x' }], truncated: true })
   })
+  it('forwards bounded log search, order and normalized since only for admins', async () => {
+    const tail = jest.fn().mockResolvedValue({ entries: [], truncated: false })
+    await makeController({ adminLogsService: { tail } as unknown as AdminLogsService }).getLogs(
+      { query: { order: 'asc', search: ' reconnect ', since: '1720000000' } } as unknown as Request,
+      responseWith([{ name: RoleName.NAMES.AdminUser }]),
+    )
+    expect(tail).toHaveBeenCalledWith({
+      limit: 200,
+      service: undefined,
+      level: undefined,
+      order: 'asc',
+      search: 'reconnect',
+      since: '2024-07-03T09:46:40.000Z',
+    })
+  })
+  it.each([
+    { order: 'invalid' },
+    { search: 'x'.repeat(257) },
+    { since: 'yesterday' },
+    { search: ['array'] },
+    { service: ['array'] },
+  ])('refuses malformed log filters without reading files %j', async (query) => {
+    const tail = jest.fn()
+    await makeController({ adminLogsService: { tail } as unknown as AdminLogsService }).getLogs(
+      { query } as unknown as Request,
+      responseWith([{ name: RoleName.NAMES.AdminUser }]),
+    )
+    expect(statusMock).toHaveBeenCalledWith(400)
+    expect(tail).not.toHaveBeenCalled()
+  })
 
   describe('service probe URL resolution', () => {
     type ProbeSpyTarget = {

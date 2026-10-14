@@ -8,7 +8,7 @@ import { ServiceProxyInterface } from '../../Service/Proxy/ServiceProxyInterface
 import { EndpointResolverInterface } from '../../Service/Resolver/EndpointResolverInterface'
 import { AssistantProviderConfig, configuredProviders } from '../../Service/Assistant/providers/factory'
 import { UpdateCheckService } from '../../Service/Updates/UpdateCheckService'
-import { AdminLogsService } from '../../Service/AdminLogs/AdminLogsService'
+import { AdminLogsService, normalizeLogTimestamp } from '../../Service/AdminLogs/AdminLogsService'
 import {
   LOG_LEVELS,
   REGISTRATION_ASSIGNABLE_ROLES,
@@ -1522,11 +1522,28 @@ export class AdminController extends BaseHttpController {
     }
     limit = Math.min(limit, MAX_LIMIT)
 
+    const order = request.query.order
+    const search = request.query.search
+    const since = request.query.since
+    if (
+      (order !== undefined && order !== 'asc' && order !== 'desc') ||
+      (request.query.service !== undefined && typeof request.query.service !== 'string') ||
+      (request.query.level !== undefined && typeof request.query.level !== 'string') ||
+      (search !== undefined && (typeof search !== 'string' || search.length > 256)) ||
+      (since !== undefined && (typeof since !== 'string' || normalizeLogTimestamp(since) === null))
+    ) {
+      response.status(400).json({ error: { message: 'Invalid log order, search, or since filter.' } })
+      return
+    }
+
     try {
       const result = await this.adminLogsService.tail({
         limit,
         service: query.service !== undefined && query.service.trim() !== '' ? query.service.trim() : undefined,
         level: query.level !== undefined && query.level.trim() !== '' ? query.level.trim() : undefined,
+        ...(order !== undefined ? { order } : {}),
+        ...(typeof search === 'string' && search.trim() ? { search: search.trim() } : {}),
+        ...(typeof since === 'string' ? { since: normalizeLogTimestamp(since)! } : {}),
       })
       response.json(result)
     } catch {

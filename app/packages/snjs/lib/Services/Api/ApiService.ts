@@ -1648,7 +1648,14 @@ export class LegacyApiService
    * All filters optional; the server clamps `limit` to its own maximum (500).
    * Returns { entries, truncated }.
    */
-  async adminGetLogs(options: { limit?: number; service?: string; level?: string }): Promise<HttpResponse> {
+  async adminGetLogs(options: {
+    limit?: number
+    service?: string
+    level?: string
+    order?: 'asc' | 'desc'
+    search?: string
+    since?: string
+  }): Promise<HttpResponse> {
     const params: Record<string, string> = {}
     if (options.limit !== undefined) {
       params.limit = String(options.limit)
@@ -1658,6 +1665,15 @@ export class LegacyApiService
     }
     if (options.level) {
       params.level = options.level
+    }
+    if (options.order) {
+      params.order = options.order
+    }
+    if (options.search) {
+      params.search = options.search
+    }
+    if (options.since) {
+      params.since = options.since
     }
     return this.tokenRefreshableRequest({
       verb: HttpVerb.Get,

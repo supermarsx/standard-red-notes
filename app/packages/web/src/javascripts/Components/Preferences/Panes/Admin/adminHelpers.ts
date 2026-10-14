@@ -1341,6 +1341,32 @@ export type LogEntry = {
   message: string
 }
 
+/** UTC is explicit so administrators in different timezones compare the same instant. */
+export const formatLogTimestampUTC = (value: string | null | undefined): string => {
+  const timestamp = absoluteLogTimestamp(value)
+  if (!Number.isFinite(timestamp)) {
+    return 'Timestamp unavailable'
+  }
+  return `${new Date(timestamp).toISOString().replace('T', ' ').replace('Z', '')} UTC`
+}
+
+const absoluteLogTimestamp = (value: string | null | undefined): number => {
+  if (!value || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/i.test(value)) {
+    return NaN
+  }
+  return Date.parse(value)
+}
+
+export const orderLogEntries = (entries: readonly LogEntry[], order: 'asc' | 'desc'): LogEntry[] =>
+  entries.slice().sort((a, b) => {
+    const first = absoluteLogTimestamp(a.timestamp)
+    const second = absoluteLogTimestamp(b.timestamp)
+    if (!Number.isFinite(first) || !Number.isFinite(second)) {
+      return Number.isFinite(first) ? -1 : Number.isFinite(second) ? 1 : 0
+    }
+    return order === 'asc' ? first - second : second - first
+  })
+
 /** Text colour class for a log line, keyed on its (case-insensitive) level. */
 export const logLevelColorClass = (level: string | null | undefined): string => {
   switch ((level ?? '').toLowerCase()) {

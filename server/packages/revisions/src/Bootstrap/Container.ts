@@ -96,7 +96,7 @@ export class ContainerConfigLoader {
     if (configuration?.logger) {
       logger = configuration.logger as winston.Logger
     } else {
-      const winstonFormatters = [winston.format.splat(), winston.format.json()]
+      const winstonFormatters = [winston.format.timestamp(), winston.format.splat(), winston.format.json()]
 
       logger = winston.createLogger({
         level: env.get('LOG_LEVEL', true) || 'info',

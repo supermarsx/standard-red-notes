@@ -1,5 +1,5 @@
 import { FunctionComponent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { isErrorResponse } from '@standardnotes/snjs'
+import { ApplicationEvent, isErrorResponse } from '@standardnotes/snjs'
 
 import { WebApplication } from '@/Application/WebApplication'
 import { Subtitle, Text, Title } from '@/Components/Preferences/PreferencesComponents/Content'
@@ -10,7 +10,7 @@ import Dropdown from '@/Components/Dropdown/Dropdown'
 import DecoratedInput from '@/Components/Input/DecoratedInput'
 import Spinner from '@/Components/Spinner/Spinner'
 import { SkeletonList } from '@/Components/Skeleton/Skeleton'
-import { LogEntry, formatLogTimestamp, logLevelColorClass, logMatchesText } from './adminHelpers'
+import { LogEntry, formatLogTimestampUTC, orderLogEntries, logLevelColorClass, logMatchesText } from './adminHelpers'
 import {
   LogExportFormat,
   logEntriesToJSON,
@@ -26,9 +26,9 @@ type Props = {
 
 // The server clamps to 500; offer the common tail sizes.
 const LIMIT_OPTIONS = [
-  { label: 'Last 100', value: '100' },
-  { label: 'Last 200', value: '200' },
-  { label: 'Last 500', value: '500' },
+  { label: '100 lines', value: '100' },
+  { label: '200 lines', value: '200' },
+  { label: '500 lines', value: '500' },
 ]
 
 const LEVEL_OPTIONS = [
@@ -36,7 +36,12 @@ const LEVEL_OPTIONS = [
   { label: 'Error', value: 'error' },
   { label: 'Warn', value: 'warn' },
   { label: 'Info', value: 'info' },
+  { label: 'HTTP', value: 'http' },
+  { label: 'Verbose', value: 'verbose' },
   { label: 'Debug', value: 'debug' },
+  { label: 'Silly', value: 'silly' },
+  { label: 'Trace', value: 'trace' },
+  { label: 'Fatal', value: 'fatal' },
 ]
 
 const FORMAT_OPTIONS = [
@@ -45,22 +50,34 @@ const FORMAT_OPTIONS = [
 ]
 
 const ALL_SERVICES = ''
+const ORDER_OPTIONS = [
+  { label: 'Newest first', value: 'desc' },
+  { label: 'Oldest first', value: 'asc' },
+]
+const WINDOW_OPTIONS = [
+  { label: 'Retained log tail', value: 'all' },
+  { label: 'Last 15 minutes', value: '15' },
+  { label: 'Last hour', value: '60' },
+  { label: 'Last 24 hours', value: '1440' },
+]
+type Query = { limit: string; service: string; level: string; order: 'asc' | 'desc'; search: string; window: string }
 
 // After this long, tell the user the wait is expected rather than a hang.
 const SLOW_HINT_MS = 8000
 
 /**
  * Admin logs: a read-only tail of the server logs across all services, newest
- * first, colour-coded by level. Loaded lazily — this component only mounts when
- * the Logs tab is opened. The service and level filters are applied server-side
- * (a refetch); the free-text box filters the already-fetched lines client-side.
+ * first by default, colour-coded by level. Loaded lazily when Logs opens.
+ * Service, level, message search, time window and order query the retained server
+ * tail. Message filtering also applies immediately to the currently fetched rows.
  *
  * Loading UX: the first fetch (and any fetch that has no logs yet to show)
  * renders a skeleton in the log-list area only; a fetch that already has logs
  * on screen (Refresh / filter change) keeps them visible under a subtle
  * "Refreshing…" indicator. Log tailing can be slow, so after {@link SLOW_HINT_MS}
- * a reassuring hint appears. A request-id guard drops stale responses so an old
- * slow fetch cannot overwrite a newer one, and every path clears the spinner.
+ * a reassuring hint appears. Requests run serially; filter changes queue only the
+ * latest query. Account and request generations prevent stale responses from
+ * replacing current rows or notifying the parent after sign-out or unmount.
  */
 const AdminLogsTab: FunctionComponent<Props> = ({ application, noteIfForbidden }) => {
   const [entries, setEntries] = useState<LogEntry[]>([])
@@ -74,16 +91,41 @@ const AdminLogsTab: FunctionComponent<Props> = ({ application, noteIfForbidden }
   const [level, setLevel] = useState('')
   const [textFilter, setTextFilter] = useState('')
   const [exportFormat, setExportFormat] = useState<LogExportFormat>('log')
+  const [order, setOrder] = useState<'asc' | 'desc'>('desc')
+  const [timeWindow, setTimeWindow] = useState('all')
+  const [search, setSearch] = useState('')
+  const [autoRefresh, setAutoRefresh] = useState(true)
+  const [lastLoadedAt, setLastLoadedAt] = useState<string>()
 
-  // Monotonic request id: only the newest in-flight fetch is allowed to write
-  // state, so a stale slow response is ignored rather than clobbering newer data.
+  // Only the latest requested query can write state, even while a prior request drains.
   const requestRef = useRef(0)
+  const mountedRef = useRef(true)
+  const accountGenerationRef = useRef(0)
+  const busyRef = useRef(false)
+  const queuedRef = useRef<Query | undefined>(undefined)
+  const loadRef = useRef<(options: Query) => Promise<void>>(async () => undefined)
+  const latestQueryRef = useRef<Query>({ limit, service, level, order, search, window: timeWindow })
+  latestQueryRef.current = { limit, service, level, order, search, window: timeWindow }
   const slowTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
-  const load = useCallback(
-    async (options: { limit: string; service: string; level: string }) => {
+  const load = useCallback<(options: Query) => Promise<void>>(
+    async (options: Query) => {
+      if (!mountedRef.current || !application.sessions.getUser()) {
+        return
+      }
       const requestId = ++requestRef.current
-      const isCurrent = () => requestId === requestRef.current
+      if (busyRef.current) {
+        queuedRef.current = options
+        return
+      }
+      busyRef.current = true
+      const accountUuid = application.sessions.getUser()?.uuid
+      const accountGeneration = accountGenerationRef.current
+      const isCurrent = () =>
+        mountedRef.current &&
+        requestId === requestRef.current &&
+        accountGeneration === accountGenerationRef.current &&
+        accountUuid === application.sessions.getUser()?.uuid
 
       setLoading(true)
       setLoadError(null)
@@ -102,6 +144,10 @@ const AdminLogsTab: FunctionComponent<Props> = ({ application, noteIfForbidden }
           limit: Number(options.limit),
           service: options.service || undefined,
           level: options.level || undefined,
+          order: options.order,
+          search: options.search || undefined,
+          since:
+            options.window === 'all' ? undefined : new Date(Date.now() - Number(options.window) * 60_000).toISOString(),
         })
         if (!isCurrent()) {
           return
@@ -116,14 +162,15 @@ const AdminLogsTab: FunctionComponent<Props> = ({ application, noteIfForbidden }
         const data = (response as { data?: { entries?: LogEntry[]; truncated?: boolean } }).data
         setEntries(data?.entries ?? [])
         setTruncated(Boolean(data?.truncated))
-      } catch (error) {
+        setLastLoadedAt(new Date().toISOString())
+      } catch {
         if (!isCurrent()) {
           return
         }
-        console.error(error)
         setLoadError('Could not load server logs.')
         setEntries([])
       } finally {
+        busyRef.current = false
         if (isCurrent()) {
           setLoading(false)
           setSlowHint(false)
@@ -132,25 +179,81 @@ const AdminLogsTab: FunctionComponent<Props> = ({ application, noteIfForbidden }
             slowTimerRef.current = undefined
           }
         }
+        const queued = queuedRef.current
+        queuedRef.current = undefined
+        if (queued && mountedRef.current) {
+          void loadRef.current(queued)
+        }
       }
     },
     [application, noteIfForbidden],
   )
-
-  // Lazy-fetch on first open, and refetch when a server-side filter changes.
-  useEffect(() => {
-    void load({ limit, service, level })
-  }, [load, limit, service, level])
+  loadRef.current = load
 
   // Clear any pending slow-hint timer on unmount and mark in-flight requests stale.
   useEffect(() => {
-    return () => {
+    mountedRef.current = true
+    const reset = () => {
+      accountGenerationRef.current += 1
       requestRef.current += 1
+      queuedRef.current = undefined
+      setEntries([])
+      setTruncated(false)
+      setLoadError(null)
+      setLastLoadedAt(undefined)
+      setTextFilter('')
+      setSearch('')
+      setService(ALL_SERVICES)
+      setLevel('')
+      setLoading(false)
+      setSlowHint(false)
       if (slowTimerRef.current) {
         clearTimeout(slowTimerRef.current)
       }
     }
-  }, [])
+    reset()
+    const dispose = application.addEventObserver(async (event) => {
+      if (event === ApplicationEvent.SignedOut || event === ApplicationEvent.SignedIn) {
+        reset()
+      }
+    })
+    return () => {
+      mountedRef.current = false
+      dispose()
+      requestRef.current += 1
+      queuedRef.current = undefined
+      if (slowTimerRef.current) {
+        clearTimeout(slowTimerRef.current)
+      }
+    }
+  }, [application])
+
+  // Lazy-fetch on first open, and refetch when a server-side filter changes.
+  useEffect(() => {
+    void load(latestQueryRef.current)
+  }, [load, limit, service, level, order, search, timeWindow])
+
+  useEffect(() => {
+    const generation = accountGenerationRef.current
+    const timer = setTimeout(() => {
+      if (mountedRef.current && generation === accountGenerationRef.current) {
+        setSearch(textFilter.trim().slice(0, 256))
+      }
+    }, 350)
+    return () => clearTimeout(timer)
+  }, [textFilter])
+
+  useEffect(() => {
+    if (!autoRefresh) {
+      return
+    }
+    const timer = setInterval(() => {
+      if (!busyRef.current && !document.hidden) {
+        void load(latestQueryRef.current)
+      }
+    }, 15_000)
+    return () => clearInterval(timer)
+  }, [autoRefresh, load])
 
   // Distinct services seen in the current page power the service dropdown; the
   // "All services" option is always present even before anything has loaded.
@@ -170,8 +273,12 @@ const AdminLogsTab: FunctionComponent<Props> = ({ application, noteIfForbidden }
   }, [entries])
 
   const visibleEntries = useMemo(
-    () => entries.filter((entry) => logMatchesText(entry, textFilter)),
-    [entries, textFilter],
+    () =>
+      orderLogEntries(
+        entries.filter((entry) => logMatchesText(entry, textFilter)),
+        order,
+      ),
+    [entries, textFilter, order],
   )
 
   const downloadLogs = useCallback(() => {
@@ -195,8 +302,10 @@ const AdminLogsTab: FunctionComponent<Props> = ({ application, noteIfForbidden }
     <PreferencesSegment>
       <Title>Server logs</Title>
       <Text>
-        Read-only tail of the server logs across all services, newest first. Filter by service and level (re-queries the
-        server) or type to filter the fetched lines. Logs may contain operational detail; treat them as sensitive.
+        Read-only retained tail across services. Timestamps use UTC; legacy lines without a timestamp are marked
+        unavailable. Search and filters query the retained tail, rather than the complete history. Logs may contain
+        operational detail; treat them as sensitive. The limit selects the newest matching lines; ordering controls how
+        those selected lines display.
       </Text>
 
       {/* Compact, aligned toolbar: the server-side query controls (service /
@@ -230,15 +339,26 @@ const AdminLogsTab: FunctionComponent<Props> = ({ application, noteIfForbidden }
             <Dropdown label="Log limit" items={LIMIT_OPTIONS} value={limit} onChange={setLimit} disabled={loading} />
           </div>
           <div className="flex min-w-[220px] flex-grow flex-col">
-            <Text className="text-passive-1 mb-1 text-xs font-medium">Filter messages</Text>
+            <Text className="text-passive-1 mb-1 text-xs font-medium">Search messages</Text>
             <DecoratedInput
               className={{ container: 'w-full' }}
-              placeholder="Type to filter fetched lines…"
+              placeholder="Search retained messages…"
               value={textFilter}
-              onChange={setTextFilter}
+              onChange={(value) => setTextFilter(value.slice(0, 256))}
             />
           </div>
-          <Button label="Refresh" onClick={() => void load({ limit, service, level })} disabled={loading} />
+          <Dropdown
+            label="Log chronological order"
+            items={ORDER_OPTIONS}
+            value={order}
+            onChange={(value) => setOrder(value as 'asc' | 'desc')}
+          />
+          <Dropdown label="Log time window" items={WINDOW_OPTIONS} value={timeWindow} onChange={setTimeWindow} />
+          <Button label="Refresh" onClick={() => void load(latestQueryRef.current)} disabled={loading} />
+          <Button
+            label={autoRefresh ? 'Pause auto-refresh' : 'Start auto-refresh'}
+            onClick={() => setAutoRefresh(!autoRefresh)}
+          />
         </div>
 
         <div className="border-border mt-3 flex flex-wrap items-end gap-3 border-t pt-3">
@@ -258,10 +378,14 @@ const AdminLogsTab: FunctionComponent<Props> = ({ application, noteIfForbidden }
           </Text>
         </div>
       </div>
+      <Text className="text-passive-1 mt-2 text-xs">
+        {autoRefresh ? 'Refreshes every 15 seconds while visible.' : 'Auto-refresh paused.'}
+        {lastLoadedAt && ` Last refreshed: ${formatLogTimestampUTC(lastLoadedAt)}.`}
+      </Text>
 
       {truncated && !loading && !loadError && (
         <Text className="mt-2 text-xs">
-          Output was truncated by the server; narrow the filters or lower the limit to see more specific lines.
+          The retained output exceeds this limit. Narrow the service, level, time window or message search.
         </Text>
       )}
 
@@ -295,9 +419,7 @@ const AdminLogsTab: FunctionComponent<Props> = ({ application, noteIfForbidden }
               key={`${entry.timestamp ?? ''}-${index}`}
               className={`py-0.5 break-words whitespace-pre-wrap ${logLevelColorClass(entry.level)}`}
             >
-              {formatLogTimestamp(entry.timestamp) && (
-                <span className="text-passive-1">{formatLogTimestamp(entry.timestamp)} </span>
-              )}
+              <span className="text-passive-1">{formatLogTimestampUTC(entry.timestamp)} </span>
               {entry.level && <span className="font-bold">[{entry.level.toUpperCase()}] </span>}
               {entry.service && <span className="text-passive-0">{entry.service}: </span>}
               {entry.message}
