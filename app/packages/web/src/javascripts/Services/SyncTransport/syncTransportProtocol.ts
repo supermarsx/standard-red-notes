@@ -549,6 +549,8 @@ export type SyncTicket = {
 
 export type MainToSyncWorkerMessage =
   | { type: 'SET_COLLABORATION_SAVER'; room: string; canSave: boolean }
+  | { type: 'KEEP_SOCKET_READY'; clientRequestId: string; sessionScope: string }
+  | { type: 'RELEASE_SOCKET_READY'; clientRequestId: string }
   | {
       type: 'EXECUTE'
       clientRequestId: string

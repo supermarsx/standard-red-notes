@@ -10,6 +10,9 @@ import type {
 } from '@standardnotes/services'
 import type { HttpResponse, RawSyncResponse } from '@standardnotes/snjs'
 import * as SyncTransportWorkerModule from './syncTransport.worker'
+import sharedSyncWorkerUrl from './syncTransport.sharedworker'
+import { SharedSyncWorkerClient } from './SharedSyncWorkerClient'
+import { WebBuildRevision } from '../../Constants/BuildRevision'
 import {
   CollaborationAuthorizationTransportRequest,
   CollaborationAuthorizationTransportResult,
@@ -58,6 +61,7 @@ const transportError = (message: string): Error => authoredLogMessage(new Error(
 type SyncWorkerLike = {
   onmessage: ((event: MessageEvent<SyncWorkerToMainMessage>) => void) | null
   onerror: (() => void) | null
+  onexpired?: (() => void) | null
   postMessage(message: MainToSyncWorkerMessage): void
   terminate(): void
 }
@@ -852,6 +856,9 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
   // become an HTTP write simply because its originating room has disappeared.
   private readonly socketOnlyItems = new Set<string>()
   private readonly activeSocketOnlyItems = new Set<string>()
+  private socketReadinessConsumer?: { clientRequestId: string; sessionScope: string }
+  private socketReadinessSetup?: Promise<void>
+  private socketReadinessUpdateRequested = false
   private readonly collaborationSaverPermissions = new Map<string, boolean>()
 
   setCollaborationSaver(room: string, canSave: boolean): void {
@@ -884,15 +891,76 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
   requireSocketSavesForItem(uuid: string): boolean {
     this.socketOnlyItems.add(uuid)
     this.activeSocketOnlyItems.add(uuid)
+    this.maintainSocketReadiness()
     return this.persistSocketOnlyItems()
   }
 
   releaseSocketSavesForItem(uuid: string, serverAcknowledged: boolean): void {
     this.activeSocketOnlyItems.delete(uuid)
+    this.maintainSocketReadiness()
     if (serverAcknowledged) {
       this.socketOnlyItems.delete(uuid)
       this.persistSocketOnlyItems()
     }
+  }
+
+  private maintainSocketReadiness(): void {
+    if (this.deinitialized) {
+      return
+    }
+    if (this.socketReadinessSetup) {
+      this.socketReadinessUpdateRequested = true
+      return
+    }
+    const operation = this.updateSocketReadiness()
+    this.socketReadinessSetup = operation
+    void operation
+      .finally(() => {
+        if (this.socketReadinessSetup === operation) {
+          this.socketReadinessSetup = undefined
+          if (this.socketReadinessUpdateRequested) {
+            this.socketReadinessUpdateRequested = false
+            this.maintainSocketReadiness()
+          }
+        }
+      })
+      .catch(() => undefined)
+  }
+
+  private async updateSocketReadiness(): Promise<void> {
+    if (this.activeSocketOnlyItems.size === 0) {
+      if (this.socketReadinessConsumer) {
+        this.worker?.postMessage({
+          type: 'RELEASE_SOCKET_READY',
+          clientRequestId: this.socketReadinessConsumer.clientRequestId,
+        })
+        this.socketReadinessConsumer = undefined
+      }
+      return
+    }
+    if (this.socketReadinessConsumer || !this.environmentSupported() || this.sessionLaneUnavailableReason()) {
+      return
+    }
+    const sessionScope = await this.currentSessionScope()
+    if (!sessionScope || this.revokedSessionScopes.has(sessionScope)) {
+      return
+    }
+    const worker = await this.workerForSession(sessionScope)
+    const currentScope = await this.currentSessionScope()
+    if (
+      !worker ||
+      this.worker !== worker ||
+      this.workerSessionScope !== sessionScope ||
+      currentScope !== sessionScope ||
+      this.revokedSessionScopes.has(sessionScope) ||
+      this.deinitialized ||
+      this.activeSocketOnlyItems.size === 0
+    ) {
+      return
+    }
+    const clientRequestId = this.nextRequestId('socket-ready')
+    this.socketReadinessConsumer = { clientRequestId, sessionScope }
+    worker.postMessage({ type: 'KEEP_SOCKET_READY', clientRequestId, sessionScope })
   }
 
   private containsSocketOnlyItems(request: AccountSyncTransportRequest): boolean {
@@ -1714,9 +1782,33 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       return this.worker
     }
     try {
-      const worker = this.options.workerFactory?.() ?? (new SyncTransportWorker() as unknown as SyncWorkerLike)
+      let worker: SyncWorkerLike
+      if (this.options.workerFactory) {
+        worker = this.options.workerFactory()
+      } else if (typeof SharedWorker !== 'undefined' && sharedSyncWorkerUrl) {
+        // sessionScope is already an opaque hash of authenticated identity and
+        // its session epoch. Creation stays synchronous so concurrent consumers
+        // attach exactly one port per page.
+        const name = `srn-sync:${WebBuildRevision}:${sessionScope}`
+        try {
+          worker = new SharedSyncWorkerClient(
+            new SharedWorker(sharedSyncWorkerUrl, { name }),
+            sessionScope,
+            WebBuildRevision,
+          )
+        } catch {
+          worker = new SyncTransportWorker() as unknown as SyncWorkerLike
+        }
+      } else {
+        worker = new SyncTransportWorker() as unknown as SyncWorkerLike
+      }
+      if (this.deinitialized || this.revokedSessionScopes.has(sessionScope)) {
+        worker.terminate()
+        return undefined
+      }
       worker.onmessage = (event) => void this.onWorkerMessage(event.data)
       worker.onerror = () => void this.onWorkerError()
+      worker.onexpired = () => void this.onWorkerError().then(() => this.maintainSocketReadiness())
       this.worker = worker
       this.workerBuildReport = { startedAtMs: Date.now() }
       this.workerSessionScope = sessionScope
@@ -1759,6 +1851,7 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     this.worker = undefined
     this.workerBuildReport = undefined
     this.workerSessionScope = undefined
+    this.socketReadinessConsumer = undefined
     this.negotiated = undefined
     // The hold lived in that worker; the next one starts without it.
     this.saveLaneHold = undefined
@@ -2135,8 +2228,17 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
         pending?.sessionScope ??
         collaborationPending?.sessionScope ??
         rpcPending?.sessionScope ??
-        invitePending?.sessionScope
+        invitePending?.sessionScope ??
+        (this.socketReadinessConsumer?.clientRequestId === message.clientRequestId
+          ? this.socketReadinessConsumer.sessionScope
+          : undefined)
       if (sessionScope) {
+        // The worker checks the shared owner lease before emitting NEED_TICKET.
+        // Only a request correlated to this transport can override its older
+        // sibling-owner cache after ownership has become available.
+        if (this.ticketFailureCache?.reason === 'multi-tab-not-owner') {
+          this.ticketFailureCache = undefined
+        }
         await this.supplyTicket(message.clientRequestId, sessionScope)
       }
       return
@@ -2603,7 +2705,8 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       (!this.pending.has(clientRequestId) &&
         !this.pendingCollaboration.has(clientRequestId) &&
         !this.pendingRpcs.has(clientRequestId) &&
-        !this.pendingInviteSubscriptions.has(clientRequestId)) ||
+        !this.pendingInviteSubscriptions.has(clientRequestId) &&
+        this.socketReadinessConsumer?.clientRequestId !== clientRequestId) ||
       this.workerSessionScope !== sessionScope
     ) {
       return

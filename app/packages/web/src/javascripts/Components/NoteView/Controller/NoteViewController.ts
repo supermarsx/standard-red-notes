@@ -496,9 +496,10 @@ export class NoteViewController implements ItemViewControllerInterface {
    * in-flight local save (whether triggered by the flush just now or already pending).
    */
   public async flushAndAwaitPendingSave(): Promise<void> {
-    if (this.dealloced) {
+    if (this.dealloced || !this.item) {
       return
     }
+    const noteUuid = this.item.uuid
 
     // Flush synchronously: the editor's onChange -> saveAndAwaitLocalPropagation runs
     // synchronously up to its first await, so inFlightSavePromise is set before we read
@@ -512,6 +513,9 @@ export class NoteViewController implements ItemViewControllerInterface {
       } catch {
         // The save chain rejects on deinit; nothing more to await.
       }
+    }
+    if (this.dealloced) {
+      return
     }
 
     /**
@@ -533,7 +537,12 @@ export class NoteViewController implements ItemViewControllerInterface {
     try {
       await this.editorDurabilityFlush?.()
     } catch (error) {
-      if (CollaborationSaverRegistry.get(this.item.uuid)) {
+      // The provider can fail after asynchronous note/security teardown has
+      // already scrubbed this controller's item and editor callbacks.
+      if (this.dealloced) {
+        return
+      }
+      if (CollaborationSaverRegistry.get(noteUuid)) {
         // A non-saver never dirties the account item. Only the room's remote
         // acknowledgement can prove its retained edits are safe to discard.
         throw error
@@ -550,6 +559,9 @@ export class NoteViewController implements ItemViewControllerInterface {
    */
   private async retainNoteAfterDurabilityFlushFailure(error: unknown): Promise<void> {
     await this.syncController.awaitCurrentLocalPropagationStrict()
+    if (this.dealloced) {
+      return
+    }
 
     if (this.reportedDurabilityFlushFailure) {
       return
@@ -577,6 +589,9 @@ export class NoteViewController implements ItemViewControllerInterface {
     this.flushEditorSerialize()
     const pending = this.inFlightSavePromise
     await pending
+    if (this.dealloced) {
+      throw new Error('The note editor was closed before its update could be saved.')
+    }
     const priorFailure = this.strictLocalPersistenceFailure
     const latestAttempt = this.latestSaveAttempt
     if (priorFailure && (!latestAttempt || latestAttempt.revision <= priorFailure.revision) && !pending) {

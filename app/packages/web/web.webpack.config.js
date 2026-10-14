@@ -219,6 +219,16 @@ module.exports = (env) => {
       },
       rules: [
         {
+          test: /\.sharedworker\.tsx?$/,
+          use: [
+            { loader: require.resolve('./shared-worker-url-loader.cjs') },
+            {
+              loader: 'worker-loader',
+              options: { filename: '[contenthash].sharedworker.js', chunkFilename: '[contenthash].sharedworker.js' },
+            },
+          ],
+        },
+        {
           test: /\.worker\.tsx?$/,
           loader: 'worker-loader',
           options: {

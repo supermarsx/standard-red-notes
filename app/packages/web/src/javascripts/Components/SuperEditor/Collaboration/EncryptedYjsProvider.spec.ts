@@ -1524,6 +1524,8 @@ describe('EncryptedYjsProvider convergence', () => {
       release: secondRelease,
     }
     const reactivate = jest.fn().mockResolvedValue(secondLease)
+    const validateAttachment = jest.fn(() => true)
+    const leaseChange = jest.fn()
     const setCanonicalOwnership = jest.fn()
     const doc = new Y.Doc()
     doc.getText('content').insert(0, 'before disconnect')
@@ -1537,19 +1539,28 @@ describe('EncryptedYjsProvider convergence', () => {
       {
         activeLease: firstLease,
         shouldBootstrap: true,
-        validateAttachment: jest.fn(() => true),
+        validateAttachment,
         reactivate,
         onFatal: jest.fn(),
         setCanonicalOwnership,
       },
     )
+    expect(provider.getActiveEditorLeaseIdentity()).toBeUndefined()
+    const stopLease = provider.onActiveEditorLeaseChange(leaseChange)
     provider.connect()
     await settle(provider)
+    expect(provider.getActiveEditorLeaseIdentity()).toEqual({
+      leaseId: firstLease.requestId,
+      roomEpoch: TEST_ROOM_EPOCH,
+    })
+    expect(leaseChange).toHaveBeenLastCalledWith({ leaseId: firstLease.requestId, roomEpoch: TEST_ROOM_EPOCH })
     sent.length = 0
     setCanonicalOwnership.mockClear()
 
     connected = false
     status?.(false)
+    expect(provider.getActiveEditorLeaseIdentity()).toBeUndefined()
+    expect(leaseChange).toHaveBeenLastCalledWith(undefined)
     expect(setCanonicalOwnership).toHaveBeenLastCalledWith(false)
     doc.getText('content').insert(doc.getText('content').length, ' + offline edit')
     await provider.flush()
@@ -1569,8 +1580,19 @@ describe('EncryptedYjsProvider convergence', () => {
     expect(provider.doc).toBe(doc)
     expect(setCanonicalOwnership).toHaveBeenLastCalledWith(true)
     expect(firstRelease).toHaveBeenCalledTimes(1)
+    expect(provider.getActiveEditorLeaseIdentity()).toEqual({
+      leaseId: secondLease.requestId,
+      roomEpoch: TEST_ROOM_EPOCH,
+    })
+    expect(leaseChange).toHaveBeenLastCalledWith({ leaseId: secondLease.requestId, roomEpoch: TEST_ROOM_EPOCH })
+    validateAttachment.mockReturnValue(false)
+    expect(provider.getActiveEditorLeaseIdentity()).toBeUndefined()
+    validateAttachment.mockReturnValue(true)
 
     provider.destroy()
+    expect(provider.getActiveEditorLeaseIdentity()).toBeUndefined()
+    expect(leaseChange).toHaveBeenLastCalledWith(undefined)
+    stopLease()
     expect(secondRelease).toHaveBeenCalledTimes(1)
     consoleError.mockRestore()
   })
@@ -3341,6 +3363,44 @@ describe('EncryptedYjsProvider presence between people who are both here', () =>
       getLocalState(): Record<string, unknown> | null
       setLocalState(state: Record<string, unknown> | null): void
     }
+
+  it('accepts bounded device identities without accepting arbitrary awareness metadata', async () => {
+    const room = 'device-identity-awareness-room'
+    const { provider, inbound, onFatal } = createPresenceProvider(room)
+    const errors = jest.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      provider.connect()
+      await flushMicrotasksUntil(() => provider.isRoomJoined())
+      const remote = provider.doc.clientID === 7111 ? 7112 : 7111
+      inbound.deliver(
+        awarenessFrameFrom(room, remote, {
+          ...PEER_STATE,
+          awarenessData: { userUuid: 'remote-user', deviceId: 'profile-1' },
+        }),
+      )
+      await provider.flush()
+      expect(localAwareness(provider).getStates().get(remote)?.awarenessData).toEqual({
+        userUuid: 'remote-user',
+        deviceId: 'profile-1',
+      })
+      inbound.deliver(
+        rawAwarenessFrame(room, [
+          {
+            clientId: remote,
+            clock: 100,
+            state: { ...PEER_STATE, awarenessData: { userUuid: 'remote-user', deviceId: 'x'.repeat(129) } },
+          },
+        ]),
+      )
+      await provider.flush()
+      expect(localAwareness(provider).getStates().has(remote)).toBe(false)
+      expect(provider.isRoomJoined()).toBe(true)
+      expect(onFatal).not.toHaveBeenCalled()
+    } finally {
+      provider.destroy()
+      errors.mockRestore()
+    }
+  })
 
   it('relays bounded saver capabilities and rejects malformed election advertisements', async () => {
     const room = 'saver-capability-awareness-room'

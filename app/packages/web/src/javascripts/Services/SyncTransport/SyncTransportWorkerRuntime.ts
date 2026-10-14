@@ -434,6 +434,11 @@ type ActiveRequest =
       sessionScope: string
       mode: 'invite-bootstrap'
     }
+  | {
+      clientRequestId: string
+      sessionScope: string
+      mode: 'socket-bootstrap'
+    }
 
 type ActiveRpcRequest = {
   clientRequestId: string
@@ -720,6 +725,7 @@ export class SyncTransportWorkerRuntime {
   private ownerRenewInterval?: ReturnType<typeof setInterval>
   /** Live only while an invite subscription is parked on a `deferred` fallback reason. */
   private deferredInviteWatch?: ReturnType<typeof setInterval>
+  private socketReadinessConsumer?: { clientRequestId: string; sessionScope: string }
   /**
    * The last scope this tab dialled, kept after the lease is released so the
    * next request can read the lease before paying for a ticket to discover the
@@ -783,6 +789,12 @@ export class SyncTransportWorkerRuntime {
     switch (message.type) {
       case 'SET_COLLABORATION_SAVER':
         this.collaborationSavers.set(message.room, message.canSave)
+        break
+      case 'KEEP_SOCKET_READY':
+        await this.keepSocketReady(message.clientRequestId, message.sessionScope)
+        break
+      case 'RELEASE_SOCKET_READY':
+        await this.releaseSocketReady(message.clientRequestId)
         break
       case 'EXECUTE':
         await this.execute(message.clientRequestId, message.body, message.sessionScope, message.context)
@@ -860,6 +872,32 @@ export class SyncTransportWorkerRuntime {
       case 'SHUTDOWN':
         await this.shutdown()
         break
+    }
+  }
+
+  /** The shared broker serializes primary commands through this existing journal owner. */
+  isBrokerPrimaryIdle(): boolean {
+    return !this.active && !this.shuttingDown
+  }
+
+  async detachBrokerClient(requestIds: ReadonlySet<string>): Promise<void> {
+    for (const id of requestIds) {
+      await this.cancelRpc(id)
+      await this.cancelFileDownload(id, 'CANCELLED')
+      await this.cancelFileUpload(id, 'CANCELLED')
+    }
+    const active = this.active
+    if (!active || !requestIds.has(active.clientRequestId)) {
+      return
+    }
+    if (this.outboxRecord) {
+      // The departing page cannot acknowledge local durability. Preserve the
+      // journal and let the next account consumer reconcile its exact identity.
+      await this.requireDurableRecovery(active.clientRequestId, 'reconnect-gap')
+    } else if (active.mode === 'collaboration') {
+      await this.fallbackCollaboration('reconnect-gap', true)
+    } else {
+      this.active = undefined
     }
   }
 
@@ -1070,7 +1108,43 @@ export class SyncTransportWorkerRuntime {
    * deadline.
    */
   private activeBlocksNewWork(): boolean {
-    return this.active !== undefined && this.active.mode !== 'invite-bootstrap' && this.active.mode !== 'rpc-bootstrap'
+    return (
+      this.active !== undefined &&
+      this.active.mode !== 'invite-bootstrap' &&
+      this.active.mode !== 'rpc-bootstrap' &&
+      this.active.mode !== 'socket-bootstrap'
+    )
+  }
+
+  private async keepSocketReady(clientRequestId: string, sessionScope: string): Promise<void> {
+    if (
+      this.shuttingDown ||
+      !validSessionScope(sessionScope) ||
+      (this.sessionScope && this.sessionScope !== sessionScope)
+    ) {
+      return
+    }
+    this.socketReadinessConsumer = { clientRequestId, sessionScope }
+    this.sessionScope = sessionScope
+    if (this.socket || this.active) {
+      return
+    }
+    this.active = { clientRequestId, sessionScope, mode: 'socket-bootstrap' }
+    await this.requestTicket(clientRequestId, sessionScope, false)
+  }
+
+  private async releaseSocketReady(clientRequestId: string): Promise<void> {
+    if (this.socketReadinessConsumer?.clientRequestId !== clientRequestId) {
+      return
+    }
+    this.socketReadinessConsumer = undefined
+    if (!this.inviteSubscription) {
+      this.cancelDeferredInviteWatch()
+    }
+    if (this.active?.mode === 'socket-bootstrap' && this.active.clientRequestId === clientRequestId) {
+      this.active = undefined
+      await this.closeSocketAndReleaseOwner()
+    }
   }
 
   /**
@@ -1372,7 +1446,9 @@ export class SyncTransportWorkerRuntime {
   private unsubscribeInviteEvents(clientRequestId: string): void {
     if (this.inviteSubscription?.clientRequestId === clientRequestId) {
       this.inviteSubscription = undefined
-      this.cancelDeferredInviteWatch()
+      if (!this.socketReadinessConsumer) {
+        this.cancelDeferredInviteWatch()
+      }
       if (this.active?.mode === 'invite-bootstrap' && this.active.clientRequestId === clientRequestId) {
         this.active = undefined
       }
@@ -3119,6 +3195,10 @@ export class SyncTransportWorkerRuntime {
   }
 
   private async prepareActiveRequest(): Promise<void> {
+    if (this.active?.mode === 'socket-bootstrap') {
+      this.active = undefined
+      return
+    }
     if (this.active?.mode === 'invite-bootstrap') {
       this.active = undefined
       return
@@ -3283,6 +3363,12 @@ export class SyncTransportWorkerRuntime {
     reason: SyncFallbackReason | undefined,
   ): void {
     if (subscription.settled === true) {
+      // A watch cancels before dialling. Ownership can change between its read
+      // and acquisition, so another deferral must re-arm it even though the
+      // caller has already been told to wait.
+      if (reason !== undefined && syncFallbackDisposition(reason) === 'deferred') {
+        this.beginDeferredInviteWatch()
+      }
       return
     }
     subscription.settled = true
@@ -4166,6 +4252,9 @@ export class SyncTransportWorkerRuntime {
         mode: 'invite-bootstrap',
       }
     }
+    if (!this.active && this.socketReadinessConsumer) {
+      this.active = { ...this.socketReadinessConsumer, mode: 'socket-bootstrap' }
+    }
     if (!this.active) {
       /**
        * *** AN IDLE TAB USED TO HOLD THE WHOLE ACCOUNT'S LANE WITH NO SOCKET. ***
@@ -4472,25 +4561,27 @@ export class SyncTransportWorkerRuntime {
     }
     this.deferredInviteWatch = this.scheduleInterval(() => {
       const subscription = this.inviteSubscription
-      if (!subscription || this.shuttingDown || this.socket || this.active) {
-        if (!subscription || this.shuttingDown) {
+      const consumer = subscription ?? this.socketReadinessConsumer
+      if (!consumer || this.shuttingDown || this.socket || this.active) {
+        if (!consumer || this.shuttingDown) {
           this.cancelDeferredInviteWatch()
         }
         return
       }
-      void this.socketOwnedByAnotherTab(subscription.sessionScope).then(async (owned) => {
-        if (owned || this.inviteSubscription !== subscription || this.socket || this.active || this.shuttingDown) {
+      void this.socketOwnedByAnotherTab(consumer.sessionScope).then(async (owned) => {
+        const current = subscription ? this.inviteSubscription : this.socketReadinessConsumer
+        if (owned || current !== consumer || this.socket || this.active || this.shuttingDown) {
           return
         }
         this.cancelDeferredInviteWatch()
         this.active = {
-          clientRequestId: subscription.clientRequestId,
-          sessionScope: subscription.sessionScope,
-          mode: 'invite-bootstrap',
+          clientRequestId: consumer.clientRequestId,
+          sessionScope: consumer.sessionScope,
+          mode: subscription ? 'invite-bootstrap' : 'socket-bootstrap',
         }
-        await this.requestTicket(subscription.clientRequestId, subscription.sessionScope, false)
+        await this.requestTicket(consumer.clientRequestId, consumer.sessionScope, false)
       })
-    }, OWNER_LEASE_TTL_MS)
+    }, 1_000)
   }
 
   private cancelDeferredInviteWatch(): void {
@@ -4531,6 +4622,14 @@ export class SyncTransportWorkerRuntime {
   ): Promise<void> {
     const active = this.active
     if (!active) {
+      return
+    }
+    if (active.mode === 'socket-bootstrap') {
+      this.active = undefined
+      this.transition(this.nonRecoveringState(reason), reason, preserveHealthySocket)
+      if (!preserveHealthySocket) {
+        await this.closeSocketAndReleaseOwner({ reason })
+      }
       return
     }
     if (active.mode === 'rpc-bootstrap') {
@@ -4738,6 +4837,14 @@ export class SyncTransportWorkerRuntime {
         this.settleInviteSubscription(subscription, reason)
       }
     }
+    if (
+      !this.shuttingDown &&
+      this.socketReadinessConsumer &&
+      reason !== undefined &&
+      syncFallbackDisposition(reason) === 'deferred'
+    ) {
+      this.beginDeferredInviteWatch()
+    }
   }
 
   private async revokeSession(requestId: string, sessionScope: string): Promise<void> {
@@ -4760,6 +4867,7 @@ export class SyncTransportWorkerRuntime {
     this.authorization = undefined
     this.active = undefined
     this.inviteSubscription = undefined
+    this.socketReadinessConsumer = undefined
     this.cancelDeferredInviteWatch()
     this.outboxRecord = undefined
     if (this.liveSyncDisabled) {
@@ -4788,6 +4896,7 @@ export class SyncTransportWorkerRuntime {
     this.authorization = undefined
     this.active = undefined
     this.inviteSubscription = undefined
+    this.socketReadinessConsumer = undefined
     this.cancelDeferredInviteWatch()
     if (this.handshakeLoopHoldTimer) {
       this.cancelTimeout(this.handshakeLoopHoldTimer)

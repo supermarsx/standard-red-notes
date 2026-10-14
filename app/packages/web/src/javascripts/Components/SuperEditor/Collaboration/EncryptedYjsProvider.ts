@@ -340,6 +340,48 @@ export class EncryptedYjsProvider implements Provider {
     }
   }
 
+  /** Only the gateway lease currently attached to this live room may bind a saver proof. */
+  getActiveEditorLeaseIdentity(): { leaseId: string; roomEpoch: string } | undefined {
+    const lease = this.currentLease
+    if (!this.connected || !this.joined || this.terminallyDestroyed || !lease || !this.channel.isConnected()) {
+      return
+    }
+    try {
+      if (this.options && !this.options.validateAttachment()) {
+        return
+      }
+    } catch {
+      return
+    }
+    if (lease.roomEpoch !== this.expectedRoomEpoch) {
+      return
+    }
+    return { leaseId: lease.requestId, roomEpoch: lease.roomEpoch }
+  }
+
+  onActiveEditorLeaseChange(
+    listener: (identity: { leaseId: string; roomEpoch: string } | undefined) => void,
+  ): () => void {
+    this.activeEditorLeaseListeners.add(listener)
+    return () => this.activeEditorLeaseListeners.delete(listener)
+  }
+
+  private readonly activeEditorLeaseListeners = new Set<
+    (identity: { leaseId: string; roomEpoch: string } | undefined) => void
+  >()
+
+  private setJoined(joined: boolean): void {
+    this.joined = joined
+    const identity = this.getActiveEditorLeaseIdentity()
+    for (const listener of [...this.activeEditorLeaseListeners]) {
+      try {
+        listener(identity)
+      } catch {
+        // A local saver observer cannot interrupt provider cleanup or reactivation.
+      }
+    }
+  }
+
   onCanonicalReadyChange(listener: (ready: boolean) => void): () => void {
     this.canonicalReadyListeners.add(listener)
     return () => this.canonicalReadyListeners.delete(listener)
@@ -390,7 +432,7 @@ export class EncryptedYjsProvider implements Provider {
       return true
     }
     const wasJoined = this.joined
-    this.joined = false
+    this.setJoined(false)
     this.stopPresenceHeartbeat()
     this.ephemeralPresence?.clear()
     this.setStateServingReady(false)
@@ -537,7 +579,7 @@ export class EncryptedYjsProvider implements Provider {
       this.clearPendingResponseClaims()
     }
     this.joinRequestId = lease.requestId
-    this.joined = true
+    this.setJoined(true)
     this.startPresenceHeartbeat()
     this.joinRetryAttempts = 0
     this.lastLeaseFailure = undefined
@@ -767,7 +809,7 @@ export class EncryptedYjsProvider implements Provider {
     this.transportGeneration += 1
     this.reactivatingGeneration = undefined
     this.connected = false
-    this.joined = false
+    this.setJoined(false)
     this.stopPresenceHeartbeat()
     this.removeVisibilityListener()
     this.ephemeralPresence?.clear()
@@ -828,6 +870,7 @@ export class EncryptedYjsProvider implements Provider {
     this.retainedLocalAwarenessState = undefined
     this.setStateServingReady(false)
     this.canonicalReadyListeners.clear()
+    this.activeEditorLeaseListeners.clear()
     for (const listeners of Object.values(this.listeners)) {
       listeners.clear()
     }
@@ -960,7 +1003,7 @@ export class EncryptedYjsProvider implements Provider {
     this.stopPresenceHeartbeat()
     this.ephemeralPresence?.clear()
     if (this.joined) {
-      this.joined = false
+      this.setJoined(false)
       this.emit('sync', false as never)
     }
     this.currentLease?.release()
@@ -1549,10 +1592,18 @@ export class EncryptedYjsProvider implements Provider {
         throw new Error('invalid-awareness-data')
       }
       const awarenessData = value.awarenessData as Record<string, unknown>
-      if (Object.keys(awarenessData).some((key) => key !== 'userUuid' && key !== STATE_READY_AWARENESS_FIELD)) {
+      if (
+        Object.keys(awarenessData).some((key) => !['userUuid', 'deviceId', STATE_READY_AWARENESS_FIELD].includes(key))
+      ) {
         throw new Error('invalid-awareness-data-field')
       }
       const normalizedData: Record<string, unknown> = {}
+      if (awarenessData.deviceId !== undefined) {
+        if (typeof awarenessData.deviceId !== 'string' || !/^[a-zA-Z0-9._:-]{1,128}$/.test(awarenessData.deviceId)) {
+          throw new Error('invalid-awareness-device')
+        }
+        normalizedData.deviceId = awarenessData.deviceId
+      }
       if (awarenessData.userUuid !== undefined) {
         if (
           typeof awarenessData.userUuid !== 'string' ||
@@ -1766,7 +1817,7 @@ export class EncryptedYjsProvider implements Provider {
         if (!this.connected || this.options || frame.requestId !== this.joinRequestId) {
           break
         }
-        this.joined = true
+        this.setJoined(true)
         this.markStateServingReady()
         this.joinRetryAttempts = 0
         this.clearJoinRetry()
@@ -1788,7 +1839,7 @@ export class EncryptedYjsProvider implements Provider {
           const requiresRemount = deniedReason === 'epoch-mismatch' || deniedReason === 'security-revoked'
           this.transportGeneration += 1
           const generation = this.transportGeneration
-          this.joined = false
+          this.setJoined(false)
           this.setCanonicalOwnership(false)
           this.awaitingBootstrapSeed = false
           this.stateEstablishingGeneration = undefined
@@ -2837,7 +2888,7 @@ export class EncryptedYjsProvider implements Provider {
     this.clearStateRequest()
     this.clearStateResponseQueue()
     this.clearPendingResponseClaims()
-    this.joined = false
+    this.setJoined(false)
     this.clearLocalOutboundQueue()
     this.stopPresenceHeartbeat()
     this.ephemeralPresence?.clear()
@@ -2886,7 +2937,7 @@ export class EncryptedYjsProvider implements Provider {
 
   private fatal(reason: string): void {
     this.lastSyncFailure = 'encrypted-yjs-fatal'
-    this.joined = false
+    this.setJoined(false)
     this.setStateServingReady(false)
     this.awaitingBootstrapSeed = false
     this.stateEstablishingGeneration = undefined

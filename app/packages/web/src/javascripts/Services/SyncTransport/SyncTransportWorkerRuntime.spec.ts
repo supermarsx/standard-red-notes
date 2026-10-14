@@ -10,6 +10,7 @@ import {
   ownerRenewalOutcome,
 } from './SyncTransportOutbox'
 import { SyncSocketCloseEvent, SyncSocketLike, SyncTransportWorkerRuntime } from './SyncTransportWorkerRuntime'
+import { SharedSyncTransportBroker } from './SharedSyncTransportBroker'
 import {
   CollaborationAuthorizationTransportRequest,
   MainToSyncWorkerMessage,
@@ -301,14 +302,21 @@ describe('SyncTransportWorkerRuntime', () => {
     jest.useRealTimers()
   })
 
-  const setup = (sharedOutbox = new FakeOutbox(), subtle?: SubtleCrypto) => {
+  const setup = (
+    sharedOutbox = new FakeOutbox(),
+    subtle?: SubtleCrypto,
+    observe?: (message: SyncWorkerToMainMessage) => void,
+  ) => {
     const messages: SyncWorkerToMainMessage[] = []
     const sockets: FakeSocket[] = []
     let uuid = 0
     const runtimeId = ++runtimeNumber
     const runtime = new SyncTransportWorkerRuntime({
       outbox: sharedOutbox,
-      postMessage: (message) => messages.push(message),
+      postMessage: (message) => {
+        messages.push(message)
+        observe?.(message)
+      },
       socketFactory: () => {
         const socket = new FakeSocket()
         sockets.push(socket)
@@ -324,6 +332,154 @@ describe('SyncTransportWorkerRuntime', () => {
     })
     return { runtime, messages, sockets, outbox: sharedOutbox }
   }
+
+  it('uses one actual runtime/socket/journal for two broker ports saving different notes', async () => {
+    let broker: SharedSyncTransportBroker
+    const harness = setup(undefined, undefined, (message) => broker.publish(message))
+    broker = new SharedSyncTransportBroker(harness.runtime, 'build')
+    const a = { postMessage: jest.fn() },
+      b = { postMessage: jest.fn() }
+    for (const [id, port] of [
+      ['a', a],
+      ['b', b],
+    ] as const)
+      await broker.receive(id, port, { type: 'BROKER_ATTACH', sessionScope: SESSION_A, revision: 'build' })
+    await broker.receive('a', a, {
+      type: 'EXECUTE',
+      clientRequestId: 'save',
+      sessionScope: SESSION_A,
+      body: body('a'),
+      context: { socketOnly: true },
+    })
+    await broker.receive('b', b, {
+      type: 'EXECUTE',
+      clientRequestId: 'save',
+      sessionScope: SESSION_A,
+      body: body('b'),
+      context: { socketOnly: true },
+    })
+    expect(harness.sockets).toHaveLength(0)
+    await broker.receive('a', a, {
+      type: 'CONNECT',
+      clientRequestId: 'save',
+      sessionScope: SESSION_A,
+      authorization: {
+        endpoint: 'wss://sync.example.test/sockets/sync',
+        ticket: 't'.repeat(40),
+        expiresAt: Date.now() + 30000,
+        deviceId: 'same-device',
+      },
+    })
+    const socket = harness.sockets[0]
+    socket.open()
+    const auth = JSON.parse(socket.sent[0])
+    socket.receive(
+      serverFrame('AUTHENTICATED', auth.commandId, {
+        capability: 'ws-sync',
+        protocolVersion: 1,
+        operations: ['SYNC_ITEMS', 'API_RPC'],
+        nextClientSequence: 1,
+      }),
+    )
+    await flush()
+    await flush()
+    let commands = socket.sent.map((entry) => JSON.parse(entry)).filter((frame) => frame.type === 'COMMAND')
+    expect(commands).toHaveLength(1)
+    const first = commands[0]
+    socket.receive(
+      serverFrame('COMMITTED', first.commandId, { result: { saved_items: [{ uuid: 'a' }] } }, first.digest),
+    )
+    await flush()
+    await broker.pump()
+    expect(socket.sent.map((entry) => JSON.parse(entry)).filter((frame) => frame.type === 'COMMAND')).toHaveLength(1)
+    await broker.receive('a', a, {
+      type: 'CHECKPOINT_DURABLE',
+      requestId: 'checkpoint',
+      sessionScope: SESSION_A,
+      commandId: first.commandId,
+    })
+    await broker.pump()
+    await flush()
+    await flush()
+    commands = socket.sent.map((entry) => JSON.parse(entry)).filter((frame) => frame.type === 'COMMAND')
+    expect(commands).toHaveLength(2)
+    expect(harness.sockets).toHaveLength(1)
+    expect(harness.outbox.owners.size).toBe(1)
+    expect(a.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'RESULT', clientRequestId: 'save' }))
+    const second = commands[1]
+    socket.receive(
+      serverFrame('COMMITTED', second.commandId, { result: { saved_items: [{ uuid: 'b' }] } }, second.digest),
+    )
+    await flush()
+    await broker.receive('b', b, {
+      type: 'CHECKPOINT_DURABLE',
+      requestId: 'checkpoint',
+      sessionScope: SESSION_A,
+      commandId: second.commandId,
+    })
+    expect(b.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'RESULT', clientRequestId: 'save' }))
+    expect(harness.outbox.records.size).toBe(0)
+    expect(harness.messages.some((message) => message.type === 'HTTP_FALLBACK')).toBe(false)
+    await broker.detach('a')
+    expect(socket.readyState).toBe(1)
+    await broker.detach('b')
+    await broker.shutdownIfUnused()
+  })
+
+  it('preserves a departed port unacknowledged commit for exact STATUS recovery by its sibling', async () => {
+    let broker: SharedSyncTransportBroker
+    const harness = setup(undefined, undefined, (message) => broker.publish(message))
+    broker = new SharedSyncTransportBroker(harness.runtime, 'build')
+    const a = { postMessage: jest.fn() },
+      b = { postMessage: jest.fn() }
+    for (const [id, port] of [
+      ['a', a],
+      ['b', b],
+    ] as const)
+      await broker.receive(id, port, { type: 'BROKER_ATTACH', sessionScope: SESSION_A, revision: 'build' })
+    await broker.receive('a', a, {
+      type: 'EXECUTE',
+      clientRequestId: 'save',
+      sessionScope: SESSION_A,
+      body: body(),
+      context: { socketOnly: true },
+    })
+    await broker.receive('a', a, {
+      type: 'CONNECT',
+      clientRequestId: 'save',
+      sessionScope: SESSION_A,
+      authorization: {
+        endpoint: 'wss://sync.example.test/sockets/sync',
+        ticket: 't'.repeat(40),
+        expiresAt: Date.now() + 30000,
+        deviceId: 'same-device',
+      },
+    })
+    const firstSocket = harness.sockets[0]
+    firstSocket.open()
+    firstSocket.receive(
+      serverFrame('AUTHENTICATED', JSON.parse(firstSocket.sent[0]).commandId, {
+        capability: 'ws-sync',
+        protocolVersion: 1,
+        operations: ['SYNC_ITEMS'],
+        nextClientSequence: 1,
+      }),
+    )
+    await flush()
+    await flush()
+    const command = JSON.parse(firstSocket.sent.find((entry) => JSON.parse(entry).type === 'COMMAND')!)
+    firstSocket.receive(
+      serverFrame('COMMITTED', command.commandId, { result: { retrieved_items: [] } }, command.digest),
+    )
+    await flush()
+    await broker.detach('a')
+    expect(harness.outbox.records.get(command.commandId)?.dispatchedAt).toBeDefined()
+    await broker.receive('b', b, { type: 'RECOVER', clientRequestId: 'recover', sessionScope: SESSION_A })
+    expect(b.postMessage).toHaveBeenCalledWith({ type: 'NEED_TICKET', clientRequestId: 'recover', reconnect: false })
+    expect(harness.messages.some((message) => message.type === 'HTTP_FALLBACK')).toBe(false)
+    await broker.detach('b')
+    await broker.shutdownIfUnused()
+  })
 
   const authorize = async (
     harness: ReturnType<typeof setup>,
@@ -3854,6 +4010,66 @@ describe('SyncTransportWorkerRuntime', () => {
         harness.messages.filter(
           (message): message is Extract<SyncWorkerToMainMessage, { type: 'STATE' }> => message.type === 'STATE',
         )
+
+      it('autonomously takes over for a collaboration socket consumer without an invite subscriber', async () => {
+        const harness = setup()
+        holdLease(harness)
+        await harness.runtime.handle({
+          type: 'KEEP_SOCKET_READY',
+          clientRequestId: 'collab-ready',
+          sessionScope: SESSION_A,
+        })
+        expect(ticketRequests(harness, 'collab-ready')).toHaveLength(0)
+        expect(harness.messages.some((message) => message.type === 'INVITE_DEFERRED')).toBe(false)
+        harness.outbox.owners.delete(TRANSPORT_SCOPE)
+        jest.advanceTimersByTime(1_100)
+        await flush()
+        await flush()
+        expect(ticketRequests(harness, 'collab-ready')).toHaveLength(1)
+        const socket = await dial(harness, 'collab-ready')
+        socket.open()
+        handshake(socket, ['SYNC_ITEMS'])
+        await flush()
+        expect(states(harness)).toContainEqual({ type: 'STATE', state: 'READY' })
+        expect(harness.messages.some((message) => message.type === 'HTTP_FALLBACK')).toBe(false)
+        expect(socket.sent.map((raw) => JSON.parse(raw).type)).not.toContain('COMMAND')
+      })
+
+      it('stops the autonomous owner watch when the last collaboration consumer leaves', async () => {
+        const harness = setup()
+        holdLease(harness)
+        await harness.runtime.handle({
+          type: 'KEEP_SOCKET_READY',
+          clientRequestId: 'collab-ready',
+          sessionScope: SESSION_A,
+        })
+        await harness.runtime.handle({ type: 'RELEASE_SOCKET_READY', clientRequestId: 'collab-ready' })
+        harness.outbox.owners.delete(TRANSPORT_SCOPE)
+        jest.advanceTimersByTime(30_000)
+        await flush()
+        expect(ticketRequests(harness, 'collab-ready')).toHaveLength(0)
+      })
+
+      it('re-arms an already deferred invite watch after a handoff acquisition races another owner', async () => {
+        const harness = setup()
+        holdLease(harness)
+        await subscribe(harness, 'invite-1')
+        harness.outbox.owners.delete(TRANSPORT_SCOPE)
+        jest.advanceTimersByTime(1_100)
+        await flush()
+        await flush()
+        expect(ticketRequests(harness, 'invite-1')).toHaveLength(1)
+        await harness.runtime.handle({
+          type: 'TICKET_UNAVAILABLE',
+          clientRequestId: 'invite-1',
+          reason: 'multi-tab-not-owner',
+        })
+        jest.advanceTimersByTime(1_100)
+        await flush()
+        await flush()
+        expect(ticketRequests(harness, 'invite-1')).toHaveLength(2)
+        expect(inviteMessages(harness, 'INVITE_DEFERRED')).toHaveLength(1)
+      })
 
       it('reports INVITE_DEFERRED, keeps the subscription, and never calls it an error', async () => {
         const harness = setup()

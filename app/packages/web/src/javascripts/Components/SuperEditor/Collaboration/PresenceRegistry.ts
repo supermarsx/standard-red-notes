@@ -15,6 +15,8 @@
 export type PresentPeer = {
   /** Stable account id (from awarenessData), when the peer published one. */
   userUuid?: string
+  /** Browser profile identity; several tabs can belong to one device. */
+  deviceId?: string
   /** Display name the peer broadcast (their email/contact name). */
   name: string
   /** Cursor/presence color the peer chose. */
@@ -73,7 +75,9 @@ class PresenceRegistryImpl {
           typeof peer.color !== 'string' ||
           peer.color.length > MAX_PRESENT_PEER_COLOR_LENGTH ||
           (peer.userUuid !== undefined &&
-            (typeof peer.userUuid !== 'string' || peer.userUuid.length > MAX_PRESENT_PEER_USER_UUID_LENGTH))
+            (typeof peer.userUuid !== 'string' || peer.userUuid.length > MAX_PRESENT_PEER_USER_UUID_LENGTH)) ||
+          (peer.deviceId !== undefined &&
+            (typeof peer.deviceId !== 'string' || !/^[a-zA-Z0-9._:-]{1,128}$/.test(peer.deviceId)))
         ) {
           continue
         }
@@ -85,6 +89,7 @@ class PresenceRegistryImpl {
             name: peer.name,
             color: peer.color,
             ...(peer.userUuid ? { userUuid: peer.userUuid } : {}),
+            ...(peer.deviceId ? { deviceId: peer.deviceId } : {}),
             ...(typeof peer.typing === 'boolean' ? { typing: peer.typing } : {}),
             ...(typeof peer.focusing === 'boolean' ? { focusing: peer.focusing } : {}),
             ...(typeof peer.lastActiveAt === 'number' && Number.isFinite(peer.lastActiveAt)

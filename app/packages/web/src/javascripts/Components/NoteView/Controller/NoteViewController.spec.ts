@@ -203,6 +203,39 @@ describe('note view controller', () => {
     expect(flush).not.toHaveBeenCalled()
   })
 
+  it.each(['ordinary', 'security'])(
+    'does not dereference a cleared item when provider flush rejects after %s teardown',
+    async (teardown) => {
+      const note = { uuid: 'flush-teardown-note', text: 'saved', dirty: false } as SNNote
+      application.items.findItem = jest.fn().mockReturnValue(note)
+      const controller = new NoteViewController(
+        note,
+        application.items,
+        application.mutator,
+        application.sync,
+        application.sessions,
+        application.preferences,
+        application.componentManager,
+        application.alerts,
+        application.isNativeMobileWebUseCase,
+      )
+      await controller.initialize()
+      const durability = Deferred<void>()
+      const providerFlush = jest.fn().mockReturnValue(durability.promise)
+      controller.registerEditorDurabilityFlush(providerFlush)
+      const pending = controller.flushAndAwaitPendingSave()
+      expect(providerFlush).toHaveBeenCalledTimes(1)
+      if (teardown === 'security') {
+        controller.deinitImmediatelyForSecurity()
+      } else {
+        controller.deinit()
+      }
+      expect((controller as unknown as { item?: SNNote }).item).toBeUndefined()
+      durability.reject()
+      await expect(pending).resolves.toBeUndefined()
+    },
+  )
+
   it('keeps a non-saver mounted when peer durability fails and reports its retained unsaved state', async () => {
     const note = { uuid: 'collab-note', text: 'old durable body', dirty: false } as SNNote
     application.items.findItem = jest.fn().mockReturnValue(note)

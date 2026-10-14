@@ -127,13 +127,15 @@ class CollaborationSaverRegistryImpl {
 export const CollaborationSaverRegistry = new CollaborationSaverRegistryImpl()
 export const SAVER_HANDOFF_SETTLE_MS = 2_000
 export const SAVER_DURABILITY_TIMEOUT_MS = 15_000
+export const SAVER_INITIALIZATION_TIMEOUT_MS = 15_000
+const pendingFenceReleasesByApplication = new WeakMap<WebApplication, Map<string, Promise<void>>>()
 
 /** Installs once per provider lifetime; no account-wide body saves are emitted by non-savers. */
 export function installCollaborationSaver(
   application: WebApplication,
   room: string,
   userUuid: string | undefined,
-  leaseId: string,
+  initialLeaseId: string,
   provider: EncryptedYjsProvider,
   roomEpoch: string,
 ): () => void {
@@ -147,18 +149,59 @@ export function installCollaborationSaver(
   let stalled = false
   let quarantineUntil = 0
   let awaiting: { state: CollaborativeDocumentState; since: number; epoch: string } | undefined
-  const identity = { room, roomEpoch, leaseId }
   const registryOwner = {}
   const initialNote = application.items.findItem<SNNote>(room)
   let saveFence: { room: string; token: string; expiresAt: number } | undefined
   let renewing = false
+  let leaseId = initialLeaseId
+  let identity = { room, roomEpoch, leaseId }
+  let activeIdentityValid = false
+  let generation = 0
+  let initializationTimer: ReturnType<typeof setTimeout> | undefined
+  let blockedInitialization: number | undefined
+  let fenceIdentity = identity
+  const pendingFenceReleases = pendingFenceReleasesByApplication.get(application) ?? new Map<string, Promise<void>>()
+  pendingFenceReleasesByApplication.set(application, pendingFenceReleases)
+  const identityKey = (value: typeof identity) => JSON.stringify([value.room, value.roomEpoch, value.leaseId])
+  const queueFenceRelease = (value: typeof identity, fence: NonNullable<typeof saveFence>) => {
+    const key = identityKey(value)
+    const previous = pendingFenceReleases.get(key) ?? Promise.resolve()
+    const release = previous.then(() => releaseCollaborationSaveFence(application, value, fence)).catch(() => undefined)
+    pendingFenceReleases.set(key, release)
+    void release.then(() => {
+      if (pendingFenceReleases.get(key) === release) {
+        pendingFenceReleases.delete(key)
+      }
+    })
+  }
 
   const releaseFence = () => {
     const previous = saveFence
     saveFence = undefined
     if (previous) {
-      void releaseCollaborationSaveFence(application, identity, previous).catch(() => undefined)
+      queueFenceRelease(fenceIdentity, previous)
     }
+  }
+  const releaseStaleFence = (staleIdentity: typeof identity, staleFence: NonNullable<typeof saveFence>) => {
+    const replacement = CollaborationSaverRegistry.get(room)
+    if (!CollaborationSaverRegistry.isOwner(room, registryOwner) && replacement?.leaseId === staleIdentity.leaseId) {
+      // A replacement installer can be waiting for, or already own, this same
+      // SQL token. Its current lifetime decides when to release the proof.
+      return
+    }
+    // A repeated claim by the same gateway lease may return the same SQL token.
+    // A newer attempt can already own it, or be waiting for that same response.
+    if (
+      !disposed &&
+      activeIdentityValid &&
+      electedLease === leaseId &&
+      identity.leaseId === staleIdentity.leaseId &&
+      identity.roomEpoch === staleIdentity.roomEpoch &&
+      (!saveFence || saveFence.token === staleFence.token)
+    ) {
+      return
+    }
+    queueFenceRelease(staleIdentity, staleFence)
   }
 
   const publishRegistry = () => {
@@ -211,6 +254,10 @@ export function installCollaborationSaver(
       return
     }
     electedLease = next
+    generation += 1
+    renewing = false
+    clearTimeout(initializationTimer)
+    initializationTimer = undefined
     releaseFence()
     settledLease = undefined
     if (settleTimer !== undefined) {
@@ -230,17 +277,43 @@ export function installCollaborationSaver(
         if (disposed || electedLease !== next) {
           return
         }
+        const attemptGeneration = generation
+        const attemptIdentity = identity
+        const isCurrent = () => !disposed && generation === attemptGeneration && electedLease === next
+        initializationTimer = setTimeout(() => {
+          if (!isCurrent()) {
+            return
+          }
+          blockedInitialization = attemptGeneration
+          generation += 1
+          renewing = false
+          initializationTimer = undefined
+          releaseFence()
+          quarantineUntil = Date.now() + 5_000
+          advertise()
+        }, SAVER_INITIALIZATION_TIMEOUT_MS)
         void (async () => {
           if (next === leaseId) {
-            const claimed = await claimCollaborationSaveFence(application, identity)
-            if (disposed || electedLease !== next) {
-              void releaseCollaborationSaveFence(application, identity, claimed).catch(() => undefined)
+            const releaseKey = identityKey(attemptIdentity)
+            while (pendingFenceReleases.has(releaseKey)) {
+              await pendingFenceReleases.get(releaseKey)
+              if (!isCurrent()) {
+                return
+              }
+            }
+            const claimed = await claimCollaborationSaveFence(application, attemptIdentity)
+            if (!isCurrent()) {
+              releaseStaleFence(attemptIdentity, claimed)
               return
             }
             saveFence = claimed
+            fenceIdentity = attemptIdentity
             // Pull the server's current base before a replacement starts saving.
             // A local propagation callback is not a remote acknowledgement.
             await provider.flush()
+            if (!isCurrent()) {
+              return
+            }
             const synchronized = await application.sync.sync({
               downloadOnly: true,
               awaitAll: false,
@@ -248,6 +321,9 @@ export function installCollaborationSaver(
               isUserInitiated: true,
               sourceDescription: 'Collaboration saver takeover',
             })
+            if (!isCurrent()) {
+              return
+            }
             const current = application.items.findItem<SNNote>(room)
             const currentStamp = current ? readCollaborationRevisionStamp(current.content) : undefined
             const dirtyCovered =
@@ -269,9 +345,11 @@ export function installCollaborationSaver(
               throw new Error('The collaboration saver lease expired during synchronization.')
             }
           }
-          if (disposed || electedLease !== next) {
+          if (!isCurrent()) {
             return
           }
+          clearTimeout(initializationTimer)
+          initializationTimer = undefined
           if (next === leaseId) {
             awaiting = undefined
             stalled = false
@@ -279,29 +357,42 @@ export function installCollaborationSaver(
           settledLease = next === leaseId || chosen?.saving === true ? next : undefined
           saveRequest += 1
           publishRegistry()
-        })().catch(() => {
-          if (disposed || electedLease !== next) {
-            return
-          }
-          releaseFence()
-          quarantineUntil = Date.now() + 5_000
-          advertise()
-        })
+        })()
+          .catch(() => {
+            if (!isCurrent()) {
+              return
+            }
+            clearTimeout(initializationTimer)
+            initializationTimer = undefined
+            releaseFence()
+            quarantineUntil = Date.now() + 5_000
+            advertise()
+          })
+          .finally(() => {
+            if (blockedInitialization === attemptGeneration) {
+              blockedInitialization = undefined
+              advertise()
+            }
+          })
       }, SAVER_HANDOFF_SETTLE_MS)
     }
   }
   const maintainFence = () => {
     if (saveFence && electedLease === leaseId && !renewing && saveFence.expiresAt - Date.now() < 10_000) {
       const previous = saveFence
+      const renewalGeneration = generation
+      const renewalIdentity = fenceIdentity
       renewing = true
-      void renewCollaborationSaveFence(application, identity, previous)
+      void renewCollaborationSaveFence(application, renewalIdentity, previous)
         .then((renewed) => {
-          if (!disposed && saveFence === previous) {
+          if (!disposed && generation === renewalGeneration && saveFence === previous) {
             saveFence = renewed
+          } else {
+            releaseStaleFence(renewalIdentity, renewed)
           }
         })
         .catch(() => {
-          if (disposed || saveFence !== previous) {
+          if (disposed || generation !== renewalGeneration || saveFence !== previous) {
             return
           }
           releaseFence()
@@ -309,7 +400,9 @@ export function installCollaborationSaver(
           advertise()
         })
         .finally(() => {
-          renewing = false
+          if (generation === renewalGeneration) {
+            renewing = false
+          }
         })
     }
     if (saveFence && saveFence.expiresAt <= Date.now()) {
@@ -325,15 +418,47 @@ export function installCollaborationSaver(
     awareness.setLocalStateField('saver', {
       userUuid: userUuid ?? '',
       leaseId,
-      canSaveOverSocket: constraintPersisted && application.syncSaveLane.usable && Date.now() >= quarantineUntil,
-      canonicalReady: provider.isCanonicalReady() && provider.isRoomJoined(),
+      canSaveOverSocket:
+        activeIdentityValid &&
+        blockedInitialization === undefined &&
+        constraintPersisted &&
+        application.syncSaveLane.usable &&
+        Date.now() >= quarantineUntil,
+      canonicalReady: activeIdentityValid && provider.isCanonicalReady() && provider.isRoomJoined(),
       saving: settledLease === leaseId && !stalled && saveFence !== undefined && saveFence.expiresAt > Date.now(),
     } satisfies SaverParticipant)
     elect()
   }
+  const rebindIdentity = () => {
+    const active = provider.getActiveEditorLeaseIdentity()
+    const valid = active !== undefined && active.roomEpoch === roomEpoch
+    if (activeIdentityValid === valid && (!valid || active?.leaseId === leaseId)) {
+      return
+    }
+    generation += 1
+    blockedInitialization = undefined
+    clearTimeout(initializationTimer)
+    initializationTimer = undefined
+    clearTimeout(settleTimer)
+    settleTimer = undefined
+    releaseFence()
+    electedLease = undefined
+    settledLease = undefined
+    renewing = false
+    stalled = false
+    quarantineUntil = 0
+    activeIdentityValid = valid
+    if (valid && active) {
+      leaseId = active.leaseId
+      identity = { room, roomEpoch: active.roomEpoch, leaseId }
+    }
+    publishRegistry()
+    advertise()
+  }
   awareness.on('change', elect)
   const stopLane = application.subscribeSyncSaveLane(advertise)
   const stopCanonical = provider.onCanonicalReadyChange(advertise)
+  const stopIdentity = provider.onActiveEditorLeaseChange(rebindIdentity)
   CollaborationSaverRegistry.setFlusher(room, () => provider.flush())
   CollaborationSaverRegistry.setPendingReader(room, () => {
     const document = CollaborativeDocumentRegistry.get(room)
@@ -376,6 +501,7 @@ export function installCollaborationSaver(
     throw new Error('The collaboration room has not acknowledged this note over its socket saver.')
   })
   publishRegistry()
+  rebindIdentity()
   advertise()
 
   const watchdog = setInterval(() => {
@@ -431,12 +557,15 @@ export function installCollaborationSaver(
     const outgoingFence = saveFence
     const outgoingSaver = settledLease === leaseId && !stalled && outgoingFence !== undefined
     disposed = true
+    generation += 1
     clearInterval(watchdog)
+    clearTimeout(initializationTimer)
     if (settleTimer !== undefined) {
       clearTimeout(settleTimer)
     }
     stopLane()
     stopCanonical()
+    stopIdentity()
     awareness.off('change', elect)
     awareness.setLocalStateField('saver', null)
     const finish = () => {

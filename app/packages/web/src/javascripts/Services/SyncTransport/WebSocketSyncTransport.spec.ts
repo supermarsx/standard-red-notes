@@ -2,6 +2,7 @@ import type { AccountSyncTransportRequest } from '@standardnotes/services'
 import type { HttpResponse, RawSyncResponse } from '@standardnotes/snjs'
 import { safeErrorLogMetadata } from '@standardnotes/utils'
 import { LANE_LEDGER_TRANSITION_CAPACITY } from './LaneDegradationLedger'
+import { SharedSyncTransportBroker } from './SharedSyncTransportBroker'
 import { MainToSyncWorkerMessage, SyncWorkerToMainMessage } from './syncTransportProtocol'
 import {
   deriveOpaqueSyncSessionScope,
@@ -83,6 +84,68 @@ describe('WebSocketSyncTransport', () => {
       isHttpOnly: () => false,
       ...overrides,
     })
+
+  it('completes non-streaming fence claims for actual main clients on both shared broker ports', async () => {
+    const runtime = {
+      handle: jest.fn(async (_message: MainToSyncWorkerMessage) => undefined),
+      isBrokerPrimaryIdle: () => true,
+      detachBrokerClient: jest.fn(async () => undefined),
+    }
+    const broker = new SharedSyncTransportBroker(runtime, 'build')
+    const bridge = (id: string) => {
+      const client = new FakeWorker()
+      const port = { postMessage: (message: SyncWorkerToMainMessage) => client.emit(message) }
+      client.postMessage = (message) => {
+        client.posts.push(message)
+        void broker.receive(id, port, message)
+      }
+      return { client, port }
+    }
+    const a = bridge('a'),
+      b = bridge('b')
+    await broker.receive('a', a.port, { type: 'BROKER_ATTACH', sessionScope: SESSION_A, revision: 'build' })
+    await broker.receive('b', b.port, { type: 'BROKER_ATTACH', sessionScope: SESSION_A, revision: 'build' })
+    const first = createTransport({ workerFactory: () => a.client })
+    const second = createTransport({ workerFactory: () => b.client })
+    const claim = (transport: WebSocketSyncTransport, room: string) =>
+      transport.openAuthenticatedRpcStream({
+        method: 'POST',
+        path: '/v1/collaboration/save-fence',
+        idempotencyKey: `claim-${room}`,
+        body: { action: 'claim', room },
+      })
+    const promises = [claim(first, 'note-a'), claim(second, 'note-b')]
+    let settled = 0
+    promises.forEach((promise) => void promise.then(() => settled++))
+    await flush()
+    await flush()
+    const opens = runtime.handle.mock.calls
+      .map(([message]) => message as unknown as MainToSyncWorkerMessage)
+      .filter(
+        (message): message is Extract<MainToSyncWorkerMessage, { type: 'OPEN_RPC' }> => message.type === 'OPEN_RPC',
+      )
+    expect(opens).toHaveLength(2)
+    for (const open of opens)
+      broker.publish({
+        type: 'RPC_RESPONSE',
+        clientRequestId: open.clientRequestId,
+        status: 200,
+        headers: {},
+        stream: false,
+        body: { room: (open.request.body as { room: string }).room },
+      })
+    await flush()
+    expect(settled).toBe(0)
+    for (const open of opens) broker.publish({ type: 'RPC_END', clientRequestId: open.clientRequestId })
+    await expect(Promise.all(promises)).resolves.toEqual([
+      expect.objectContaining({ status: 200, body: { room: 'note-a' } }),
+      expect.objectContaining({ status: 200, body: { room: 'note-b' } }),
+    ])
+    expect((first as unknown as { pendingRpcs: Map<string, unknown> }).pendingRpcs.size).toBe(0)
+    expect((second as unknown as { pendingRpcs: Map<string, unknown> }).pendingRpcs.size).toBe(0)
+    first.deinit()
+    second.deinit()
+  })
 
   it('keeps the opaque scope stable across token refresh and rotates it for a new session or account', async () => {
     const subtle = {
@@ -1794,6 +1857,31 @@ describe('WebSocketSyncTransport', () => {
   })
 
   describe('handing the socket between tabs', () => {
+    it('retains a correlated socket demand for live collaboration even without invite events', async () => {
+      const transport = createTransport()
+      transport.requireSocketSavesForItem('room-one')
+      await flush()
+      await flush()
+      await flush()
+      const demand = worker.posts.find((message) => message.type === 'KEEP_SOCKET_READY') as Extract<
+        MainToSyncWorkerMessage,
+        { type: 'KEEP_SOCKET_READY' }
+      >
+      expect(demand).toBeDefined()
+      worker.emit({ type: 'STATE', state: 'HTTP_FALLBACK', reason: 'multi-tab-not-owner' })
+      worker.emit({ type: 'NEED_TICKET', clientRequestId: demand.clientRequestId, reconnect: false })
+      await flush()
+      await flush()
+      expect(controlPlane.createTicket).toHaveBeenCalledTimes(1)
+      expect(worker.posts).toContainEqual(
+        expect.objectContaining({ type: 'CONNECT', clientRequestId: demand.clientRequestId }),
+      )
+      transport.releaseSocketSavesForItem('room-one', true)
+      await flush()
+      expect(worker.posts).toContainEqual({ type: 'RELEASE_SOCKET_READY', clientRequestId: demand.clientRequestId })
+      expect(worker.posts.some((message) => message.type === 'SUBSCRIBE_INVITE_EVENTS')).toBe(false)
+    })
+
     const startExecute = async (transport: WebSocketSyncTransport) => {
       const fallback = jest.fn().mockResolvedValue(response('http'))
       const execution = transport.execute(request(), fallback)
@@ -1815,7 +1903,7 @@ describe('WebSocketSyncTransport', () => {
       await expect(execution).resolves.toEqual({ response: response('http') })
     }
 
-    it('stops minting tickets while another tab holds the owner lease', async () => {
+    it('trusts the worker fresh owner-free verdict instead of an older cached deferral', async () => {
       const transport = createTransport()
       const first = await startExecute(transport)
       worker.emit({ type: 'NEED_TICKET', clientRequestId: first.clientRequestId, reconnect: false })
@@ -1828,16 +1916,14 @@ describe('WebSocketSyncTransport', () => {
       await flush()
       await new Promise((resolve) => setTimeout(resolve, 0))
 
-      expect(controlPlane.createTicket).toHaveBeenCalledTimes(1)
-      expect(worker.posts).toContainEqual({
-        type: 'TICKET_UNAVAILABLE',
-        clientRequestId: second.clientRequestId,
-        reason: 'multi-tab-not-owner',
-      })
+      expect(controlPlane.createTicket).toHaveBeenCalledTimes(2)
+      expect(worker.posts).toContainEqual(
+        expect.objectContaining({ type: 'CONNECT', clientRequestId: second.clientRequestId }),
+      )
       await settleOverHttp(second.execution, second.clientRequestId, 'multi-tab-not-owner')
     })
 
-    it('applies the lease verdict to a bootstrap too, which retries far more often than a sync', async () => {
+    it('allows a parked bootstrap to acquire a ticket after the worker observes ownership transfer', async () => {
       const transport = createTransport()
       const first = await startExecute(transport)
       worker.emit({ type: 'NEED_TICKET', clientRequestId: first.clientRequestId, reconnect: false })
@@ -1857,12 +1943,10 @@ describe('WebSocketSyncTransport', () => {
       await flush()
       await new Promise((resolve) => setTimeout(resolve, 0))
 
-      expect(controlPlane.createTicket).toHaveBeenCalledTimes(1)
-      expect(worker.posts).toContainEqual({
-        type: 'TICKET_UNAVAILABLE',
-        clientRequestId: subscribe.clientRequestId,
-        reason: 'multi-tab-not-owner',
-      })
+      expect(controlPlane.createTicket).toHaveBeenCalledTimes(2)
+      expect(worker.posts).toContainEqual(
+        expect.objectContaining({ type: 'CONNECT', clientRequestId: subscribe.clientRequestId }),
+      )
     })
 
     it('asks the worker to hand the lease back when the page is hidden', async () => {
