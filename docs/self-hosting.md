@@ -865,7 +865,8 @@ and the script remembers it on every later run.
 
 ### nginx example
 
-TLS terminates at nginx; it forwards plain HTTP to the single app front door
+This example also applies to OpenResty. TLS terminates at the outer proxy;
+it forwards plain HTTP to the single app front door
 (host port `APP_PORT`, default 3001), which handles all path routing itself.
 Note the explicit `Upgrade`/`Connection` handling on the websocket location and
 the unbuffered `/files/` location for large uploads/downloads.
@@ -904,8 +905,10 @@ server {
     proxy_set_header X-Forwarded-Proto https;
     proxy_set_header X-Forwarded-Host  $host;
 
-    # Realtime websocket - WebSocket Upgrade pass-through is required.
-    location /sockets {
+    # Covers both /sockets and /sockets/sync; keep the complete request path.
+    # ^~ prevents a regex location from overriding the websocket route.
+    location ^~ /sockets {
+        # No trailing slash or URI suffix: do not strip the /sockets prefix.
         proxy_pass http://127.0.0.1:3001;
         proxy_http_version 1.1;
         # This location defines proxy_set_header, so nginx no longer inherits
@@ -918,6 +921,8 @@ server {
         proxy_set_header Upgrade    $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
         proxy_read_timeout 1h;       # keep long-lived sockets open
+        proxy_send_timeout 1h;
+        proxy_buffering off;
     }
 
     # Files - stream large encrypted chunks without buffering them on disk.
@@ -932,6 +937,36 @@ server {
     location / { proxy_pass http://127.0.0.1:3001; }
 }
 ```
+
+Replace `127.0.0.1:3001` with the app front door's actual address if the proxy
+runs in another container or the published `APP_PORT` differs. Apply the
+WebSocket headers and timeouts at every reverse proxy between the browser and
+the app. The bundled app Nginx already provides them on its internal hop.
+In Nginx Proxy Manager, enable **Websockets Support** on the proxy host and
+ensure any custom `/sockets` location keeps these settings.
+
+Validate the configuration before reloading the outer proxy:
+
+```sh
+nginx -t && nginx -s reload
+```
+
+For OpenResty, use `openresty -t && openresty -s reload`, or the deployment's
+equivalent container/service commands. The upgrade headers and read timeout
+follow the [Nginx WebSocket proxying documentation](https://nginx.org/en/docs/http/websocket.html).
+
+A successful handshake and authenticated control-plane read establish that
+WebSocket traffic can pass, but do not establish that note syncing completes.
+Repeated `DEGRADED` transitions with `ack-timeout` about 20 seconds apart match
+the client's command acknowledgement deadline. Increasing the proxy timeout
+does not extend that deadline or repair a stalled command. Check the deployed
+gateway and syncing-server logs for the same timestamps; the sync round-trip
+check must finish before declaring the lane healthy. A proxy idle timeout is
+usually accompanied by an upstream timeout in the proxy's error log.
+
+`SERVICE_PROXY_TYPE=grpc` describes internal communication between the gateway
+and backend services. Keep `/sockets` as HTTP WebSocket proxying; it does not
+require `grpc_pass` at the public Nginx/OpenResty proxy.
 
 Set in `.env`: `ENFORCE_HTTPS_FROM_PROXY=true`,
 `APP_BIND_ADDRESS=127.0.0.1`, `COOKIE_SECURE=true`,
