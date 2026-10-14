@@ -21,7 +21,7 @@ import { act, createElement } from 'react'
 import { createRoot, Root } from 'react-dom/client'
 
 jest.mock('@standardnotes/toast', () => ({
-  addToast: () => undefined,
+  addToast: jest.fn(),
   ToastType: { Error: 'error', Success: 'success', Regular: 'regular' },
 }))
 
@@ -50,6 +50,7 @@ jest.mock('@/Components/Preferences/Panes/Conflicts/Conflicts', () => ({
 }))
 
 import Sync from './Sync'
+import { addToast } from '@standardnotes/toast'
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const makeApplication = () =>
@@ -66,6 +67,7 @@ const makeApplication = () =>
     sync: {
       setManualSyncMode: () => undefined,
       sync: async () => undefined,
+      getSyncStatus: () => ({ error: undefined }),
     },
   }) as unknown as import('@/Application/WebApplication').WebApplication
 
@@ -73,6 +75,7 @@ let container: HTMLElement
 let root: Root
 
 beforeEach(() => {
+  jest.clearAllMocks()
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
@@ -85,9 +88,9 @@ afterEach(() => {
   container.remove()
 })
 
-const render = async () => {
+const render = async (application = makeApplication()) => {
   await act(async () => {
-    root.render(createElement(Sync, { application: makeApplication() }))
+    root.render(createElement(Sync, { application }))
   })
 }
 
@@ -102,6 +105,31 @@ const clickTab = async (title: string) => {
 }
 
 describe('Sync pane renders its three subtabs', () => {
+  it('reports a resolved SDK sync failure without announcing success or exposing the backend error', async () => {
+    const application = makeApplication()
+    application.sync.getSyncStatus = jest.fn().mockReturnValue({ error: { message: 'private backend detail' } })
+    await render(application)
+    const button = Array.from(container.querySelectorAll('button')).find((entry) => entry.textContent === 'Sync now')
+    expect(button).toBeDefined()
+    await act(async () => {
+      button?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect(addToast).toHaveBeenCalledTimes(1)
+    expect(addToast).toHaveBeenCalledWith({
+      type: 'error',
+      message: 'Sync failed. Check your connection and try again.',
+    })
+    expect(button?.disabled).toBe(false)
+  })
+
+  it('announces completion only after the SDK reports no sync error', async () => {
+    await render()
+    const button = Array.from(container.querySelectorAll('button')).find((entry) => entry.textContent === 'Sync now')
+    await act(async () => {
+      button?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect(addToast).toHaveBeenCalledWith({ type: 'success', message: 'Sync complete.' })
+  })
   it('(a) shows all three subtab titles in the tab bar', async () => {
     await render()
     const titles = tabButtons().map((b) => (b.textContent ?? '').trim())

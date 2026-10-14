@@ -44,6 +44,7 @@ const createApplication = (options?: { signedOut?: boolean }) => {
     paneController: {
       openPaneTab: jest.fn(),
     },
+    openPreferences: jest.fn(),
   }
   return { application: application as unknown as WebApplication, observers }
 }
@@ -64,6 +65,45 @@ describe('NotificationsController', () => {
 
   afterEach(() => {
     controller?.deinit()
+  })
+
+  it('opens actual sync recovery and switches to reauthentication if the session changes before clicking', () => {
+    const { application, observers } = createApplication({ signedOut: false })
+    controller = new NotificationsController(application)
+    observers.forEach((observer) => void observer(ApplicationEvent.FailedSync))
+    const notification = controller.notifications.find((entry) => entry.id === 'sync-failed')!
+    expect(notification.action?.label).toBe('Resolve sync')
+    notification.action!.run()
+    expect(application.openPreferences).toHaveBeenCalledWith('sync')
+    ;(application.sessions.isSignedOut as jest.Mock).mockReturnValue(true)
+    notification.action!.run()
+    expect(application.accountMenuController.openSignIn).toHaveBeenCalledTimes(1)
+  })
+
+  it('offers an action for rate-limited sync without immediately dispatching another request', () => {
+    const { application, observers } = createApplication({ signedOut: false })
+    controller = new NotificationsController(application)
+    observers.forEach((observer) => void observer(ApplicationEvent.SyncTooManyRequests))
+    controller.notifications.find((entry) => entry.id === 'sync-rate-limited')!.action!.run()
+    expect(application.openPreferences).toHaveBeenCalledWith('sync')
+  })
+
+  it('provides meaningful actions for connectivity, backup, login and achievement notifications', () => {
+    const online = jest.spyOn(navigator, 'onLine', 'get').mockReturnValue(false)
+    try {
+      const { application } = createApplication({ signedOut: true })
+      controller = new NotificationsController(application)
+      expect(controller.notifications.every((notification) => Boolean(notification.action?.label))).toBe(true)
+      controller.notifications.find((notification) => notification.id === 'no-account')!.action!.run()
+      expect(application.accountMenuController.setShow).toHaveBeenCalledWith(true)
+      controller.notifications.find((notification) => notification.id === 'offline')!.action!.run()
+      expect(application.accountMenuController.openSignIn).toHaveBeenCalled()
+      recordAchievementNotification(ACHIEVEMENTS[0].id)
+      controller.notifications.find((notification) => notification.id.startsWith('achievement:'))!.action!.run()
+      expect(application.openPreferences).toHaveBeenCalledWith('achievements')
+    } finally {
+      online.mockRestore()
+    }
   })
 
   it('surfaces the signed-out alert as unread, with badge equal to listed unread rows', () => {

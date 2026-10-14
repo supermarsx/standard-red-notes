@@ -241,6 +241,13 @@ export class NotificationsController extends AbstractViewController {
     const signedOut = application.sessions.isSignedOut()
     const loginNeeded = application.accountMenuController.reloginPromptDismissed === true
     const offline = typeof navigator !== 'undefined' ? !navigator.onLine : false
+    const openSyncRecovery = () => {
+      if (application.accountMenuController.reloginPromptDismissed || application.sessions.isSignedOut()) {
+        application.accountMenuController.openSignIn()
+      } else {
+        application.openPreferences('sync')
+      }
+    }
 
     // Re-auth needed takes precedence over the generic "not backed up" nag. This
     // critical alert always shows (it is not gated by a source toggle).
@@ -276,6 +283,7 @@ export class NotificationsController extends AbstractViewController {
         title: "You're offline",
         message: 'Changes are saved locally and will sync when you reconnect.',
         level: 'info',
+        action: { label: 'Check connection', run: openSyncRecovery },
         dismissable: true,
       })
     }
@@ -287,6 +295,7 @@ export class NotificationsController extends AbstractViewController {
           title: 'Syncing paused',
           message: 'Too many sync requests — syncing will resume automatically in a moment.',
           level: 'warning',
+          action: { label: 'Review sync', run: openSyncRecovery },
           dismissable: true,
         })
       } else if (this.syncFailing) {
@@ -295,6 +304,7 @@ export class NotificationsController extends AbstractViewController {
           title: 'Sync problem',
           message: "Your notes couldn't be synced with the server. They're safe locally and will retry automatically.",
           level: 'error',
+          action: { label: 'Resolve sync', run: openSyncRecovery },
           dismissable: true,
         })
       }
@@ -319,6 +329,7 @@ export class NotificationsController extends AbstractViewController {
         message: definition.description || definition.name,
         level: 'info',
         icon: achievementUnlockToastIcon(definition),
+        action: { label: 'View achievement', run: () => application.openPreferences('achievements') },
         dismissable: true,
       })
     }

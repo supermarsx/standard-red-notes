@@ -161,9 +161,12 @@ const Sync: FunctionComponent<Props> = ({ application }: Props) => {
     achievements.increment(METRICS.manualSyncTotal)
     try {
       await application.sync.sync({ isUserInitiated: true })
-      addToast({ type: ToastType.Success, message: 'Sync complete.' })
-    } catch (error) {
-      console.error('Manual sync failed', error)
+      if (application.sync.getSyncStatus().error) {
+        addToast({ type: ToastType.Error, message: 'Sync failed. Check your connection and try again.' })
+      } else {
+        addToast({ type: ToastType.Success, message: 'Sync complete.' })
+      }
+    } catch {
       addToast({ type: ToastType.Error, message: 'Sync failed. Check your connection and try again.' })
     } finally {
       setSyncingNow(false)

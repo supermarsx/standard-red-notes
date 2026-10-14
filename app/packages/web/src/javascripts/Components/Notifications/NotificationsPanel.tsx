@@ -36,7 +36,8 @@ const CompactRow: FunctionComponent<{
   notification: AppNotification
   isRead: boolean
   onDismiss: (id: string) => void
-}> = ({ notification, isRead, onDismiss }) => (
+  onAction: () => void
+}> = ({ notification, isRead, onDismiss, onAction }) => (
   <div className="border-border flex items-center gap-2.5 border-b px-3.5 py-2.5 last:border-b-0">
     {notification.icon ? (
       <div className="flex flex-shrink-0 items-center">{notification.icon}</div>
@@ -54,6 +55,17 @@ const CompactRow: FunctionComponent<{
         <div className="text-passive-0 truncate text-xs" title={notification.subtitle}>
           {notification.subtitle}
         </div>
+      )}
+      {notification.action && (
+        <button
+          className="text-info hover:bg-contrast mt-1 rounded px-1 py-0.5 text-xs font-semibold"
+          onClick={() => {
+            onAction()
+            notification.action?.run()
+          }}
+        >
+          {notification.action.label}
+        </button>
       )}
     </div>
     {!isRead && <span className="bg-info h-2 w-2 flex-shrink-0 rounded-full" aria-label="Unread" />}
@@ -122,6 +134,7 @@ const NotificationsPanel: FunctionComponent<Props> = ({ controller, open, anchor
               notification={notification}
               isRead={controller.isRead(notification.id)}
               onDismiss={controller.dismiss}
+              onAction={togglePopover}
             />
           ))
         )}
