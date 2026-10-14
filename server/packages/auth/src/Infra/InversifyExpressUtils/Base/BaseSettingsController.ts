@@ -147,7 +147,7 @@ export class BaseSettingsController extends BaseHttpController {
       const errorMessage = resultOrError.getError()
       if (errorMessage.includes('not found')) {
         return this.json({
-          success: true,
+          success: false,
         })
       }
 

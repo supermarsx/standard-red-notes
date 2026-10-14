@@ -1,5 +1,6 @@
 export type GetUserKeyParamsDTOV2Challenged = {
   authenticated: boolean
+  verifiedGrantScope?: string
   codeChallenge: string
   email?: string
   userUuid?: string

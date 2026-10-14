@@ -425,6 +425,7 @@ import { EphemeralSessionRepositoryInterface } from '../Domain/Session/Ephemeral
 import { TypeORMEphemeralSessionRepository } from '../Infra/TypeORM/TypeORMEphemeralSessionRepository'
 import { TypeORMOfflineSubscriptionTokenRepository } from '../Infra/TypeORM/TypeORMOfflineSubscriptionTokenRepository'
 import { TypeORMPKCERepository } from '../Infra/TypeORM/TypeORMPKCERepository'
+import { LoginGrantScope } from '../Domain/User/LoginGrantScope'
 import { TypeORMSubscriptionTokenRepository } from '../Infra/TypeORM/TypeORMSubscriptionTokenRepository'
 import { SessionMiddleware } from '../Infra/InversifyExpressUtils/Middleware/SessionMiddleware'
 import { ApiGatewayOfflineAuthMiddleware } from '../Infra/InversifyExpressUtils/Middleware/ApiGatewayOfflineAuthMiddleware'
@@ -1165,6 +1166,9 @@ export class ContainerConfigLoader {
           container.get(TYPES.Auth_AuthenticatorPersistenceMapper),
         ),
       )
+    container.bind(LoginGrantScope).toConstantValue(
+      new LoginGrantScope(container.get(TYPES.Auth_SettingRepository), container.get(TYPES.Auth_AuthenticatorRepository)),
+    )
     container
       .bind<AppPasswordRepositoryInterface>(TYPES.Auth_AppPasswordRepository)
       .toConstantValue(
@@ -1589,6 +1593,7 @@ export class ContainerConfigLoader {
             container.get(TYPES.Auth_CacheEntryRepository),
             container.get(TYPES.Auth_Logger),
             container.get(TYPES.Auth_Timer),
+            container.get(LoginGrantScope),
           ),
         )
       container

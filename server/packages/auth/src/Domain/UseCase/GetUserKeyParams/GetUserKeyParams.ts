@@ -22,6 +22,23 @@ export class GetUserKeyParams implements UseCaseInterface {
     private workspacesPerEmailEnabled = false,
   ) {}
 
+  captureLoginGrantScope(user: User): Promise<string> {
+    return this.pkceRepository.captureGrantScope(user, 'login')
+  }
+
+  async resolveLoginUser(email: string, workspaceIdentifier?: string): Promise<User | null> {
+    const username = Username.create(email, { skipValidation: true })
+    if (username.isFailed()) {
+      return null
+    }
+    return this.workspacesPerEmailEnabled
+      ? this.userRepository.findOneByEmailAndWorkspaceIdentifier(
+          username.getValue(),
+          this.normalizeWorkspaceIdentifier(workspaceIdentifier),
+        )
+      : this.userRepository.findOneByUsernameOrEmail(username.getValue())
+  }
+
   async execute(dto: GetUserKeyParamsDTO): Promise<GetUserKeyParamsResponse> {
     let user: User | null = null
     if (dto.email !== undefined) {
@@ -37,12 +54,7 @@ export class GetUserKeyParams implements UseCaseInterface {
       // endpoint never reveals which (email, workspace) pairs exist beyond
       // today's email-existence behavior (enumeration parity). With the flag
       // OFF, the historical email-only lookup is used unchanged.
-      if (this.workspacesPerEmailEnabled) {
-        const workspaceIdentifier = this.normalizeWorkspaceIdentifier(dto.workspaceIdentifier)
-        user = await this.userRepository.findOneByEmailAndWorkspaceIdentifier(username, workspaceIdentifier)
-      } else {
-        user = await this.userRepository.findOneByUsernameOrEmail(username)
-      }
+      user = await this.resolveLoginUser(username.value, dto.workspaceIdentifier)
       if (!user) {
         this.logger.debug('No matching user found. Creating pseudo key params.', {
           lookupType: 'email',
@@ -84,7 +96,13 @@ export class GetUserKeyParams implements UseCaseInterface {
 
   private async createKeyParams(dto: GetUserKeyParamsDTO, user: User, authenticated: boolean): Promise<KeyParamsData> {
     if (this.isCodeChallengedVersion(dto)) {
-      await this.pkceRepository.storeCodeChallenge(dto.codeChallenge)
+      const verifiedScope = dto.authenticated
+        ? await this.captureLoginGrantScope(user)
+        : dto.verifiedGrantScope
+      if (!verifiedScope) {
+        throw new Error('A verified login factor policy is required')
+      }
+      await this.pkceRepository.storeCodeChallenge(dto.codeChallenge, user, 'login', verifiedScope)
     }
 
     return this.keyParamsFactory.create(user, authenticated)

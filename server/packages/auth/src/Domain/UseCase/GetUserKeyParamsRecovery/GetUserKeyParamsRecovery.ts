@@ -49,6 +49,8 @@ export class GetUserKeyParamsRecovery implements UseCaseInterface<KeyParamsData>
       return Result.ok(this.keyParamsFactory.createPseudoParams(username.value))
     }
 
+    const verifiedScope = await this.pkceRepository.captureGrantScope(user, 'recovery')
+
     const recoveryCodesSettingOrError = await this.getSetting.execute({
       settingName: SettingName.NAMES.RecoveryCodes,
       userUuid: user.uuid,
@@ -64,13 +66,13 @@ export class GetUserKeyParamsRecovery implements UseCaseInterface<KeyParamsData>
       return Result.fail('Invalid recovery codes')
     }
 
-    const keyParams = await this.createKeyParams(dto.codeChallenge, user)
+    const keyParams = await this.createKeyParams(dto.codeChallenge, user, verifiedScope)
 
     return Result.ok(keyParams)
   }
 
-  private async createKeyParams(codeChallenge: string, user: User): Promise<KeyParamsData> {
-    await this.pkceRepository.storeCodeChallenge(codeChallenge)
+  private async createKeyParams(codeChallenge: string, user: User, verifiedScope: string): Promise<KeyParamsData> {
+    await this.pkceRepository.storeCodeChallenge(codeChallenge, user, 'recovery', verifiedScope)
 
     return this.keyParamsFactory.create(user, false)
   }

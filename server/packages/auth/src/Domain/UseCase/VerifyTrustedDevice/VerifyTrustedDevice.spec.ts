@@ -51,6 +51,19 @@ describe('VerifyTrustedDevice', () => {
     expect(result.getValue()).toBe(true)
   })
 
+  it('uses only the server-resolved account for a remembered device', async () => {
+    userRepository.findOneByUuid = jest.fn().mockResolvedValue({ uuid: userUuid })
+    const result = await createUseCase().execute({ email, deviceToken: plaintextToken, resolvedUserUuid: userUuid })
+    expect(result.getValue()).toBe(true)
+    expect(userRepository.findOneByUsernameOrEmail).not.toHaveBeenCalled()
+  })
+
+  it('does not use another workspace trusted token when the requested workspace is absent', async () => {
+    const result = await createUseCase().execute({ email, deviceToken: plaintextToken, resolvedUserUuid: null })
+    expect(result.getValue()).toBe(false)
+    expect(userRepository.findOneByUsernameOrEmail).not.toHaveBeenCalled()
+  })
+
   it('should update last-used time on a successful match', async () => {
     await createUseCase().execute({ email, deviceToken: plaintextToken })
 

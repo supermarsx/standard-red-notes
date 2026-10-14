@@ -1,29 +1,20 @@
 import { FunctionComponent } from 'react'
 import { observer } from 'mobx-react-lite'
-import { QRCodeSVG as QRCode } from 'qrcode.react'
 import DecoratedInput from '@/Components/Input/DecoratedInput'
 import { TwoFactorActivation } from './TwoFactorActivation'
 import AuthAppInfoTooltip from './AuthAppInfoPopup'
 import CopyButton from './CopyButton'
 import Bullet from './Bullet'
-import { MutuallyExclusiveMediaQueryBreakpoints, useMediaQuery } from '@/Hooks/useMediaQuery'
+import { TotpQRCode } from './TotpQRCode'
 
 type Props = {
   activation: TwoFactorActivation
 }
 
 const ScanQRCode: FunctionComponent<Props> = ({ activation: act }) => {
-  const isMobileScreen = useMediaQuery(MutuallyExclusiveMediaQueryBreakpoints.sm)
-
   return (
     <div className="flex flex-col items-center gap-5 px-4 py-4 md:flex-row md:items-start">
-      <div className="bg-info flex flex-shrink-0 items-center justify-center p-2">
-        <QRCode
-          className="border-neutral-contrast border-2 border-solid"
-          value={act.qrCode}
-          size={isMobileScreen ? 200 : 150}
-        />
-      </div>
+      <TotpQRCode uri={act.qrCode} />
       <div className="flex flex-grow flex-col gap-2">
         <div className="flex flex-row items-center">
           <Bullet />

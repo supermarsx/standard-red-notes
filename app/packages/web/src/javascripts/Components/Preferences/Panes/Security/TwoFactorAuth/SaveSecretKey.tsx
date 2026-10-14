@@ -6,6 +6,7 @@ import CopyButton from './CopyButton'
 import Bullet from './Bullet'
 import { downloadSecretKey } from './download-secret-key'
 import { TwoFactorActivation } from './TwoFactorActivation'
+import { TotpQRCode } from './TotpQRCode'
 
 type Props = {
   activation: TwoFactorActivation
@@ -13,7 +14,8 @@ type Props = {
 
 const SaveSecretKey: FunctionComponent<Props> = ({ activation: act }) => {
   return (
-    <div className="flex h-33 flex-row items-center px-4 py-4">
+    <div className="flex flex-col items-center gap-5 px-4 py-4 md:flex-row md:items-start">
+      <TotpQRCode uri={act.qrCode} />
       <div className="flex flex-grow flex-col">
         <div className="flex flex-row flex-wrap items-center gap-1">
           <Bullet />

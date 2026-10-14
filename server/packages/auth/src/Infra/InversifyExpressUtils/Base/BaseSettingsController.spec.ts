@@ -73,6 +73,46 @@ describe('BaseSettingsController cross-service token cache invalidation', () => 
     expect(setHeader).toHaveBeenCalledWith('x-invalidate-cache', user.uuid)
   })
 
+  it('reports an absent TOTP secret as disabled without returning an HTTP error', async () => {
+    const result = await controller.getSetting(
+      { params: { userUuid: user.uuid, settingName: 'mfa_secret' }, headers: {} } as unknown as Request,
+      response(),
+    )
+    expect(result.statusCode).toBe(200)
+    expect(result.json).toEqual({ success: false })
+  })
+
+  it('keeps optional absent settings a quiet empty response', async () => {
+    const result = await controller.getSetting(
+      { params: { userUuid: user.uuid, settingName: 'EXTENSION_KEY' }, headers: {} } as unknown as Request,
+      response(),
+    )
+    expect(result.statusCode).toBe(200)
+    expect(result.json).toEqual({ success: false })
+  })
+
+  it('reports a configured sensitive secret as present without disclosing its value', async () => {
+    doGetSetting.execute.mockResolvedValueOnce(Result.ok({
+      setting: { props: { sensitive: true } }, decryptedValue: 'do-not-disclose',
+    }))
+    const result = await controller.getSetting(
+      { params: { userUuid: user.uuid, settingName: 'mfa_secret' }, headers: {} } as unknown as Request,
+      response(),
+    )
+    expect(result.json).toEqual({ success: true })
+    expect(settingHttMapper.toProjection).not.toHaveBeenCalled()
+  })
+
+  it('continues to reject genuine setting/password errors', async () => {
+    doGetSetting.execute.mockResolvedValueOnce(Result.fail('Invalid password'))
+    const result = await controller.getSetting(
+      { params: { userUuid: user.uuid, settingName: 'mfa_secret' }, headers: {} } as unknown as Request,
+      response(),
+    )
+    expect(result.statusCode).toBe(400)
+    expect(result.json).toEqual({ error: { message: 'Invalid password' } })
+  })
+
   it('does not invalidate cached tokens when a setting update fails', async () => {
     setSettingValue.execute.mockResolvedValueOnce(Result.fail('invalid setting'))
 

@@ -76,4 +76,9 @@ describe('SettingsGateway raw setting names', () => {
 
     await expect(gateway.getDoesRawSensitiveSettingExist(NEXTCLOUD_APP_PASSWORD)).resolves.toBe(false)
   })
+
+  it('reports a quiet absent TOTP setting as disabled rather than treating HTTP success as factor presence', async () => {
+    settingsApi.getSetting.mockResolvedValue({ status: HttpStatusCode.Success, data: { success: false } } as never)
+    await expect(gateway.getDoesRawSensitiveSettingExist('MFA_SECRET')).resolves.toBe(false)
+  })
 })

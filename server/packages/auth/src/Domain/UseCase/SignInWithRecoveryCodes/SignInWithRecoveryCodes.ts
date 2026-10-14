@@ -4,6 +4,7 @@ import { Result, SettingName, UseCaseInterface, Username, Uuid, Validator } from
 import { AuthResponse20200115 } from '../../Auth/AuthResponse20200115'
 import { CrypterInterface } from '../../Encryption/CrypterInterface'
 import { PKCERepositoryInterface } from '../../User/PKCERepositoryInterface'
+import { User } from '../../User/User'
 import { UserRepositoryInterface } from '../../User/UserRepositoryInterface'
 import { GenerateRecoveryCodes } from '../GenerateRecoveryCodes/GenerateRecoveryCodes'
 
@@ -63,7 +64,7 @@ export class SignInWithRecoveryCodes implements UseCaseInterface<AuthResponse202
       return Result.fail(humanVerificationBeforeCheckingUsernameAndPasswordResult.getError())
     }
 
-    const validCodeVerifier = await this.validateCodeVerifier(dto.codeVerifier)
+    const validCodeVerifier = user !== null && (await this.validateCodeVerifier(dto.codeVerifier, user))
     if (!validCodeVerifier) {
       await this.increaseLoginAttempts.execute({ email: username.value })
 
@@ -156,7 +157,7 @@ export class SignInWithRecoveryCodes implements UseCaseInterface<AuthResponse202
     return Result.ok(authResponse.response as AuthResponse20200115)
   }
 
-  private async validateCodeVerifier(codeVerifier: string): Promise<boolean> {
+  private async validateCodeVerifier(codeVerifier: string, user: User): Promise<boolean> {
     const codeEmptinessVerificationResult = Validator.isNotEmpty(codeVerifier)
     if (codeEmptinessVerificationResult.isFailed()) {
       return false
@@ -164,7 +165,11 @@ export class SignInWithRecoveryCodes implements UseCaseInterface<AuthResponse202
 
     const codeChallenge = this.crypter.base64URLEncode(this.crypter.sha256Hash(codeVerifier))
 
-    const matchingCodeChallengeWasPresentAndRemoved = await this.pkceRepository.removeCodeChallenge(codeChallenge)
+    const matchingCodeChallengeWasPresentAndRemoved = await this.pkceRepository.removeCodeChallenge(
+      codeChallenge,
+      user,
+      'recovery',
+    )
 
     return matchingCodeChallengeWasPresentAndRemoved
   }

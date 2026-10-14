@@ -73,6 +73,19 @@ describe('VerifyAppPassword', () => {
     expect(appPasswordRepository.updateLastUsedAt).not.toHaveBeenCalled()
   })
 
+  it('does not consult another workspace when the selected workspace is absent', async () => {
+    const result = await createUseCase().execute({ email: 'user@example.com', appPassword: plaintext, resolvedUserUuid: null })
+    expect(result.getValue()).toBe(false)
+    expect(userRepository.findOneByUsernameOrEmail).not.toHaveBeenCalled()
+  })
+
+  it('resolves the app password owner by the verified workspace identity', async () => {
+    userRepository.findOneByUuid = jest.fn().mockResolvedValue(user)
+    await createUseCase().execute({ email: 'user@example.com', appPassword: plaintext, resolvedUserUuid: userUuid })
+    expect(userRepository.findOneByUuid).toHaveBeenCalled()
+    expect(userRepository.findOneByUsernameOrEmail).not.toHaveBeenCalled()
+  })
+
   it('should fail closed (return false) when the matching app password is expired', async () => {
     const expiredAppPassword = await createAppPasswordWithHash(plaintext, {
       expiresAt: new Date(Date.now() - 60_000),

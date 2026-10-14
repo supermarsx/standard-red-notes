@@ -25,14 +25,13 @@ export class TwoFactorActivation {
 
     makeAutoObservable<
       TwoFactorActivation,
-      '_secretKey' | '_authCode' | '_step' | '_enable2FAVerification' | 'inputOtpToken' | 'inputSecretKey'
+      '_secretKey' | '_activationStep' | '_2FAVerification' | 'inputOtpToken' | 'inputSecretKey'
     >(
       this,
       {
         _secretKey: observable,
-        _authCode: observable,
-        _step: observable,
-        _enable2FAVerification: observable,
+        _activationStep: observable,
+        _2FAVerification: observable,
         inputOtpToken: observable,
         inputSecretKey: observable,
       },
@@ -53,7 +52,16 @@ export class TwoFactorActivation {
   }
 
   get qrCode(): string {
-    return `otpauth://totp/2FA?secret=${this._secretKey}&issuer=Standard%20Notes&label=${this.email}`
+    const issuer = 'Standard Red Notes'
+    const account = encodeURIComponent(`${issuer}:${this.email}`)
+    const params = new URLSearchParams({
+      secret: this._secretKey,
+      issuer,
+      algorithm: 'SHA1',
+      digits: '6',
+      period: '30',
+    })
+    return `otpauth://totp/${account}?${params}`
   }
 
   cancelActivation(): void {

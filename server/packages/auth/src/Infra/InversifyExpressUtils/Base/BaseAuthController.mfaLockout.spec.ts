@@ -601,6 +601,8 @@ const buildHarness = (
    * here; every brake, counter, verifier and repository above is a real instance.
    */
   const getUserKeyParams = {
+    resolveLoginUser: jest.fn().mockResolvedValue(user),
+    captureLoginGrantScope: jest.fn().mockResolvedValue('verified-policy'),
     execute: jest.fn().mockResolvedValue({ keyParams: { identifier: EMAIL, version: '004' } }),
   } as unknown as GetUserKeyParams
   const createPendingMfaApproval = {

@@ -36,4 +36,14 @@ export class TypeORMCacheEntryRepository implements CacheEntryRepositoryInterfac
   async removeByKey(key: string): Promise<void> {
     await this.ormRepository.createQueryBuilder().delete().where('key = :key', { key }).execute()
   }
+
+  async consumeUnexpiredByKey(key: string): Promise<boolean> {
+    const result = await this.ormRepository
+      .createQueryBuilder()
+      .delete()
+      .where('key = :key', { key })
+      .andWhere('expires_at > :now', { now: new Date() })
+      .execute()
+    return (result.affected ?? 0) > 0
+  }
 }

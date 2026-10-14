@@ -1,4 +1,4 @@
-import { ControllerContainerInterface, Username } from '@standardnotes/domain-core'
+import { ControllerContainerInterface } from '@standardnotes/domain-core'
 import { Request, Response } from 'express'
 import { Logger } from 'winston'
 
@@ -296,11 +296,19 @@ export class BaseAuthController extends BaseHttpController {
     // account's end-to-end encryption key is still derived client-side from the
     // real account password; an app password never grants decryption.
     let appPasswordSatisfiesMfa = false
+    const resolvedLoginUser = await this.getUserKeyParams.resolveLoginUser(
+      request.body.email as string,
+      request.body.workspace_identifier as string | undefined,
+    )
+    const verifiedGrantScope = resolvedLoginUser
+      ? await this.getUserKeyParams.captureLoginGrantScope(resolvedLoginUser)
+      : undefined
     const presentedAppPassword = request.body.app_password
     if (typeof presentedAppPassword === 'string' && presentedAppPassword.length > 0) {
       const appPasswordResult = await this.verifyAppPassword.execute({
         email: request.body.email as string,
         appPassword: presentedAppPassword,
+        resolvedUserUuid: resolvedLoginUser?.uuid ?? null,
       })
       appPasswordSatisfiesMfa = !appPasswordResult.isFailed() && appPasswordResult.getValue() === true
     }
@@ -323,6 +331,7 @@ export class BaseAuthController extends BaseHttpController {
         const trustedDeviceResult = await this.verifyTrustedDevice.execute({
           email: request.body.email as string,
           deviceToken: presentedDeviceToken,
+          resolvedUserUuid: resolvedLoginUser?.uuid ?? null,
         })
         trustedDeviceSatisfiesMfa = !trustedDeviceResult.isFailed() && trustedDeviceResult.getValue() === true
       }
@@ -356,6 +365,7 @@ export class BaseAuthController extends BaseHttpController {
             email: request.body.email as string,
             requestParams: request.body,
             preventOTPFromFurtherUsage: true,
+            resolvedUserUuid: resolvedLoginUser?.uuid ?? null,
           })
 
     if (!verifyMFAResponse.success) {
@@ -425,18 +435,14 @@ export class BaseAuthController extends BaseHttpController {
       // standard TOTP flow fully intact.
       let mfaApprovalChallengeId: string | undefined
       try {
-        const usernameOrError = Username.create(request.body.email as string, { skipValidation: true })
-        if (!usernameOrError.isFailed()) {
-          const user = await this.userRepository.findOneByUsernameOrEmail(usernameOrError.getValue())
-          if (user) {
-            const approvalResult = await this.createPendingMfaApproval.execute({
-              userUuid: user.uuid,
-              requestingUserAgent: (request.headers['user-agent'] as string) ?? '',
-              requestingIpAddress: (request.headers['x-origin-ip'] as string) ?? null,
-            })
-            if (!approvalResult.isFailed()) {
-              mfaApprovalChallengeId = approvalResult.getValue().challengeId
-            }
+        if (resolvedLoginUser) {
+          const approvalResult = await this.createPendingMfaApproval.execute({
+            userUuid: resolvedLoginUser.uuid,
+            requestingUserAgent: (request.headers['user-agent'] as string) ?? '',
+            requestingIpAddress: (request.headers['x-origin-ip'] as string) ?? null,
+          })
+          if (!approvalResult.isFailed()) {
+            mfaApprovalChallengeId = approvalResult.getValue().challengeId
           }
         }
       } catch (error) {
@@ -461,6 +467,7 @@ export class BaseAuthController extends BaseHttpController {
     const result = await this.getUserKeyParams.execute({
       email: request.body.email as string,
       authenticated: false,
+      verifiedGrantScope,
       codeChallenge: request.body.code_challenge as string,
       // Standard Red Notes: optional workspace name (WORKSPACES_PER_EMAIL_ENABLED).
       // Undefined/absent when the feature is off — the use case ignores it

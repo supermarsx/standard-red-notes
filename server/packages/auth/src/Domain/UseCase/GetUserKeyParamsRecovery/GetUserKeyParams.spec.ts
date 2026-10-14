@@ -34,6 +34,7 @@ describe('GetUserKeyParamsRecovery', () => {
 
     pkceRepository = {} as jest.Mocked<PKCERepositoryInterface>
     pkceRepository.storeCodeChallenge = jest.fn()
+    pkceRepository.captureGrantScope = jest.fn().mockResolvedValue('verified-policy')
   })
 
   it('should return error if code challenge is not provided', async () => {

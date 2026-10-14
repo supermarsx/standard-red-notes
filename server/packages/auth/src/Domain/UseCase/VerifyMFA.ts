@@ -44,7 +44,12 @@ export class VerifyMFA implements UseCaseInterface {
       }
       const username = usernameOrError.getValue()
 
-      const user = await this.userRepository.findOneByUsernameOrEmail(username)
+      const user =
+        dto.resolvedUserUuid === null
+          ? null
+          : dto.resolvedUserUuid !== undefined
+            ? await this.userRepository.findOneByUuid(Uuid.create(dto.resolvedUserUuid).getValue())
+            : await this.userRepository.findOneByUsernameOrEmail(username)
       if (user == null) {
         const secondFactorSelectorHash = crypto
           .createHash('sha256')

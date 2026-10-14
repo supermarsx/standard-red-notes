@@ -63,16 +63,6 @@ export class SignIn implements UseCaseInterface {
       }
     }
 
-    const validCodeVerifier = await this.validateCodeVerifier(dto.codeVerifier)
-    if (!validCodeVerifier) {
-      this.logger.debug('Code verifier does not match')
-
-      return {
-        success: false,
-        errorMessage: 'Invalid email or password',
-      }
-    }
-
     const apiVersionOrError = ApiVersion.create(dto.apiVersion)
     if (apiVersionOrError.isFailed()) {
       return {
@@ -106,6 +96,10 @@ export class SignIn implements UseCaseInterface {
       : await this.userRepository.findOneByUsernameOrEmail(username)
     const userIdentifier = user?.uuid ?? dto.email
 
+    if (!user || !(await this.validateCodeVerifier(dto.codeVerifier, user))) {
+      return { success: false, errorMessage: 'Invalid email or password' }
+    }
+
     const humanVerificationBeforeCheckingUsernameAndPasswordResult = await this.checkHumanVerificationIfNeeded(
       userIdentifier,
       dto.hvmToken,
@@ -114,15 +108,6 @@ export class SignIn implements UseCaseInterface {
       return {
         success: false,
         errorMessage: humanVerificationBeforeCheckingUsernameAndPasswordResult.getError(),
-      }
-    }
-
-    if (!user) {
-      this.logger.debug('No user was found for the supplied sign-in identifier.')
-
-      return {
-        success: false,
-        errorMessage: 'Invalid email or password',
       }
     }
 
@@ -278,10 +263,14 @@ export class SignIn implements UseCaseInterface {
     }
   }
 
-  private async validateCodeVerifier(codeVerifier: string): Promise<boolean> {
+  private async validateCodeVerifier(codeVerifier: string, user: User): Promise<boolean> {
     const codeChallenge = this.crypter.base64URLEncode(this.crypter.sha256Hash(codeVerifier))
 
-    const matchingCodeChallengeWasPresentAndRemoved = await this.pkceRepository.removeCodeChallenge(codeChallenge)
+    const matchingCodeChallengeWasPresentAndRemoved = await this.pkceRepository.removeCodeChallenge(
+      codeChallenge,
+      user,
+      'login',
+    )
 
     return matchingCodeChallengeWasPresentAndRemoved
   }

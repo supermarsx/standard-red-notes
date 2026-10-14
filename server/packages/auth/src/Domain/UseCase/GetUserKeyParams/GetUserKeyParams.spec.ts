@@ -33,6 +33,7 @@ describe('GetUserKeyParams', () => {
 
     pkceRepository = {} as jest.Mocked<PKCERepositoryInterface>
     pkceRepository.storeCodeChallenge = jest.fn()
+    pkceRepository.captureGrantScope = jest.fn().mockResolvedValue('verified-policy')
   })
 
   it('should get key params for an authenticated user - searching by email', async () => {
@@ -91,6 +92,7 @@ describe('GetUserKeyParams', () => {
         userUuid: '00000000-0000-0000-0000-000000000000',
         authenticated: false,
         codeChallenge: 'test',
+      verifiedGrantScope: 'verified-policy',
       }),
     ).toEqual({
       keyParams: {
@@ -98,7 +100,27 @@ describe('GetUserKeyParams', () => {
       },
     })
 
-    expect(pkceRepository.storeCodeChallenge).toHaveBeenCalledWith('test')
+    expect(pkceRepository.storeCodeChallenge).toHaveBeenCalledWith('test', user, 'login', 'verified-policy')
+  })
+
+  it('does not issue an unauthenticated challenge without the server-verified factor snapshot', async () => {
+    await expect(createUseCase().execute({
+      userUuid: '00000000-0000-0000-0000-000000000000', authenticated: false, codeChallenge: 'test',
+    })).rejects.toThrow('A verified login factor policy is required')
+    expect(pkceRepository.storeCodeChallenge).not.toHaveBeenCalled()
+  })
+
+  it('allows an already authenticated own-account request to capture its current grant policy', async () => {
+    await createUseCase().execute({
+      userUuid: '00000000-0000-0000-0000-000000000000', authenticated: true, codeChallenge: 'own-session',
+    })
+    expect(pkceRepository.captureGrantScope).toHaveBeenCalledWith(user, 'login')
+    expect(pkceRepository.storeCodeChallenge).toHaveBeenCalledWith('own-session', user, 'login', 'verified-policy')
+  })
+
+  it('resolves no account for an invalid login identifier', async () => {
+    expect(await createUseCase().resolveLoginUser('')).toBeNull()
+    expect(userRepository.findOneByUsernameOrEmail).not.toHaveBeenCalled()
   })
 
   it('should get pseudo key params for a non existing user - when searching by email', async () => {
