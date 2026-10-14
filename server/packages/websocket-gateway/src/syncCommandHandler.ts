@@ -2204,6 +2204,7 @@ export class SyncCommandHandler {
     this.activeOperations.add(controller)
     const startedAt = Date.now()
     let phase = 'authorization'
+    const replyDeadline = startedAt + this.backendTimeoutMs
     try {
       const authorization = await this.withTimeout(
         (signal) =>
@@ -2218,6 +2219,7 @@ export class SyncCommandHandler {
             signal,
           ),
         controller,
+        replyDeadline,
       )
       if (!authorization.authorized) {
         this.options.metrics?.increment('authorization', authorization.code)
@@ -2233,6 +2235,7 @@ export class SyncCommandHandler {
             authorization.session,
           ),
         controller,
+        replyDeadline,
       )
       if (status.digest && !constantTimeTextMatches(status.digest, frame.digest)) {
         this.sendError(frame.requestId, frame.commandId, 'COMMAND_ID_CONFLICT')
@@ -2324,7 +2327,12 @@ export class SyncCommandHandler {
     try {
       await this.withLeaseRenewal(controller, async () => {
         phase = 'authorization'
-        const firstAuthorization = await this.authorizeCommand(identity, frame, controller)
+        const firstAuthorization = await this.authorizeCommand(
+          identity,
+          frame,
+          controller,
+          startedAt + this.backendTimeoutMs,
+        )
         if (!firstAuthorization.authorized) {
           this.options.metrics?.increment('authorization', firstAuthorization.code)
           this.sendError(frame.requestId, frame.commandId, publicAuthorizationCode(firstAuthorization.code))
@@ -2339,7 +2347,11 @@ export class SyncCommandHandler {
         // the durable write. Session/vault/read-only state may change while a
         // command waits behind authorization or distributed coordination.
         phase = 'pre-execute-authorization'
-        const executeAuthorization = await this.authorizeCommand(identity, frame, controller)
+        // ACCEPTED resets the client's reply timer. Authorization and execution
+        // must share one budget, so a slow valid check cannot consume the margin
+        // intended for delivering the backend's verdict.
+        const replyDeadline = Date.now() + this.backendTimeoutMs
+        const executeAuthorization = await this.authorizeCommand(identity, frame, controller, replyDeadline)
         if (!executeAuthorization.authorized) {
           this.options.metrics?.increment('authorization', executeAuthorization.code)
           this.sendError(frame.requestId, frame.commandId, publicAuthorizationCode(executeAuthorization.code))
@@ -2357,6 +2369,7 @@ export class SyncCommandHandler {
               executeAuthorization.session,
             ),
           controller,
+          replyDeadline,
         )
         if (!constantTimeTextMatches(committed.digest, frame.digest)) {
           this.sendError(frame.requestId, frame.commandId, 'COMMAND_ID_CONFLICT')
@@ -2406,17 +2419,19 @@ export class SyncCommandHandler {
 
   private logSyncFailure(operation: 'command' | 'status', phase: string, startedAt: number, outcome: string): void {
     // Closed metadata only: never log frames, identifiers, credentials or thrown text.
-    this.options.logRefusal?.(
-      '[ws-sync] operation did not complete',
-      `sync-failure:${operation}:${phase}`,
-      { operation, phase, outcome, elapsedMs: Math.max(0, Date.now() - startedAt) },
-    )
+    this.options.logRefusal?.('[ws-sync] operation did not complete', `sync-failure:${operation}:${phase}`, {
+      operation,
+      phase,
+      outcome,
+      elapsedMs: Math.max(0, Date.now() - startedAt),
+    })
   }
 
   private authorizeCommand(
     identity: SyncTicketIdentity,
     frame: SyncCommandFrame,
     controller: AbortController,
+    deadline?: number,
   ): Promise<SyncAuthorizationDecision> {
     return this.withTimeout(
       (signal) =>
@@ -2432,15 +2447,22 @@ export class SyncCommandHandler {
           signal,
         ),
       controller,
+      deadline,
     )
   }
 
   private async withTimeout<T>(
     operation: (signal: AbortSignal) => Promise<T>,
     controller: AbortController,
+    deadline = Date.now() + this.backendTimeoutMs,
   ): Promise<T> {
     if (controller.signal.aborted) {
       throw new Error('Sync operation was aborted.')
+    }
+    const remainingMs = deadline - Date.now()
+    if (remainingMs <= 0) {
+      controller.abort()
+      throw new Error('sync backend timeout')
     }
     let timeout: NodeJS.Timeout | undefined
     try {
@@ -2450,7 +2472,7 @@ export class SyncCommandHandler {
           timeout = setTimeout(() => {
             controller.abort()
             reject(new Error('sync backend timeout'))
-          }, this.backendTimeoutMs)
+          }, remainingMs)
           timeout.unref()
         }),
       ])

@@ -2780,6 +2780,135 @@ describe('SyncCommandHandler', () => {
     handler.disconnect()
   })
 
+  it('shares the post-ACCEPTED budget and resolves an execution that commits after its timed-out reply through STATUS', async () => {
+    let committed = false
+    const authorization = allowAuthorization()
+    const backend: SyncCommandBackendAdapter = {
+      ready: () => true,
+      execute: vi.fn(async (input) => {
+        await new Promise((resolve) => setTimeout(resolve, 12_000))
+        committed = true
+        return { digest: input.digest, payload: { saved: true } }
+      }),
+      status: vi.fn(async (input) => ({
+        status: committed ? ('COMMITTED' as const) : ('ACCEPTED' as const),
+        digest: input.digest,
+        ...(committed ? { payload: { saved: true } } : {}),
+      })),
+    }
+    const { handler, socket } = await authenticatedHandler({ authorization, backend })
+    vi.useFakeTimers()
+    try {
+      let checks = 0
+      authorization.authorize = vi.fn(async () => {
+        checks += 1
+        if (checks <= 2) {
+          await new Promise((resolve) => setTimeout(resolve, checks === 1 ? 14_000 : 12_000))
+        }
+        return { authorized: true as const }
+      })
+      enqueue(handler, commandFrame('shared-budget', 1))
+      await vi.advanceTimersByTimeAsync(14_000)
+      expect(socket.frames.at(-1)?.type).toBe('ACCEPTED')
+      await vi.advanceTimersByTimeAsync(12_000)
+      expect(backend.execute).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(3_000)
+      expect(socket.frames.at(-1)?.payload).toEqual({ code: 'BACKEND_TIMEOUT', retryable: true })
+      expect(committed).toBe(false)
+      const signal = vi.mocked(backend.execute).mock.calls[0]?.[1]
+      expect(signal).toBeDefined()
+      expect(signal?.aborted).toBe(true)
+      enqueue(handler, statusFrame('shared-budget', 2, 'a'.repeat(64)))
+      await vi.advanceTimersByTimeAsync(0)
+      expect(payloadOf(socket.frames.at(-1)).status).toBe('ACCEPTED')
+      await vi.advanceTimersByTimeAsync(9_000)
+      expect(committed).toBe(true)
+      expect(socket.frames.filter((frame) => frame.type === 'COMMITTED')).toHaveLength(0)
+      enqueue(handler, statusFrame('shared-budget', 3, 'a'.repeat(64)))
+      await vi.advanceTimersByTimeAsync(0)
+      expect(payloadOf(socket.frames.at(-1)).status).toBe('COMMITTED')
+    } finally {
+      handler.disconnect()
+      vi.useRealTimers()
+    }
+  })
+
+  it('shares the STATUS authorization and backend reply budget', async () => {
+    const authorization = allowAuthorization()
+    const backend = committingBackend()
+    const { handler, socket } = await authenticatedHandler({ authorization, backend })
+    vi.useFakeTimers()
+    try {
+      authorization.authorize = vi.fn(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 12_000))
+        return { authorized: true as const }
+      })
+      backend.status = vi.fn(async (input) => {
+        await new Promise((resolve) => setTimeout(resolve, 12_000))
+        return { status: 'UNKNOWN' as const, digest: input.digest }
+      })
+      enqueue(handler, statusFrame('status-budget', 1, 'a'.repeat(64)))
+      await vi.advanceTimersByTimeAsync(12_000)
+      expect(backend.status).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(3_000)
+      expect(socket.frames.at(-1)?.payload).toEqual({ code: 'BACKEND_TIMEOUT', retryable: true })
+      await vi.advanceTimersByTimeAsync(9_000)
+      expect(socket.frames.filter((frame) => frame.type === 'STATUS')).toHaveLength(0)
+    } finally {
+      handler.disconnect()
+      vi.useRealTimers()
+    }
+  })
+
+  it.each(['before-authorization', 'before-execution'] as const)(
+    'does not start work after the reply budget expires %s',
+    async (phase) => {
+      const authorization = allowAuthorization()
+      const backend = committingBackend()
+      const leases = new InMemorySyncCommandLeaseRegistry()
+      const { handler, socket } = await authenticatedHandler({ authorization, backend, leases })
+      vi.useFakeTimers()
+      try {
+        if (phase === 'before-authorization') {
+          const acquire = leases.acquire.bind(leases)
+          vi.spyOn(leases, 'acquire').mockImplementation(async (...args) => {
+            const result = await acquire(...args)
+            vi.setSystemTime(Date.now() + 15_000)
+            return result
+          })
+        } else {
+          let checks = 0
+          authorization.authorize = vi.fn(async () => {
+            checks += 1
+            if (checks === 2) {
+              vi.setSystemTime(Date.now() + 15_000)
+            }
+            return { authorized: true as const }
+          })
+        }
+        enqueue(handler, commandFrame('expired-budget', 1))
+        await vi.advanceTimersByTimeAsync(0)
+        expect(socket.frames.at(-1)?.payload).toEqual({ code: 'BACKEND_TIMEOUT', retryable: true })
+        expect(backend.execute).not.toHaveBeenCalled()
+        if (phase === 'before-authorization') {
+          expect(authorization.authorize).not.toHaveBeenCalled()
+        }
+        await expect(
+          leases.acquire({
+            userUuid: 'user-1',
+            deviceId: 'device-1',
+            commandId: 'next-command',
+            digest: 'a'.repeat(64),
+            ownerId: 'new-owner',
+          }),
+        ).resolves.toEqual({ acquired: true })
+      } finally {
+        handler.disconnect()
+        vi.useRealTimers()
+      }
+    },
+  )
+
   it('detects a committed digest conflict and supports a committed response without result data', async () => {
     const conflictingBackend: SyncCommandBackendAdapter = {
       ready: () => true,
@@ -3912,7 +4041,9 @@ describe('sync failure operational context', () => {
       const backend: SyncCommandBackendAdapter = {
         ready: () => true,
         execute: vi.fn(async (input) => {
-          if (phase === 'backend-execute') throw new Error(secret)
+          if (phase === 'backend-execute') {
+            throw new Error(secret)
+          }
           return { digest: input.digest }
         }),
         status: vi.fn(async () => {
@@ -3922,7 +4053,9 @@ describe('sync failure operational context', () => {
       const authorization: SyncLiveAuthorizationAdapter = {
         ready: () => true,
         authorize: vi.fn(async () => {
-          if (phase === 'authorization') throw new Error(secret)
+          if (phase === 'authorization') {
+            throw new Error(secret)
+          }
           return { authorized: true as const }
         }),
       }
