@@ -317,6 +317,9 @@ export class ItemListController
   selectedUuids: Set<UuidString> = observable(new Set<UuidString>())
   private didRestorePersistedSelection = false
   private hasUserSelectionIntent = false
+  get hasExplicitSelectionIntent(): boolean {
+    return this.hasUserSelectionIntent
+  }
   private pendingPersistedSelection?: SelectionControllerPersistableValue
   private restoringPersistedSelection = false
   private retryPersistedSelection = false
@@ -1660,6 +1663,13 @@ export class ItemListController
 
     const activeItemExistsInUpdatedResults = activeItem !== undefined && this.itemsIndexByUuid.has(activeItem.uuid)
 
+    // A restored file tab can be open beside a notes-only list. A background
+    // reload must not close it just because that list excludes files. Explicit
+    // navigation above and actual item removal below still close the tab.
+    if (activeItem && isFile(activeItem) && this.itemManager.findItem(activeItem.uuid)) {
+      return false
+    }
+
     const closeBecauseActiveItemIsFileAndDoesntExistInUpdatedResults =
       activeItem && isFile(activeItem) && !activeItemExistsInUpdatedResults
 
@@ -2027,6 +2037,7 @@ export class ItemListController
     createdAt?: Date,
     autofocusBehavior: TemplateNoteViewAutofocusBehavior = 'editor',
     openInNewTile = false,
+    canCommit?: () => boolean,
   ) {
     const selectedTag = this.navigationController.selected
 
@@ -2046,6 +2057,7 @@ export class ItemListController
     const isFolderSelected = selectedFolder && selectedFolder.uuid === this.navigationController.selectedUuid
 
     const controller = await this.itemControllerGroup.createItemController({
+      canCommit,
       templateOptions: {
         title,
         tag: activeRegularTagUuid,
@@ -2193,6 +2205,7 @@ export class ItemListController
      * highlight. Placeholder/daily/auto creation pass false to avoid spam.
      */
     userTriggered = false,
+    canCommit?: () => boolean,
   ) => {
     void this.publishCrossControllerEventSync(CrossControllerEvent.UnselectAllNotes)
 
@@ -2206,7 +2219,7 @@ export class ItemListController
 
     const useTitle = title || this.titleForNewNote(createdAt)
 
-    const controller = await this.createNewNoteController(useTitle, createdAt, autofocusBehavior)
+    const controller = await this.createNewNoteController(useTitle, createdAt, autofocusBehavior, false, canCommit)
 
     this.scrollToItem(controller.item)
 

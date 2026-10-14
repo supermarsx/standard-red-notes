@@ -76,6 +76,23 @@ export class PaneController extends AbstractViewController implements InternalEv
    * across renders within a session.
    */
   private emptyTabCounter = 0
+  private viewTabInteraction = 0
+
+  get viewTabInteractionVersion(): number {
+    return this.viewTabInteraction
+  }
+
+  restoreWorkspaceViewTabs(tabs: ViewTab[], activeId?: string): void {
+    this.viewTabs = tabs
+    this.activeViewTabId = tabs.some((tab) => tab.id === activeId) ? activeId : undefined
+    this.emptyTabCounter = Math.max(
+      0,
+      ...tabs.filter((tab) => tab.kind === 'empty').map((tab) => Number(tab.id.slice(6))),
+    )
+    if (tabs.length) {
+      this.presentPane(AppPaneId.Editor)
+    }
+  }
 
   currentNavPanelWidth = 0
   currentItemsPanelWidth = 0
@@ -170,6 +187,7 @@ export class PaneController extends AbstractViewController implements InternalEv
       isNavigationPaneCollapsed: computed,
 
       openPaneTab: action,
+      restoreWorkspaceViewTabs: action,
       openConflictTab: action,
       openEmptyTab: action,
       closeViewTab: action,
@@ -477,10 +495,13 @@ export class PaneController extends AbstractViewController implements InternalEv
    * bar. Idempotent per pane (a pane can only have one tab). Makes the editor
    * column visible so the tab content shows (important on mobile).
    */
-  openPaneTab = (paneId: AppPaneId) => {
+  openPaneTab = (paneId: AppPaneId, userTriggered = true) => {
     const meta = TABBABLE_PANES.find((entry) => entry.paneId === paneId)
     if (!meta) {
       return
+    }
+    if (userTriggered) {
+      this.viewTabInteraction += 1
     }
 
     if (!this.viewTabs.some((tab) => tab.id === paneId)) {
@@ -498,6 +519,7 @@ export class PaneController extends AbstractViewController implements InternalEv
    * column visible so the tab content shows.
    */
   openConflictTab = (noteUuid: string, title: string) => {
+    this.viewTabInteraction += 1
     const id = `conflict:${noteUuid}`
 
     if (!this.viewTabs.some((tab) => tab.id === id)) {
@@ -515,6 +537,7 @@ export class PaneController extends AbstractViewController implements InternalEv
    * tab content shows (important on mobile).
    */
   openEmptyTab = () => {
+    this.viewTabInteraction += 1
     const id = `empty:${++this.emptyTabCounter}`
 
     this.viewTabs = [...this.viewTabs, { id, kind: 'empty', title: 'New tab', icon: 'add' }]
@@ -524,6 +547,7 @@ export class PaneController extends AbstractViewController implements InternalEv
   }
 
   closeViewTab = (id: string) => {
+    this.viewTabInteraction += 1
     this.viewTabs = this.viewTabs.filter((tab) => tab.id !== id)
     if (this.activeViewTabId === id) {
       this.activeViewTabId = undefined
@@ -531,6 +555,7 @@ export class PaneController extends AbstractViewController implements InternalEv
   }
 
   setActiveViewTab = (id: string | undefined) => {
+    this.viewTabInteraction += 1
     this.activeViewTabId = id
     if (id) {
       this.presentPane(AppPaneId.Editor)

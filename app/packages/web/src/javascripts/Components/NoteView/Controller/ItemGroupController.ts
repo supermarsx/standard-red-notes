@@ -833,6 +833,17 @@ export class ItemGroupController {
     }
   }
 
+  public async closeItemControllerAfterSaving(
+    controller: NoteViewController | FileViewController,
+    canContinue: () => boolean,
+  ): Promise<void> {
+    await this.flushOutgoingItemControllerForHandover(controller, canContinue)
+    if (!canContinue()) {
+      throw new ChecklistEditorOpeningCanceledError('A newer workspace selection superseded startup.')
+    }
+    this.closeItemController(controller)
+  }
+
   /**
    * Marks a given open controller (tile) as the active one without opening/closing
    * anything. Used by the tiled editor when the user clicks into a tile so that
@@ -848,6 +859,12 @@ export class ItemGroupController {
     }
 
     this.activeControllerRef = controller
+    this.notifyObservers()
+  }
+
+  reorderItemControllers(uuids: string[]): void {
+    const order = new Map(uuids.map((uuid, index) => [uuid, index]))
+    this.itemControllers.sort((a, b) => (order.get(a.item?.uuid) ?? Infinity) - (order.get(b.item?.uuid) ?? Infinity))
     this.notifyObservers()
   }
 

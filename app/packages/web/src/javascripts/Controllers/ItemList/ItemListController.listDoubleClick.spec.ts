@@ -9,6 +9,7 @@ import { PersistenceService } from '../Abstract/PersistenceService'
 import { PersistedStateValue, PersistenceKey, StorageKey } from '@standardnotes/ui-services'
 import { ShouldPersistNoteStateKey } from '@/Components/Preferences/Panes/General/Persistence'
 import { NoteViewController } from '@/Components/NoteView/Controller/NoteViewController'
+import { ItemsReloadSource } from './ItemsReloadSource'
 
 /**
  * Standard Red Notes: double-clicking a row in the notes list opens that note in
@@ -180,6 +181,36 @@ describe('notes-list double click opens a new tab', () => {
 
   const openUuids = () => group.itemControllers.map((open) => open.item?.uuid)
   const activeUuid = () => group.activeItemViewController?.item?.uuid
+  const recomputeAfterReload = (source: ItemsReloadSource) =>
+    (
+      controller as unknown as {
+        recomputeSelectionAfterItemsReload: (source: ItemsReloadSource) => Promise<void>
+      }
+    ).recomputeSelectionAfterItemsReload(source)
+
+  it('keeps an open file tab through a background reload of a notes-only list', async () => {
+    const file = { ...makeNote('file'), content_type: ContentType.TYPES.File } as SNNote
+    store.set('file', file)
+    await controller.openFile('file')
+    await recomputeAfterReload(ItemsReloadSource.ItemStream)
+    expect(activeUuid()).toBe('file')
+    expect(openUuids()).toContain('file')
+  })
+
+  it('still closes an open file that is removed from the item collection', async () => {
+    store.set('file', { ...makeNote('file'), content_type: ContentType.TYPES.File } as SNNote)
+    await controller.openFile('file')
+    store.delete('file')
+    await recomputeAfterReload(ItemsReloadSource.ItemStream)
+    expect(openUuids()).not.toContain('file')
+  })
+
+  it('honors explicit navigation away from a file tab', async () => {
+    store.set('file', { ...makeNote('file'), content_type: ContentType.TYPES.File } as SNNote)
+    await controller.openFile('file')
+    await recomputeAfterReload(ItemsReloadSource.UserTriggeredTagChange)
+    expect(openUuids()).not.toContain('file')
+  })
 
   /**
    * The real gesture: the first click of the burst records the tab it is about to
