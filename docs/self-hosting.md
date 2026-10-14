@@ -942,8 +942,22 @@ Replace `127.0.0.1:3001` with the app front door's actual address if the proxy
 runs in another container or the published `APP_PORT` differs. Apply the
 WebSocket headers and timeouts at every reverse proxy between the browser and
 the app. The bundled app Nginx already provides them on its internal hop.
-In Nginx Proxy Manager, enable **Websockets Support** on the proxy host and
-ensure any custom `/sockets` location keeps these settings.
+In Nginx Proxy Manager, edit the notes **Proxy Host**, open **Details**, enable
+**Websockets Support**, and save. Keep its working forwarding host and port;
+the main route can carry both HTTP and WebSocket traffic, so a separate
+`/sockets` location is not required. If you already use a custom `/sockets`
+location, ensure it keeps these settings and the same working app upstream.
+Do not paste the complete `map`/`server` example into NPM's Advanced field.
+If upgrades return 502 while ordinary HTTP requests succeed, inspect that
+proxy host's error log for the failed upstream connection or response.
+The per-host log is `/data/logs/proxy-host-<id>_error.log`. Compare the upstream
+host **and port** for failed `/sockets` requests with those for working HTTP
+requests. For example, HTTP using port 8080 while sockets use port 80 and report
+`connect() failed (111: Connection refused)` identifies a mismatched upstream;
+changing WebSocket headers or timeouts cannot open that refused port. In NPM,
+check **Custom Locations** and **Advanced** for an override and either correct
+its port or remove it so the main forwarding destination handles both paths.
+Redact socket tokens and cookies before sharing logs.
 
 Validate the configuration before reloading the outer proxy:
 

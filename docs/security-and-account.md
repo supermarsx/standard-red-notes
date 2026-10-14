@@ -62,6 +62,20 @@ Enable those features only when their additional trust boundary is acceptable.
 | App password | Lets a non-interactive client pass the MFA gate | It never supplies the encryption key; the client still needs the real account password to decrypt |
 | Full MCP token | Authenticates the bridge and unwraps the account’s items keys without the password | Treat it as decrypting access: use read-only mode where possible; selected-tag scope is not currently enforced; deletion does not terminate an already-issued session |
 
+Sessions are automatically revoked after more than 60 days without successful
+authenticated use or recorded device contact. Session authentication and token
+refresh enforce this limit even before background cleanup removes the session.
+Active sessions keep working; retiring one session does not reset account
+credentials or revoke the account's other sessions.
+The policy applies to recorded sessions with a session identifier. Legacy JWT
+credentials without one continue to follow their own expiration rules.
+
+When inactivity tracking is first installed, existing sessions without any
+recorded activity receive a fixed 60-day observation grace period. This avoids
+immediately logging out an actively used older client whose activity was never
+tracked. A genuine recorded last-seen time takes precedence, and the grace
+period is never displayed as fabricated activity.
+
 Use a dedicated app password or MCP token to avoid placing interactive MFA
 material in automation. A full MCP token is still a high-impact decrypting
 credential, not a less-sensitive substitute for the account password. For

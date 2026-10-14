@@ -71,6 +71,16 @@ Administrative states are distinct:
 
 Use the least disruptive state that meets the requirement.
 
+Each selected user's **Storage** subsection groups the measured total and its
+item, file and revision breakdown with the file upload allowance controls.
+The upload quota counter is labeled separately because it can differ from
+measured stored file data. Explanations expand on demand. The user list does
+not measure or display these breakdowns for every row.
+
+**Open sessions and devices** uses one compact row per session, showing its
+activity status, last seen and observed profile count. Expand a session to
+inspect sign-in and expiry dates, IP address and individual profile activity.
+
 {% include safety-alert.html
   level="danger"
   title="User deletion is irreversible"
