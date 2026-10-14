@@ -499,7 +499,7 @@ const CHECK_FAILURE: Partial<Record<CheckId, CheckFailureCopy>> = {
  * answering cannot tell the pane what it is waiting for, so the pane says the
  * one thing it does know, once, and where to look instead.
  *
- * The same code from every check that timed out, so the Overview — which keeps
+ * Direct-request checks share this code; application sync has its own finding because it can wait locally. The Overview — which keeps
  * one entry per code — shows one card and lists the sections that saw it.
  */
 const SERVER_NOT_ANSWERING = safeConstant('SERVER_NOT_ANSWERING')
@@ -533,10 +533,36 @@ function serverNotAnsweringFinding(reading: CheckReading): DiagnosticFinding {
   })
 }
 
+function syncOperationTimedOutFinding(): DiagnosticFinding {
+  const code = safeConstant('SYNC_OPERATION_TIMED_OUT')
+  return diagnosticFinding({
+    code,
+    title: 'Sync round-trip check did not finish',
+    detail:
+      'The application sync check did not finish within its deadline. It may be waiting in the app queue, recovering earlier work, waiting for a server response, or observing transport completion. This check does not establish that a network request was dispatched or accepted.',
+    verdict: 'broken',
+    evidence: EVIDENCE_DIRECT,
+    remedy: {
+      code: String(code),
+      summary: 'Locate where application sync is waiting before diagnosing a server outage.',
+      steps: [
+        'Inspect the app’s sync activity and recovery state, then compare its transport history with the server logs.',
+        'Use the independent control-plane and file-transfer checks to assess those paths. Their results do not establish whether this sync operation left the app queue.',
+        'Re-run this check after the pending operation settles. A cancelled or timed-out diagnostic does not roll back a sync already dispatched.',
+      ],
+      effort: 'device',
+      basis: 'generic',
+      because: [
+        'The awaited application sync check exceeded its deadline; network dispatch and server acceptance were not established.',
+      ],
+    },
+  })
+}
+
 function checkFinding(reading: CheckReading): DiagnosticFinding | undefined {
   const { definition, outcome } = reading
   if (outcome?.timedOut === true) {
-    return serverNotAnsweringFinding(reading)
+    return definition.id === 'sync' ? syncOperationTimedOutFinding() : serverNotAnsweringFinding(reading)
   }
   const copy = CHECK_FAILURE[definition.id]
   if (copy === undefined || outcome === undefined || (outcome.state !== 'fail' && outcome.state !== 'degraded')) {
@@ -1569,6 +1595,17 @@ export function describeCheckTimeout(deadlineMs: number): Omit<CheckOutcome, 'id
     state: 'fail',
     result: safeTokens(safeConstant('no answer within'), safeCount(seconds), safeConstant('s')),
     detail: `The check sent its request and nothing came back in ${seconds} seconds. That is not a refusal: something accepted the request and never answered it, which is what a server waiting on a dependency it cannot reach looks like.`,
+    timedOut: true,
+  }
+}
+
+/** Application sync can wait locally before any network request exists. */
+export function describeSyncTimeout(deadlineMs: number): Omit<CheckOutcome, 'id'> {
+  const seconds = Math.max(1, Math.round(deadlineMs / 1000))
+  return {
+    state: 'fail',
+    result: safeTokens(safeConstant('application sync check unfinished after'), safeCount(seconds), safeConstant('s')),
+    detail: `The application sync check did not finish within ${seconds} seconds. It may be waiting in the app queue, recovering earlier work, waiting for a server response, or observing transport completion. Network dispatch or acceptance was not established.`,
     timedOut: true,
   }
 }

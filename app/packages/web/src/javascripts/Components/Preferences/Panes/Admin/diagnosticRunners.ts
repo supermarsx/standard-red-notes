@@ -173,7 +173,10 @@ const settled = (before: SyncRoundCounts, after: SyncRoundCounts): boolean =>
  * `undefined` on both sides when this build has no realtime transport to count
  * with — which the describer reports as unobservable rather than as a failure.
  */
-export async function runSyncRound(application: WebApplication): Promise<{
+export async function runSyncRound(
+  application: WebApplication,
+  isUserInitiated = true,
+): Promise<{
   before: SyncRoundCounts | undefined
   after: SyncRoundCounts | undefined
   lastCarrier?: 'socket' | 'http' | 'failed'
@@ -181,7 +184,7 @@ export async function runSyncRound(application: WebApplication): Promise<{
   const read = (): SyncRoundCounts | undefined => application.syncTransportLedger?.syncRoundCounts
   const before = read()
 
-  await application.sync.sync({ sourceDescription: 'admin diagnostics: sync round trip' })
+  await application.sync.sync({ sourceDescription: 'admin diagnostics: sync round trip', isUserInitiated })
 
   let after = read()
   for (let waited = 0; waited < SYNC_SETTLE_MS; waited += SYNC_POLL_MS) {

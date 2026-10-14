@@ -37,7 +37,7 @@ import type { Remedy } from './diagnosticRemedies'
 import { buildAccountSection } from './accountSection'
 import { buildBackendSection } from './backendSection'
 import { buildBrowserSection } from './browserSection'
-import { describeCheckTimeout, readingsFrom } from './diagnosticChecks'
+import { describeCheckTimeout, describeSyncTimeout, readingsFrom } from './diagnosticChecks'
 import { buildEnvironmentSection } from './environmentSection'
 import { buildWebsocketSection } from './websocketSection'
 
@@ -575,7 +575,10 @@ describe('secrecy', () => {
  */
 describe('a fault several sections saw', () => {
   it('is one entry under "What needs attention", listing the sections that saw it', () => {
-    const timedOut = (id: 'capabilities' | 'server-build' | 'sync') => ({ id, ...describeCheckTimeout(20_000) })
+    const timedOut = (id: 'capabilities' | 'server-build' | 'sync') => ({
+      id,
+      ...(id === 'sync' ? describeSyncTimeout(20_000) : describeCheckTimeout(20_000)),
+    })
     const checks = readingsFrom({
       capabilities: timedOut('capabilities'),
       'server-build': timedOut('server-build'),
@@ -593,9 +596,7 @@ describe('a fault several sections saw', () => {
     )
 
     expect(ranked).toHaveLength(1)
-    expect(ranked[0]?.sources.map(String).sort()).toEqual(
-      ['Database & internal comms', 'Environment & setup', 'WebSocket'].sort(),
-    )
+    expect(ranked[0]?.sources.map(String).sort()).toEqual(['Environment & setup', 'WebSocket'].sort())
     // And it is the FIRST thing the pane says.
     expect(String(rankFindings(sections).actions[0]?.finding.code)).toBe('SERVER_NOT_ANSWERING')
   })

@@ -3874,3 +3874,60 @@ describe('Diagnostics native transfer cancellation', () => {
     expect(row.getAttribute('data-diagnostics-probe-status')).toBe('untested')
   })
 })
+
+describe('Diagnostics sync operation accuracy', () => {
+  it('keeps automatic sync automatic but explicitly initiated checks bypass manual-sync suppression', async () => {
+    const app = makeApplication()
+    await renderTab(app)
+    expect(app.sync.sync).toHaveBeenCalledWith({
+      sourceDescription: 'admin diagnostics: sync round trip',
+      isUserInitiated: false,
+    })
+    app.sync.sync.mockClear()
+    await openSubtab('Checks')
+    const probe = activePanel().querySelector('[data-diagnostics-probe="sync"]') as HTMLElement
+    await act(async () => probe.querySelector('button')?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    await settle()
+    expect(app.sync.sync).toHaveBeenCalledWith({
+      sourceDescription: 'admin diagnostics: sync round trip',
+      isUserInitiated: true,
+    })
+    app.sync.sync.mockClear()
+    await openSubtab(SECTION_TITLE.backend)
+    await clickButton('Run section checks')
+    expect(app.sync.sync).toHaveBeenCalledWith({
+      sourceDescription: 'admin diagnostics: sync round trip',
+      isUserInitiated: true,
+    })
+    app.sync.sync.mockClear()
+    await clickButton('Run all checks')
+    expect(app.sync.sync).toHaveBeenCalledWith({
+      sourceDescription: 'admin diagnostics: sync round trip',
+      isUserInitiated: true,
+    })
+  })
+
+  it('renders and reports an unfinished local sync without claiming server acceptance', async () => {
+    const app = makeApplication()
+    await renderTab(app)
+    app.sync.sync.mockImplementationOnce(() => new Promise(() => {}))
+    await openSubtab('Checks')
+    const probe = activePanel().querySelector('[data-diagnostics-probe="sync"]') as HTMLElement
+    await act(async () => probe.querySelector('button')?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    await act(async () => jest.advanceTimersByTime(45_000))
+    await settle()
+    expect(probe.textContent).toContain('application sync check unfinished after 45 s')
+    expect(probe.textContent).toContain('Network dispatch or acceptance was not established')
+    expect(probe.textContent).not.toContain('accepted the request')
+    await openSubtab('Overview')
+    expect(container.textContent).toContain('Sync round-trip check did not finish')
+    await openSubtab('Copyable report')
+    const report =
+      (container.querySelector('textarea[aria-label="Diagnostics report"]') as HTMLTextAreaElement)?.value ??
+      [...container.querySelectorAll('textarea')].map((e) => e.value).join('\n')
+    expect(report).toContain('SYNC_OPERATION_TIMED_OUT')
+    expect(report).toContain('Locate where application sync is waiting')
+    expect(report).not.toContain('SERVER_NOT_ANSWERING')
+    expect(report).not.toContain('The server is accepting requests and not answering them')
+  })
+})

@@ -48,6 +48,7 @@ import {
   describeRevisionsRead,
   describeServerBuildCheck,
   describeSyncRound,
+  describeSyncTimeout,
   describeSyncWorkerBuildCheck,
   readingsFrom,
   RUNNABLE_CHECK_IDS,
@@ -1357,158 +1358,160 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
    * state: a runner closed over a two-second-old status would report the lane a
    * request rode from a reading taken before the request was made.
    */
-  const runners: Record<RunnableCheckId, (signal: AbortSignal, isCurrent: () => boolean) => Promise<CheckFinding>> =
-    useMemo(
-      () => ({
-        capabilities: async (signal) => {
-          try {
-            // HTTP-only on purpose. `/v1/sockets/*` is a forbidden family on the
-            // websocket RPC lane (routing the handshake through the transport it
-            // establishes is circular), and that refusal is not safe-to-fallback —
-            // through the ordinary helper this check would throw and be reported as
-            // FAILED precisely when the socket is healthy.
-            const response = await application.httpOnlyJsonRequest<{ capabilities?: unknown[] }>(
-              'GET',
-              '/v1/sockets/sync/capabilities',
-              undefined,
-              signal,
-            )
-            if (!response.ok) {
-              return {
-                state: 'fail',
-                result: answeredStatus(response.status),
-                detail: `The capability descriptor answered ${response.status}.`,
-              }
-            }
-
-            const advertised = Array.isArray(response.data?.capabilities) ? response.data.capabilities.length : 0
-            if (advertised === 0) {
-              return {
-                state: 'fail',
-                result: safeConstant('reachable, and advertises nothing'),
-                detail:
-                  'Reachable, but advertises an EMPTY capability list — the client will not attempt a socket at all.',
-              }
-            }
-
-            const noun = advertised === 1 ? 'capability entry' : 'capability entries'
-
-            return {
-              state: 'pass',
-              result: safeTokens(
-                safeConstant('advertises'),
-                safeCount(advertised),
-                advertised === 1 ? safeConstant('capability entry') : safeConstant('capability entries'),
-              ),
-              detail: `The server advertises ${advertised} ${noun}.`,
-            }
-          } catch (error) {
-            return requestThrew(error)
-          }
-        },
-        ticket: async (signal) => {
-          try {
-            // HTTP-only for the same reason as the capability check above.
-            const response = await application.httpOnlyJsonRequest<{ error?: { code?: string } }>(
-              'POST',
-              '/v1/sockets/sync/ticket',
-              { deviceId: probeDeviceId() },
-              signal,
-            )
-            if (response.ok) {
-              return {
-                state: 'pass',
-                result: safeConstant('issued; never redeemed, and it expires on its own'),
-                detail: 'A short-lived single-use ticket was issued. It is not redeemed, and expires on its own.',
-              }
-            }
-            if (response.data?.error?.code === 'SYNC_DISABLED') {
-              return {
-                state: 'fail',
-                result: safeConstant('refused: SYNC_DISABLED'),
-                detail:
-                  'Refused with SYNC_DISABLED — the sync lane was not composed at boot. The unmet boot conditions in this section say why.',
-              }
-            }
-
+  const runners: Record<
+    RunnableCheckId,
+    (signal: AbortSignal, isCurrent: () => boolean, isUserInitiated: boolean) => Promise<CheckFinding>
+  > = useMemo(
+    () => ({
+      capabilities: async (signal) => {
+        try {
+          // HTTP-only on purpose. `/v1/sockets/*` is a forbidden family on the
+          // websocket RPC lane (routing the handshake through the transport it
+          // establishes is circular), and that refusal is not safe-to-fallback —
+          // through the ordinary helper this check would throw and be reported as
+          // FAILED precisely when the socket is healthy.
+          const response = await application.httpOnlyJsonRequest<{ capabilities?: unknown[] }>(
+            'GET',
+            '/v1/sockets/sync/capabilities',
+            undefined,
+            signal,
+          )
+          if (!response.ok) {
             return {
               state: 'fail',
-              result: safeTokens(safeConstant('refused with HTTP'), safeCount(response.status)),
-              detail: `The ticket request was refused with ${response.status}.`,
+              result: answeredStatus(response.status),
+              detail: `The capability descriptor answered ${response.status}.`,
             }
-          } catch (error) {
-            return requestThrew(error)
           }
-        },
-        'control-plane': async (signal) => {
-          try {
-            const started = performance.now()
-            const response = await application.serverGetJsonRequestObservingLane<SyncDiagnosticsPayload>(
-              '/v1/admin/sync-diagnostics',
-              signal,
-            )
-            const elapsedMs = performance.now() - started
-            const status = application.syncTransportStatus
 
-            return describeControlPlaneRead({
-              status: response.status,
-              ok: response.ok,
-              carriedBy: response.carriedBy,
-              apiRpcNegotiated: status?.state === 'READY' && status.operations.includes('API_RPC'),
-              elapsedMs,
-            })
-          } catch (error) {
-            return requestThrew(error)
+          const advertised = Array.isArray(response.data?.capabilities) ? response.data.capabilities.length : 0
+          if (advertised === 0) {
+            return {
+              state: 'fail',
+              result: safeConstant('reachable, and advertises nothing'),
+              detail:
+                'Reachable, but advertises an EMPTY capability list — the client will not attempt a socket at all.',
+            }
           }
-        },
-        'server-build': async (signal) => {
-          try {
-            // Plain HTTP on purpose: the readiness route is public, and it is the
-            // API server's own statement about itself — the lane it rides is not
-            // the question.
-            const response = await application.httpOnlyJsonRequest<unknown>(
-              'GET',
-              '/healthcheck/readiness',
-              undefined,
-              signal,
-            )
-            // The marker is read again here rather than taken from state, so the
-            // comparison is between two answers of the same moment.
-            const marker = await fetch('/.well-known/srn-deployment.json', {
-              headers: { Accept: 'application/json' },
-              signal,
-            })
 
-            return describeServerBuildCheck({
-              marker: marker.ok ? await marker.json() : {},
-              markerRead: marker.ok ? 'answered' : 'failed',
-              readiness: { status: response.status, body: response.data },
-            })
-          } catch (error) {
-            return requestThrew(error)
+          const noun = advertised === 1 ? 'capability entry' : 'capability entries'
+
+          return {
+            state: 'pass',
+            result: safeTokens(
+              safeConstant('advertises'),
+              safeCount(advertised),
+              advertised === 1 ? safeConstant('capability entry') : safeConstant('capability entries'),
+            ),
+            detail: `The server advertises ${advertised} ${noun}.`,
           }
-        },
-        sync: async () => {
+        } catch (error) {
+          return requestThrew(error)
+        }
+      },
+      ticket: async (signal) => {
+        try {
+          // HTTP-only for the same reason as the capability check above.
+          const response = await application.httpOnlyJsonRequest<{ error?: { code?: string } }>(
+            'POST',
+            '/v1/sockets/sync/ticket',
+            { deviceId: probeDeviceId() },
+            signal,
+          )
+          if (response.ok) {
+            return {
+              state: 'pass',
+              result: safeConstant('issued; never redeemed, and it expires on its own'),
+              detail: 'A short-lived single-use ticket was issued. It is not redeemed, and expires on its own.',
+            }
+          }
+          if (response.data?.error?.code === 'SYNC_DISABLED') {
+            return {
+              state: 'fail',
+              result: safeConstant('refused: SYNC_DISABLED'),
+              detail:
+                'Refused with SYNC_DISABLED — the sync lane was not composed at boot. The unmet boot conditions in this section say why.',
+            }
+          }
+
+          return {
+            state: 'fail',
+            result: safeTokens(safeConstant('refused with HTTP'), safeCount(response.status)),
+            detail: `The ticket request was refused with ${response.status}.`,
+          }
+        } catch (error) {
+          return requestThrew(error)
+        }
+      },
+      'control-plane': async (signal) => {
+        try {
+          const started = performance.now()
+          const response = await application.serverGetJsonRequestObservingLane<SyncDiagnosticsPayload>(
+            '/v1/admin/sync-diagnostics',
+            signal,
+          )
+          const elapsedMs = performance.now() - started
           const status = application.syncTransportStatus
-          const round = await runSyncRound(application)
 
-          return describeSyncRound({
-            ...round,
-            socketCarriesSync: status?.state === 'READY' && status.operations.includes('SYNC_ITEMS'),
+          return describeControlPlaneRead({
+            status: response.status,
+            ok: response.ok,
+            carriedBy: response.carriedBy,
+            apiRpcNegotiated: status?.state === 'READY' && status.operations.includes('API_RPC'),
+            elapsedMs,
           })
-        },
-        revisions: async () => describeRevisionsRead(await readRevisionsOfOneNote(application)),
-        'file-transfer': async (signal, isCurrent) => {
-          const result = await runFileTransferCheck(fileTransferPortFor(application, signal))
-          if (isCurrent()) {
-            setFileTransfer(result)
-          }
+        } catch (error) {
+          return requestThrew(error)
+        }
+      },
+      'server-build': async (signal) => {
+        try {
+          // Plain HTTP on purpose: the readiness route is public, and it is the
+          // API server's own statement about itself — the lane it rides is not
+          // the question.
+          const response = await application.httpOnlyJsonRequest<unknown>(
+            'GET',
+            '/healthcheck/readiness',
+            undefined,
+            signal,
+          )
+          // The marker is read again here rather than taken from state, so the
+          // comparison is between two answers of the same moment.
+          const marker = await fetch('/.well-known/srn-deployment.json', {
+            headers: { Accept: 'application/json' },
+            signal,
+          })
 
-          return describeFileTransfer(result)
-        },
-      }),
-      [application],
-    )
+          return describeServerBuildCheck({
+            marker: marker.ok ? await marker.json() : {},
+            markerRead: marker.ok ? 'answered' : 'failed',
+            readiness: { status: response.status, body: response.data },
+          })
+        } catch (error) {
+          return requestThrew(error)
+        }
+      },
+      sync: async (_signal, _isCurrent, isUserInitiated) => {
+        const status = application.syncTransportStatus
+        const round = await runSyncRound(application, isUserInitiated)
+
+        return describeSyncRound({
+          ...round,
+          socketCarriesSync: status?.state === 'READY' && status.operations.includes('SYNC_ITEMS'),
+        })
+      },
+      revisions: async () => describeRevisionsRead(await readRevisionsOfOneNote(application)),
+      'file-transfer': async (signal, isCurrent) => {
+        const result = await runFileTransferCheck(fileTransferPortFor(application, signal))
+        if (isCurrent()) {
+          setFileTransfer(result)
+        }
+
+        return describeFileTransfer(result)
+      },
+    }),
+    [application],
+  )
 
   /**
    * Run some checks, in order, one at a time.
@@ -1528,7 +1531,7 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
    * answers the one question asked and leaves every other row as it was.
    */
   const runChecks = useCallback(
-    async (ids: readonly RunnableCheckId[], reload: boolean) => {
+    async (ids: readonly RunnableCheckId[], reload: boolean, isUserInitiated = true) => {
       if (runInFlight.current) {
         return
       }
@@ -1566,14 +1569,19 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
           let finding: CheckFinding
           try {
             const settled = await withDeadline(
-              runners[id](check.signal, () => isCurrent() && !check.signal.aborted),
+              runners[id](check.signal, () => isCurrent() && !check.signal.aborted, isUserInitiated),
               CHECK_DEADLINE_MS[id],
               check.signal,
             )
             if (!isCurrent() || settled === CANCELLED) {
               break
             }
-            finding = settled === TIMED_OUT ? describeCheckTimeout(CHECK_DEADLINE_MS[id]) : settled
+            finding =
+              settled === TIMED_OUT
+                ? id === 'sync'
+                  ? describeSyncTimeout(CHECK_DEADLINE_MS[id])
+                  : describeCheckTimeout(CHECK_DEADLINE_MS[id])
+                : settled
           } catch (error) {
             if (!isCurrent()) {
               break
@@ -1641,7 +1649,7 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
    * write stay behind the button that says what they write.
    */
   useEffect(() => {
-    void runChecks(AUTO_CHECK_IDS, false)
+    void runChecks(AUTO_CHECK_IDS, false, false)
   }, [runChecks])
 
   /**

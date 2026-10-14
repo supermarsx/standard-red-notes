@@ -11,6 +11,7 @@ import {
   CHECKS,
   describeAppShellCheck,
   describeCheckTimeout,
+  describeSyncTimeout,
   describeControlPlaneRead,
   describeFileTransfer,
   describeMarkerCheck,
@@ -1048,20 +1049,28 @@ describe('a check that never answers', () => {
    * fix. Every check that times out raises the SAME code, so the Overview — one
    * entry per code — shows it once.
    */
-  it('raises the same finding from every check that ran out of time, in place of the check’s own', () => {
-    const timedOut = (id: CheckOutcome['id']): CheckOutcome => ({ id, ...describeCheckTimeout(CHECK_DEADLINE_MS.sync) })
+  it('separates unfinished application sync from the network timeout finding', () => {
+    const timedOut = (id: CheckOutcome['id']): CheckOutcome => ({
+      id,
+      ...(id === 'sync' ? describeSyncTimeout(CHECK_DEADLINE_MS.sync) : describeCheckTimeout(CHECK_DEADLINE_MS.sync)),
+    })
     const codes = new Set<string>()
 
     for (const id of RUNNABLE_CHECK_IDS) {
       const block = buildChecksBlock(CHECKS[id].section, readingsFrom({ [id]: timedOut(id) }))
       const raised = block?.findings.map((finding) => String(finding.code))
 
-      expect({ id, raised }).toEqual({ id, raised: ['SERVER_NOT_ANSWERING'] })
+      expect({ id, raised }).toEqual({
+        id,
+        raised: [id === 'sync' ? 'SYNC_OPERATION_TIMED_OUT' : 'SERVER_NOT_ANSWERING'],
+      })
       codes.add(String(block?.findings[0]?.code))
       expect(block?.findings[0]?.verdict).toBe('broken')
-      expect(block?.findings[0]?.remedy?.summary).toContain('accepting requests and not answering them')
+      expect(block?.findings[0]?.remedy?.summary).toContain(
+        id === 'sync' ? 'Locate where application sync is waiting' : 'accepting requests and not answering them',
+      )
     }
-    expect([...codes]).toEqual(['SERVER_NOT_ANSWERING'])
+    expect([...codes]).toEqual(['SERVER_NOT_ANSWERING', 'SYNC_OPERATION_TIMED_OUT'])
   })
 
   it('still raises the check’s own finding for a failure that WAS answered', () => {
