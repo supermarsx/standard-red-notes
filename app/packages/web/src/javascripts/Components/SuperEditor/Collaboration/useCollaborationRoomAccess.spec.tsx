@@ -390,6 +390,7 @@ describe('useCollaborationRoomAccess security transitions', () => {
   it('re-prepares on key rotation but preserves a ready Y.Doc across socket loss', async () => {
     const application = {
       items: {
+        findItem: () => undefined,
         streamItems: (_types: unknown, observer: () => void) => {
           itemObserver = observer
           return jest.fn()
@@ -457,7 +458,10 @@ describe('useCollaborationRoomAccess security transitions', () => {
   it('opens in an offline-safe state and prepares automatically when the socket connects', async () => {
     let connected = false
     const application = {
-      items: { streamItems: () => jest.fn() },
+      items: {
+        findItem: () => undefined,
+        streamItems: () => jest.fn(),
+      },
       vaultLocks: { addEventObserver: () => jest.fn() },
       sockets: {
         isWebSocketConnectionOpen: () => connected,
@@ -1719,6 +1723,91 @@ describe('useCollaborationRoomAccess security transitions', () => {
     })
 
     expect(renders[firstChangedIdentityRender]).toEqual({ status: 'preparing' })
+    expect(
+      renders
+        .slice(firstChangedIdentityRender)
+        .some((render) => render.capability === 'capability:vault-1:note-1:root-version-1'),
+    ).toBe(false)
+    expect(sent).toContainEqual({
+      t: 'room-leave',
+      room: 'note-1',
+      requestId: firstJoin!.requestId,
+    })
+  })
+
+  it('releases an attached lease when the current item enters trash even if the mounted note prop is stale', async () => {
+    const sent: CollabFrame[] = []
+    let activeSourceId = 'vault-1:note-1:root-version-1'
+    mockedCreateChannel.mockImplementation(() => createAutoLeaseChannel(sent).channel)
+    mockedResolve.mockImplementation(() => {
+      if (currentNote?.trashed)
+        return { available: false, reason: 'Live collaboration is disabled for notes in Trash.' } as never
+      return {
+        available: true,
+        noteUuid: 'note-1',
+        sourceId: activeSourceId,
+        userUuid: 'user-1',
+        sessionUser,
+      } as never
+    })
+    mockedPrepare.mockImplementation(async () => {
+      return {
+        available: true,
+        noteUuid: 'note-1',
+        sourceId: activeSourceId,
+        roomKey: {} as CryptoKey,
+        capability: `capability:${activeSourceId}`,
+        roomEpoch,
+        serverUpdatedAtTimestamp: 100,
+        userUuid: 'user-1',
+        sessionUser,
+        username: 'Alice',
+      }
+    })
+    const note = { uuid: 'note-1', dirty: false, serverUpdatedAtTimestamp: 100, text: 'persisted' } as never
+    let currentNote = note as unknown as { trashed?: boolean }
+    const application = {
+      items: {
+        streamItems: (_types: unknown, observer: () => void) => {
+          itemObserver = observer
+          return jest.fn()
+        },
+        findItem: () => currentNote,
+      },
+      sync: { sync: jest.fn().mockResolvedValue(undefined) },
+      vaultLocks: { addEventObserver: () => jest.fn() },
+      sockets: { addEventObserver: () => jest.fn() },
+      addEventObserver: () => jest.fn(),
+    } as never
+    const renders: Array<{ status: string; capability?: string }> = []
+    const View = () => {
+      latestAccess = useCollaborationRoomAccess(application, note, true)
+      renders.push({
+        status: latestAccess.status,
+        ...(latestAccess.status === 'ready' ? { capability: latestAccess.capability } : {}),
+      })
+      return createElement('div', null, latestAccess.status)
+    }
+
+    await act(async () => {
+      root.render(createElement(View))
+      await flushMicrotasks()
+    })
+    const firstJoin = sent.find((frame): frame is Extract<CollabFrame, { t: 'room-join' }> => frame.t === 'room-join')
+    expect(firstJoin).toBeDefined()
+    expect(latestAccess).toMatchObject({
+      status: 'ready',
+      capability: 'capability:vault-1:note-1:root-version-1',
+    })
+
+    const firstChangedIdentityRender = renders.length
+    currentNote = { ...(note as object), trashed: true }
+    await act(async () => {
+      itemObserver?.()
+      await flushMicrotasks()
+    })
+
+    expect(renders[firstChangedIdentityRender]).toEqual({ status: 'disabled' })
     expect(
       renders
         .slice(firstChangedIdentityRender)

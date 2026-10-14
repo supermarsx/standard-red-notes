@@ -544,7 +544,36 @@ export class NotesController
     await this.deleteNotes(true)
   }
 
+  private async preservePendingEditorsBeforeTrash(notes: SNNote[]): Promise<boolean> {
+    const application = this.application
+    const targets = new Set(notes.filter((note) => !note.trashed).map((note) => note.uuid))
+    try {
+      for (const controller of application.itemControllerGroup.itemControllers) {
+        if (
+          controller.item &&
+          targets.has(controller.item.uuid) &&
+          'editorHasPendingChanges' in controller &&
+          (controller.editorHasPendingChanges() || controller.hasPendingLocalSave)
+        ) {
+          await controller.flushAndAwaitPendingSave()
+          if (this.application !== application) {
+            return false
+          }
+        }
+      }
+      return true
+    } catch {
+      addToast({
+        type: ToastType.Error,
+        message:
+          'This note has pending changes that could not be saved. Reconnect or wait for its collaboration saver, then try moving it to Trash again.',
+      })
+      return false
+    }
+  }
+
   async deleteNotes(permanently: boolean): Promise<boolean> {
+    const application = this.application
     /**
      * Resolve the target notes ONCE, before the confirmation dialog and before
      * `selectNextItem()` moves the selection. Everything below — the locked check, the dialog
@@ -575,9 +604,22 @@ export class NotesController
         confirmButtonStyle: 'danger',
       })
     ) {
+      if (this.application !== application) {
+        return false
+      }
+      if (!permanently && !(await this.preservePendingEditorsBeforeTrash(notesToDelete))) {
+        return false
+      }
+      if (this.application !== application) {
+        return false
+      }
+      const currentTargets = notesToDelete.flatMap((note) => {
+        const current = this.application.items.findItem<SNNote>(note.uuid)
+        return current ? [current] : []
+      })
       this.application.itemListController.selectNextItem()
       if (permanently) {
-        const result = await this.deleteNotesPermanentlyFromDisk(notesToDelete)
+        const result = await this.deleteNotesPermanentlyFromDisk(currentTargets)
         this.reportBulkNoteFailure(result, 'deleted', 'See the developer console for details, then try again.')
         for (let i = 0; i < result.changed.length; i++) {
           achievements.increment(METRICS.itemsDeletedTotal)
@@ -585,7 +627,7 @@ export class NotesController
         void this.application.sync.sync()
         return result.changed.length > 0
       } else {
-        const result = await this.changeNotes(notesToDelete, (mutator) => {
+        const result = await this.changeNotes(currentTargets, (mutator) => {
           mutator.trashed = true
         })
         this.reportBulkNoteFailure(result, 'moved to trash')

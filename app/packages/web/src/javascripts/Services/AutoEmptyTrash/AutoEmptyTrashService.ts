@@ -16,13 +16,8 @@ import { achievements, METRICS } from '@/Achievements'
  * change (no build:snjs / models edits). It is therefore per-device, which is the
  * right scope for a destructive maintenance action.
  *
- * Timestamp proxy: there is no explicit "trashedAt" on items, so we age each note
- * against `item.userModifiedDate` (trashing a note updates it). Honest limitations:
- *   - An item edited and THEN trashed ages from (approximately) the trash time. Good.
- *   - An item trashed long ago and never touched again ages correctly. Good.
- *   - Editing a note while it is in the trash resets its clock, delaying deletion.
- * This is a conservative bias (we keep things a bit longer rather than delete early),
- * which is the safe direction for a destructive action.
+ * Trash age uses the encrypted trashed_at transition timestamp. Legacy items
+ * without a known timestamp are retained; edits do not reset the trash clock.
  */
 
 const STORAGE_KEY_PREFIX = 'sn-auto-empty-trash-interval-ms'
@@ -133,7 +128,7 @@ export function writeAutoEmptyTrashInterval(scope: string, intervalMs: number): 
  * Rules:
  *   - intervalMs <= 0 ("Never") returns an empty array (feature disabled).
  *   - Only items with `trashed === true` are ever considered.
- *   - An item is due when (now - userModifiedDate) >= intervalMs.
+ *   - An item is due when (now - trashed_at) >= intervalMs.
  */
 export function selectTrashedItemsDueForDeletion(items: SNNote[], intervalMs: number, now: number): SNNote[] {
   if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
@@ -144,8 +139,8 @@ export function selectTrashedItemsDueForDeletion(items: SNNote[], intervalMs: nu
     if (!item.trashed) {
       return false
     }
-    const modified = item.userModifiedDate?.getTime()
-    if (typeof modified !== 'number' || !Number.isFinite(modified)) {
+    const modified = typeof item.content?.trashed_at === 'string' ? Date.parse(item.content.trashed_at) : NaN
+    if (!Number.isFinite(modified) || modified > now) {
       return false
     }
     return now - modified >= intervalMs
@@ -192,11 +187,13 @@ export class AutoEmptyTrashService {
    * the whole pass. Returns the number of items permanently deleted (for tests).
    */
   async runCleanup(now = Date.now()): Promise<number> {
-    if (this.running) {
+    if (!this.application || this.running) {
       return 0
     }
 
-    const intervalMs = readAutoEmptyTrashInterval(autoEmptyTrashStorageScope(this.application))
+    const application = this.application
+    const scope = autoEmptyTrashStorageScope(application)
+    const intervalMs = readAutoEmptyTrashInterval(scope)
     if (intervalMs <= 0) {
       // "Never" — feature disabled. Still mark the initial pass as done so the
       // throttle behaves consistently if the user later enables it.
@@ -226,8 +223,33 @@ export class AutoEmptyTrashService {
 
       let deleted = 0
       for (const item of due) {
+        // Re-read after each asynchronous deletion. Restore, retrash, permission
+        // changes and account teardown must not act on this stale due-list.
+        if (
+          this.application !== application ||
+          autoEmptyTrashStorageScope(application) !== scope ||
+          readAutoEmptyTrashInterval(scope) !== intervalMs
+        ) {
+          break
+        }
+        const current = application.items.findItem<SNNote>(item.uuid)
+        if (
+          !current ||
+          current.locked ||
+          current.content.trashed_at !== item.content.trashed_at ||
+          !selectTrashedItemsDueForDeletion([current], intervalMs, now).length
+        ) {
+          continue
+        }
+        const vault = application.vaults.getItemVault(current)
+        if (
+          !application.isAuthorizedToRenderItem(current) ||
+          (vault?.isSharedVaultListing() && application.vaultUsers.isCurrentUserReadonlyVaultMember(vault))
+        ) {
+          continue
+        }
         try {
-          await this.application.mutator.deleteItem(item)
+          await application.mutator.deleteItem(current)
           deleted++
           achievements.increment(METRICS.itemsDeletedTotal)
         } catch (error) {
@@ -235,8 +257,8 @@ export class AutoEmptyTrashService {
         }
       }
 
-      if (deleted > 0) {
-        this.application.sync.sync().catch(console.error)
+      if (deleted > 0 && this.application === application && autoEmptyTrashStorageScope(application) === scope) {
+        application.sync.sync().catch(console.error)
         // eslint-disable-next-line no-console
         console.log(`[AutoEmptyTrash] Permanently deleted ${deleted} trashed note(s) older than the configured age.`)
       }

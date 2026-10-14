@@ -116,6 +116,14 @@ const createHarness = () => {
   })
 
   const application = {
+    itemControllerGroup: {
+      itemControllers: [] as Array<{
+        item: SNNote
+        editorHasPendingChanges: () => boolean
+        hasPendingLocalSave: boolean
+        flushAndAwaitPendingSave: () => Promise<void>
+      }>,
+    },
     items: { findItem: (uuid: string) => items.get(uuid) },
     sync: {
       sync: jest.fn().mockResolvedValue(undefined),
@@ -159,6 +167,76 @@ const createHarness = () => {
 }
 
 describe('NotesController trash/delete under lazy-decrypt', () => {
+  it('flushes pending work before trashing the original note with its current body', async () => {
+    const harness = createHarness()
+    const original = harness.seedFullNote('note-1', 'note-1', 'Before the pending edit')
+    harness.seedFullNote('next-note')
+    harness.select('note-1')
+    const flush = jest.fn(async () => {
+      harness.items.set('note-1', new SNNote(fullPayload('note-1', 'note-1', 'Latest pending text')))
+      harness.select('next-note')
+    })
+    harness.application.itemControllerGroup.itemControllers.push({
+      item: original,
+      editorHasPendingChanges: () => true,
+      hasPendingLocalSave: false,
+      flushAndAwaitPendingSave: flush,
+    })
+    expect(await harness.controller.deleteNotes(false)).toBe(true)
+    expect(flush).toHaveBeenCalledTimes(1)
+    expect(harness.items.get('note-1')!.text).toBe('Latest pending text')
+    expect(harness.items.get('note-1')!.trashed).toBe(true)
+    expect(harness.items.get('next-note')!.trashed).toBe(false)
+  })
+  it('retains the note and selection when genuine pending collaboration work cannot be saved', async () => {
+    const harness = createHarness()
+    const note = harness.seedFullNote('note-1')
+    harness.select('note-1')
+    harness.application.itemControllerGroup.itemControllers.push({
+      item: note,
+      editorHasPendingChanges: () => true,
+      hasPendingLocalSave: false,
+      flushAndAwaitPendingSave: async () => {
+        throw Error('Socket saver unavailable')
+      },
+    })
+    expect(await harness.controller.deleteNotes(false)).toBe(false)
+    expect(harness.items.get('note-1')!.trashed).toBe(false)
+    expect(harness.selectNextItem).not.toHaveBeenCalled()
+    expect(harness.changeItems).not.toHaveBeenCalled()
+    expect(mockedAddToast).toHaveBeenCalledWith(expect.objectContaining({ type: ToastType.Error }))
+  })
+  it('does not demand a collaboration acknowledgement when the unedited note has nothing pending', async () => {
+    const harness = createHarness()
+    const note = harness.seedFullNote('note-1')
+    harness.select('note-1')
+    const flush = jest.fn()
+    harness.application.itemControllerGroup.itemControllers.push({
+      item: note,
+      editorHasPendingChanges: () => false,
+      hasPendingLocalSave: false,
+      flushAndAwaitPendingSave: flush,
+    })
+    expect(await harness.controller.deleteNotes(false)).toBe(true)
+    expect(flush).not.toHaveBeenCalled()
+  })
+
+  it('abandons a confirmed trash operation if its controller is torn down during the durability barrier', async () => {
+    const harness = createHarness()
+    const note = harness.seedFullNote('note-1')
+    harness.select('note-1')
+    harness.application.itemControllerGroup.itemControllers.push({
+      item: note,
+      editorHasPendingChanges: () => true,
+      hasPendingLocalSave: false,
+      flushAndAwaitPendingSave: async () => {
+        Object.assign(harness.controller, { application: undefined })
+      },
+    })
+    expect(await harness.controller.deleteNotes(false)).toBe(false)
+    expect(harness.changeItems).not.toHaveBeenCalled()
+    expect(harness.selectNextItem).not.toHaveBeenCalled()
+  })
   beforeEach(() => {
     mockedConfirmDialog.mockResolvedValue(true)
     jest.spyOn(console, 'error').mockImplementation(() => undefined)

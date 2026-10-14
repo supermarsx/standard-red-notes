@@ -9,7 +9,7 @@ import {
 } from '@standardnotes/ui-services'
 import { WebApplication } from '@/Application/WebApplication'
 import { PANEL_NAME_NOTES } from '@/Constants/Constants'
-import { FileItem, Platform, PrefKey, WebAppEvent } from '@standardnotes/snjs'
+import { FileItem, Platform, PrefKey, WebAppEvent, SystemViewId } from '@standardnotes/snjs'
 import { observer } from 'mobx-react-lite'
 import { forwardRef, useCallback, useEffect, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -36,6 +36,7 @@ import Icon from '../Icon/Icon'
 import MobileMultiSelectionToolbar from './MobileMultiSelectionToolbar'
 import StyledTooltip from '../StyledTooltip/StyledTooltip'
 import QuickActionsBar from '../QuickActions/QuickActionsBar'
+import TrashActionsBar from './TrashActionsBar'
 
 type Props = {
   application: WebApplication
@@ -361,6 +362,7 @@ const ContentListView = forwardRef<HTMLDivElement, Props>(
             </StyledTooltip>
           </div>
         )}
+        {selectedTag?.uuid === SystemViewId.TrashedNotes && <TrashActionsBar application={application} />}
         {selectedAsTag && dailyMode && (
           <DailyContentList
             items={items}

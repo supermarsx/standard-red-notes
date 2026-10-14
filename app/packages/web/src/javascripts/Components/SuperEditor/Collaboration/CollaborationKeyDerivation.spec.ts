@@ -21,6 +21,19 @@ const hasSubtle = Boolean(globalThis.crypto?.subtle)
 const maybe = hasSubtle ? describe : describe.skip
 
 maybe('collaboration room-key derivation', () => {
+  it('never resolves or authorizes a collaboration key for trashed notes', async () => {
+    for (const flags of [{ trashed: true }]) {
+      const authorize = jest.fn()
+      const application = { sockets: { authorizeCollaborationRoom: authorize } } as never
+      const note = { uuid: 'trashed', ...flags } as never
+      expect(resolveCollaborationKeySource(application, note)).toMatchObject({
+        available: false,
+        reason: 'Live collaboration is disabled for notes in Trash.',
+      })
+      await expect(prepareCollaborationAccess(application, note)).resolves.toMatchObject({ available: false })
+      expect(authorize).not.toHaveBeenCalled()
+    }
+  })
   it.each([
     ['a missing epoch', { capability: 'capability', serverUpdatedAtTimestamp: 100, collaborationProtocolVersion: 3 }],
     [

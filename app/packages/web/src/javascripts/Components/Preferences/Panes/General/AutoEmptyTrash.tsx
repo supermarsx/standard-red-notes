@@ -66,8 +66,8 @@ const AutoEmptyTrash: FunctionComponent<Props> = ({ application }) => {
         <Text className="mb-3">
           <strong>Permanent deletion is irreversible.</strong> Once a trashed note is auto-deleted it cannot be
           recovered (unless it exists in a separate backup). Use &ldquo;Never&rdquo; to turn this off. Notes are aged
-          from their last-modified time as a proxy for when they were trashed, so editing a note while it is in the
-          Trash restarts its countdown.
+          from the date they entered Trash. Older trashed notes without a recorded trash date are kept until you delete
+          them yourself.
         </Text>
 
         <div className="mt-2 max-w-xs">

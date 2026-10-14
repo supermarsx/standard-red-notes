@@ -205,6 +205,9 @@ function resolveEncryptionKeySource(application: WebApplication, note: SNNote): 
 }
 
 export function resolveCollaborationKeySource(application: WebApplication, note: SNNote): CollaborationKeySource {
+  if (note.trashed) {
+    return { available: false, reason: 'Live collaboration is disabled for notes in Trash.' }
+  }
   const platformAvailability = getSuperCollaborationAvailability()
   return platformAvailability.available ? resolveEncryptionKeySource(application, note) : platformAvailability
 }

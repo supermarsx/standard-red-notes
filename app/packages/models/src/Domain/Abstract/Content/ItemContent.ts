@@ -10,6 +10,8 @@ export interface ItemContent {
   conflict_of?: string
   protected?: boolean
   trashed?: boolean
+  /** Exact transition into trash; absent legacy timestamps must not be guessed. */
+  trashed_at?: string
   pinned?: boolean
   archived?: boolean
   starred?: boolean

@@ -841,6 +841,13 @@ export function useCollaborationRoomAccess(
         refresh()
       },
     )
+    const disposeNotes = application.items.streamItems([ContentType.TYPES.Note], () => {
+      const current = application.items.findItem<SNNote>(committedNote.current.noteUuid)
+      if (current?.trashed) {
+        invalidateActiveLease()
+      }
+      refresh()
+    })
     const disposeVaultLocks = application.vaultLocks.addEventObserver((event) => {
       if (event === VaultLockServiceEvent.VaultLocked || event === VaultLockServiceEvent.VaultUnlocked) {
         invalidateActiveLease()
@@ -899,6 +906,7 @@ export function useCollaborationRoomAccess(
       document.removeEventListener('visibilitychange', onVisibilityChange)
       window.removeEventListener('focus', refillOnActivity)
       disposeItems()
+      disposeNotes()
       disposeVaultLocks()
       disposeSocket()
       disposeApplication()
@@ -906,7 +914,7 @@ export function useCollaborationRoomAccess(
   }, [application])
 
   void revision
-  const source = resolveCollaborationKeySource(application, note)
+  const source = resolveCollaborationKeySource(application, application.items.findItem<SNNote>(note.uuid) ?? note)
   const noteUuid = note.uuid
   const sourceId = source.available ? source.sourceId : `disabled:${source.reason}`
   const sourceUserUuid = source.available ? source.userUuid : undefined

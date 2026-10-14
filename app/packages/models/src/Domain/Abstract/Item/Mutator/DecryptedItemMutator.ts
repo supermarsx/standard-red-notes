@@ -84,6 +84,11 @@ export class DecryptedItemMutator<
   }
 
   public set trashed(trashed: boolean) {
+    if (trashed && !this.mutableContent.trashed) {
+      this.mutableContent.trashed_at = new Date().toISOString()
+    } else if (!trashed) {
+      delete this.mutableContent.trashed_at
+    }
     this.mutableContent.trashed = trashed
   }
 

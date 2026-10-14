@@ -1,11 +1,39 @@
 import { NoteMutator } from './NoteMutator'
 import { createNote } from './../../Utilities/Test/SpecUtils'
-import { MutationType } from '../../Abstract/Item'
+import { MutationType, AppDataField } from '../../Abstract/Item'
 import { DecryptedPayload, PayloadSource } from '../../Abstract/Payload'
 import { NativeFeatureIdentifier, NoteType } from '@standardnotes/features'
 import { SNNote } from './Note'
 
 describe('note mutator', () => {
+  it('records actual trash age even when preserving user timestamps, without resetting an existing trash date', () => {
+    const began = Date.now()
+    const note = createNote({
+      text: 'Old note',
+      appData: { 'org.standardnotes.sn': { [AppDataField.UserModifiedDate]: '2020-01-01T00:00:00Z' } },
+    })
+    const mutator = new NoteMutator(note, MutationType.NoUpdateUserTimestamps)
+    mutator.trashed = true
+    const trashed = new SNNote(mutator.getResult())
+    expect(Date.parse(trashed.content.trashed_at!)).toBeGreaterThanOrEqual(began)
+    expect(Date.parse(trashed.content.trashed_at!)).toBeLessThanOrEqual(Date.now())
+    expect(trashed.userModifiedDate).toEqual(note.userModifiedDate)
+    const repeated = new NoteMutator(trashed, MutationType.NoUpdateUserTimestamps)
+    repeated.trashed = true
+    expect(repeated.getResult().content.trashed_at).toBe(trashed.content.trashed_at)
+    repeated.trashed = false
+    expect(repeated.getResult().content.trashed_at).toBeUndefined()
+    repeated.trashed = true
+    expect(Date.parse(repeated.getResult().content.trashed_at!)).toBeGreaterThanOrEqual(
+      Date.parse(trashed.content.trashed_at!),
+    )
+  })
+
+  it('preserves unknown age when an already trashed legacy note is marked trashed again', () => {
+    const mutator = new NoteMutator(createNote({ trashed: true }), MutationType.NoUpdateUserTimestamps)
+    mutator.trashed = true
+    expect(mutator.getResult().content.trashed_at).toBeUndefined()
+  })
   it('sets noteType', () => {
     const note = createNote({})
     const mutator = new NoteMutator(note, MutationType.NoUpdateUserTimestamps)
