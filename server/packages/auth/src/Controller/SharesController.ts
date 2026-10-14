@@ -149,6 +149,8 @@ export class SharesController {
         encryptedPayload: share.encryptedPayload,
         oneTimeView: share.oneTimeView,
         viewExpiresMinutes: share.viewExpiresMinutes,
+        expiresAt: share.expiresAt,
+        serverTime: new Date().toISOString(),
       },
     }
   }

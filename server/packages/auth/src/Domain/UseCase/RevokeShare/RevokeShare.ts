@@ -1,6 +1,5 @@
 import { Result, UniqueEntityId, UseCaseInterface, Uuid } from '@standardnotes/domain-core'
 
-import { Share } from '../../Share/Share'
 import { ShareRepositoryInterface } from '../../Share/ShareRepositoryInterface'
 
 import { RevokeShareDTO } from './RevokeShareDTO'
@@ -21,26 +20,8 @@ export class RevokeShare implements UseCaseInterface<string> {
       return Result.fail('Share not found')
     }
 
-    // Soft-revoke: keep the row but stop it resolving from the public read path.
-    const revokedOrError = Share.create(
-      {
-        userUuid: share.props.userUuid,
-        type: share.props.type,
-        encryptedPayload: share.props.encryptedPayload,
-        nickname: share.props.nickname,
-        createdAt: share.props.createdAt,
-        revoked: true,
-        oneTimeView: share.props.oneTimeView,
-        viewExpiresMinutes: share.props.viewExpiresMinutes,
-        firstOpenedAt: share.props.firstOpenedAt,
-      },
-      new UniqueEntityId(share.id.toString()),
-    )
-    if (revokedOrError.isFailed()) {
-      return Result.fail(`Could not revoke share: ${revokedOrError.getError()}`)
-    }
-
-    await this.shareRepository.save(revokedOrError.getValue())
+    // Keep metadata for the owner's history, erase the served ciphertext atomically.
+    await this.shareRepository.markRevoked(new UniqueEntityId(share.id.toString()))
 
     return Result.ok('Share revoked')
   }

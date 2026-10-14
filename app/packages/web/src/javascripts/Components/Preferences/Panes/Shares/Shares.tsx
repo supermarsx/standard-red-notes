@@ -11,6 +11,7 @@ import PreferencesSegment from '@/Components/Preferences/PreferencesComponents/P
 import HorizontalSeparator from '@/Components/Shared/HorizontalSeparator'
 import Button from '@/Components/Button/Button'
 import Spinner from '@/Components/Spinner/Spinner'
+import { shareExpiresAt, shareStatus } from './shareExpiry'
 
 type Props = {
   application: WebApplication
@@ -52,6 +53,15 @@ const formatDate = (value: string | null): string => {
 const Shares: FunctionComponent<Props> = ({ application }: Props) => {
   const [shares, setShares] = useState<Share[]>([])
   const [loading, setLoading] = useState(false)
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const deadlines = shares.map(shareExpiresAt).filter((value): value is number => value !== undefined && value > now)
+    if (!deadlines.length) {
+      return
+    }
+    const timeout = setTimeout(() => setNow(Date.now()), Math.min(2_147_483_647, Math.min(...deadlines) - now))
+    return () => clearTimeout(timeout)
+  }, [shares, now])
 
   const loadShares = useCallback(async () => {
     setLoading(true)
@@ -59,6 +69,7 @@ const Shares: FunctionComponent<Props> = ({ application }: Props) => {
       const response = await application.legacyApi.listShares()
       if (!isErrorResponse(response)) {
         const data = (response as { data?: { shares?: Share[] } }).data
+        setNow(Date.now())
         setShares(data?.shares ?? [])
       }
     } catch (error) {
@@ -143,12 +154,7 @@ const Shares: FunctionComponent<Props> = ({ application }: Props) => {
                     {share.nickname || `${share.type} share`}
                   </span>
                   <span className="text-passive-0 text-sm break-words lg:text-xs">
-                    {share.type} ·{' '}
-                    {share.revoked
-                      ? share.oneTimeView && share.firstOpenedAt
-                        ? 'Burned (opened)'
-                        : 'Revoked'
-                      : 'Active'}
+                    {share.type} · {shareStatus(share, now)}
                   </span>
                   {describeBurn(share) && (
                     <span className="text-warning text-sm break-words lg:text-xs">{describeBurn(share)}</span>
@@ -156,9 +162,12 @@ const Shares: FunctionComponent<Props> = ({ application }: Props) => {
                   <span className="text-passive-0 text-sm break-words lg:text-xs">
                     Created {formatDate(share.createdAt)}
                     {share.firstOpenedAt ? ` · First opened ${formatDate(share.firstOpenedAt)}` : ''}
+                    {shareExpiresAt(share) !== undefined
+                      ? ` · Expires ${formatDate(new Date(shareExpiresAt(share)!).toISOString())}`
+                      : ''}
                   </span>
                 </div>
-                {!share.revoked && (
+                {shareStatus(share, now) === 'Active' && (
                   <Button className="flex-shrink-0" label="Revoke" onClick={() => handleRevoke(share.uuid)} />
                 )}
               </div>

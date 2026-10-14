@@ -41,6 +41,7 @@ import { ContainerConfigLoader } from '../src/Bootstrap/Container'
 import TYPES from '../src/Bootstrap/Types'
 import { Env } from '../src/Bootstrap/Env'
 import { SharedVaultMembershipReconciler } from '../src/Infra/SharedVaultMembershipReconciler'
+import { ShareExpiryCleanup } from '../src/Infra/ShareExpiryCleanup'
 import { AuthServer } from '../src/Infra/gRPC/AuthServer'
 import { AuthService } from '@standardnotes/grpc'
 import { AuthenticateRequest } from '../src/Domain/UseCase/AuthenticateRequest'
@@ -115,6 +116,12 @@ void container
     const membershipReconciler = container.get(SharedVaultMembershipReconciler)
     membershipReconciler.start()
     process.on('SIGTERM', () => membershipReconciler.stop())
+    const shareExpiryCleanup = new ShareExpiryCleanup(container.get(TYPES.Auth_ShareRepository), () => {
+      logger.warn('Expired share cleanup failed')
+    })
+    shareExpiryCleanup.start()
+    process.on('SIGTERM', () => shareExpiryCleanup.stop())
+    process.on('SIGINT', () => shareExpiryCleanup.stop())
 
     server.setErrorConfig((app) => {
       app.use((error: Record<string, unknown>, request: Request, response: Response, _next: NextFunction) => {

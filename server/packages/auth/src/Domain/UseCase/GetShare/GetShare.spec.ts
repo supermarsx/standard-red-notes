@@ -116,6 +116,34 @@ describe('GetShare', () => {
   })
 
   describe('time-limited view (expire N minutes after first open)', () => {
+    it.each([-1, 0, 1])('denies access at or after the exact expiry boundary (offset=%s ms)', async (offset) => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-10-09T10:56:37Z').getTime() + offset)
+      shareRepository.findById = jest.fn().mockResolvedValue(
+        createShare(false, {
+          viewExpiresMinutes: 15,
+          firstOpenedAt: new Date('2026-10-09T10:41:37Z'),
+        }),
+      )
+      try {
+        const result = await createUseCase().execute({ shareId })
+        expect(result.isFailed()).toBe(offset >= 0)
+        if (offset < 0) {
+          expect(result.getValue().expiresAt).toBe('2026-10-09T10:56:37.000Z')
+        }
+      } finally {
+        jest.useRealTimers()
+      }
+    })
+    it('denies an expired share even if cleanup storage is temporarily unavailable', async () => {
+      shareRepository.findById = jest.fn().mockResolvedValue(
+        createShare(false, {
+          viewExpiresMinutes: 15,
+          firstOpenedAt: new Date(Date.now() - 15 * 60_000),
+        }),
+      )
+      shareRepository.markRevoked = jest.fn().mockRejectedValue(new Error('storage unavailable'))
+      expect((await createUseCase().execute({ shareId })).isFailed()).toBe(true)
+    })
     it('should serve and stamp the first open without consuming when a window is set', async () => {
       shareRepository.findById = jest
         .fn()

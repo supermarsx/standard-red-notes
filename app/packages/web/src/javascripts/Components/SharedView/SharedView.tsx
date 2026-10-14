@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { decryptShare, SharePayload, ShareDecryptFailureReason } from './shareCrypto'
 import SharedNoteContent from './SharedNoteContent'
 import { useSharedViewThemeContext } from './useSharedViewThemeContext'
+import { localShareDeadline } from './shareDeadline'
 
 type Props = {
   shareId: string
@@ -54,6 +55,8 @@ export type ShareEnvelope = {
   encryptedPayload: string
   oneTimeView: boolean
   viewExpiresMinutes: number | null
+  expiresAt?: string
+  serverTime?: string
 }
 
 /**
@@ -117,6 +120,8 @@ export const readShareEnvelope = (body: unknown): ShareEnvelope | null => {
       encryptedPayload,
       oneTimeView: candidate.oneTimeView === true,
       viewExpiresMinutes: typeof candidate.viewExpiresMinutes === 'number' ? candidate.viewExpiresMinutes : null,
+      ...(typeof candidate.expiresAt === 'string' ? { expiresAt: candidate.expiresAt } : {}),
+      ...(typeof candidate.serverTime === 'string' ? { serverTime: candidate.serverTime } : {}),
     }
   }
 
@@ -182,6 +187,41 @@ const SharedView = ({ shareId }: Props) => {
 
   useEffect(() => {
     let cancelled = false
+    let expired = false
+    let expirationTimeout: ReturnType<typeof setTimeout> | undefined
+    let deadline: number | undefined
+    let monotonicDeadline: number | undefined
+    const remainingTime = () => {
+      if (deadline === undefined) {
+        return undefined
+      }
+      return Math.min(deadline - Date.now(), (monotonicDeadline ?? Infinity) - performance.now())
+    }
+    const dropFragment = () => {
+      if (new URL(window.location.href).searchParams.get('shared') === shareId) {
+        window.history.replaceState(window.history.state, '', window.location.pathname + window.location.search)
+      }
+    }
+    const expire = () => {
+      if (cancelled || expired || deadline === undefined) {
+        return
+      }
+      const remaining = remainingTime()!
+      if (remaining > 0) {
+        expirationTimeout = setTimeout(expire, Math.min(2_147_483_647, remaining))
+        return
+      }
+      expired = true
+      setState({ status: 'gone' })
+      dropFragment()
+    }
+    const checkExpiry = () => {
+      if (remainingTime() !== undefined && remainingTime()! <= 0) {
+        expire()
+      }
+    }
+    document.addEventListener('visibilitychange', checkExpiry)
+    window.addEventListener('focus', checkExpiry)
 
     /**
      * Report a failure class and LOG why. The old code swallowed every one of
@@ -192,7 +232,7 @@ const SharedView = ({ shareId }: Props) => {
      */
     const fail = (reason: FailureReason, detail?: unknown) => {
       console.error(`[share] cannot display share ${shareId}: ${reason}`, detail ?? '')
-      if (!cancelled) {
+      if (!cancelled && !expired) {
         setState({ status: 'failed', reason })
       }
     }
@@ -213,9 +253,11 @@ const SharedView = ({ shareId }: Props) => {
       const apiBase = apiHost.replace(/\/$/, '')
 
       let response: Response
+      const requestedAt = performance.now()
       try {
         response = await fetch(apiBase + '/v1/shares/' + encodeURIComponent(shareId), {
           headers: { Accept: 'application/json' },
+          cache: 'no-store',
         })
       } catch {
         if (!cancelled) {
@@ -227,6 +269,7 @@ const SharedView = ({ shareId }: Props) => {
       if (response.status === 404) {
         if (!cancelled) {
           setState({ status: 'gone' })
+          dropFragment()
         }
         return
       }
@@ -255,6 +298,19 @@ const SharedView = ({ shareId }: Props) => {
         fail('unreadable', new Error('The share response carried no encryptedPayload.'))
         return
       }
+      deadline = localShareDeadline(
+        envelope.expiresAt,
+        envelope.serverTime,
+        Date.now(),
+        performance.now() - requestedAt,
+      )
+      if (deadline !== undefined) {
+        monotonicDeadline = performance.now() + deadline - Date.now()
+        expire()
+        if (expired || cancelled) {
+          return
+        }
+      }
 
       let payload: SharePayload
       try {
@@ -264,7 +320,7 @@ const SharedView = ({ shareId }: Props) => {
         return
       }
 
-      if (!cancelled) {
+      if (!cancelled && !expired) {
         setState({
           status: 'ready',
           payload,
@@ -280,6 +336,9 @@ const SharedView = ({ shareId }: Props) => {
 
     return () => {
       cancelled = true
+      clearTimeout(expirationTimeout)
+      document.removeEventListener('visibilitychange', checkExpiry)
+      window.removeEventListener('focus', checkExpiry)
     }
   }, [shareId])
 

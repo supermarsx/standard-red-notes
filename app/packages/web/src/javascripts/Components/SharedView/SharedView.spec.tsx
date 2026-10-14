@@ -115,6 +115,7 @@ describe('SharedView', () => {
     act(() => root.unmount())
     container.remove()
     errorSpy.mockRestore()
+    jest.useRealTimers()
   })
 
   const render = async () => {
@@ -127,6 +128,82 @@ describe('SharedView', () => {
   }
 
   const failureReason = () => container.querySelector('[data-failure-reason]')?.getAttribute('data-failure-reason')
+
+  it('clears decrypted content and the fragment at the server deadline without restarting the fifteen-minute window', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2030-01-01T00:00:00Z'))
+    decryptShare.mockResolvedValue({ kind: 'note', title: 'Expires', text: 'decrypted private content' })
+    stubFetch({
+      status: 200,
+      body: gatewayBody({
+        viewExpiresMinutes: 15,
+        expiresAt: '2026-10-09T10:56:37Z',
+        serverTime: '2026-10-09T10:56:36Z',
+      }),
+    })
+    await render()
+    expect(container.textContent).toContain('decrypted private content')
+    await act(async () => jest.advanceTimersByTimeAsync(999))
+    expect(container.textContent).toContain('decrypted private content')
+    await act(async () => jest.advanceTimersByTimeAsync(1))
+    expect(container.textContent).not.toContain('decrypted private content')
+    expect(window.location.hash).toBe('')
+    expect(window.location.search).toContain(SHARE_ID)
+  })
+
+  it('cannot remount plaintext from a decryption that completes after expiry', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-10-09T10:56:36Z'))
+    let complete: (value: unknown) => void = () => undefined
+    decryptShare.mockImplementationOnce(() => new Promise((resolve) => (complete = resolve)))
+    stubFetch({
+      status: 200,
+      body: gatewayBody({
+        viewExpiresMinutes: 15,
+        expiresAt: '2026-10-09T10:56:37Z',
+        serverTime: '2026-10-09T10:56:36Z',
+      }),
+    })
+    await render()
+    await act(async () => jest.advanceTimersByTimeAsync(1000))
+    await act(async () => complete({ kind: 'note', title: 'Late private title', text: 'Late private body' }))
+    expect(container.textContent).not.toContain('Late private')
+    expect(window.location.hash).toBe('')
+  })
+  it('does not extend the server window when the browser clock moves backwards', async () => {
+    const browserNow = Date.parse('2030-01-01T00:00:00Z')
+    jest.useFakeTimers().setSystemTime(browserNow)
+    decryptShare.mockResolvedValue({ kind: 'note', title: 'Expires', text: 'private' })
+    stubFetch({
+      status: 200,
+      body: gatewayBody({
+        viewExpiresMinutes: 15,
+        expiresAt: '2026-10-09T10:56:37Z',
+        serverTime: '2026-10-09T10:56:36Z',
+      }),
+    })
+    await render()
+    jest.setSystemTime(browserNow - 24 * 60 * 60_000)
+    await act(async () => jest.advanceTimersByTimeAsync(1000))
+    expect(container.textContent).not.toContain('private')
+    expect(window.location.hash).toBe('')
+  })
+
+  it('cancels the expiry timer when unmounted so it cannot clear another page fragment', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-10-09T10:56:36Z'))
+    decryptShare.mockResolvedValue({ kind: 'note', title: 'Expires', text: 'private' })
+    stubFetch({
+      status: 200,
+      body: gatewayBody({
+        viewExpiresMinutes: 15,
+        expiresAt: '2026-10-09T10:56:37Z',
+        serverTime: '2026-10-09T10:56:36Z',
+      }),
+    })
+    await render()
+    act(() => root.unmount())
+    window.history.replaceState(null, '', '/?shared=another#another-fragment')
+    await act(async () => jest.advanceTimersByTimeAsync(1000))
+    expect(window.location.hash).toBe('#another-fragment')
+  })
 
   describe('the gateway response envelope', () => {
     it('renders the shared note from the api-gateway `{ meta, data }` envelope', async () => {

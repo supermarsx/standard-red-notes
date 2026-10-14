@@ -40,6 +40,7 @@ export class GetShare implements UseCaseInterface<GetShareResult> {
         encryptedPayload: share.props.encryptedPayload,
         oneTimeView: false,
         viewExpiresMinutes: null,
+        expiresAt: null,
       })
     }
 
@@ -58,10 +59,16 @@ export class GetShare implements UseCaseInterface<GetShareResult> {
             encryptedPayload: share.props.encryptedPayload,
             oneTimeView: share.props.oneTimeView,
             viewExpiresMinutes: share.props.viewExpiresMinutes,
+            expiresAt: new Date(expiresAt).toISOString(),
           })
         }
         // Window elapsed: expire it (best-effort revoke) and report gone.
-        await this.shareRepository.markRevoked(id)
+        try {
+          await this.shareRepository.markRevoked(id)
+        } catch {
+          // Expiry denies access independently of cleanup availability. The
+          // periodic sweep retries ciphertext removal after storage recovers.
+        }
         return Result.fail('Share not found')
       }
 
@@ -83,6 +90,10 @@ export class GetShare implements UseCaseInterface<GetShareResult> {
       encryptedPayload: share.props.encryptedPayload,
       oneTimeView: share.props.oneTimeView,
       viewExpiresMinutes: share.props.viewExpiresMinutes,
+      expiresAt:
+        share.props.viewExpiresMinutes === null
+          ? null
+          : new Date(now.getTime() + share.props.viewExpiresMinutes * 60_000).toISOString(),
     }
 
     // A pure one-time-view share is consumed right now (no further reads). A

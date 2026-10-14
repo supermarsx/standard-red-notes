@@ -17,8 +17,9 @@ export interface ShareRepositoryInterface {
    */
   markFirstOpenedAtomically(id: UniqueEntityId, openedAt: Date): Promise<boolean>
   /**
-   * Atomically mark a share revoked. Used to consume a one-time-view share after
-   * its (single) successful read.
+   * Atomically revoke and erase the retained ciphertext, keeping list metadata.
    */
   markRevoked(id: UniqueEntityId): Promise<void>
+  /** Purge expired/consumed shares and ciphertext left by previous revocations. */
+  revokeExpiredAndErasePayloads(now: Date, userUuid?: Uuid): Promise<void>
 }

@@ -1,4 +1,4 @@
-import { Result, UniqueEntityId } from '@standardnotes/domain-core'
+import { UniqueEntityId } from '@standardnotes/domain-core'
 
 import { Share } from '../../Share/Share'
 import { ShareRepositoryInterface } from '../../Share/ShareRepositoryInterface'
@@ -32,6 +32,7 @@ describe('RevokeShare', () => {
   beforeEach(() => {
     shareRepository = {} as jest.Mocked<ShareRepositoryInterface>
     shareRepository.save = jest.fn().mockResolvedValue(undefined)
+    shareRepository.markRevoked = jest.fn().mockResolvedValue(undefined)
     shareRepository.findById = jest.fn().mockResolvedValue(createShare(userUuid))
   })
 
@@ -59,25 +60,16 @@ describe('RevokeShare', () => {
     expect(shareRepository.save).not.toHaveBeenCalled()
   })
 
-  it('should soft-revoke (save revoked=true, never remove) the share', async () => {
+  it('atomically revokes and erases ciphertext through the repository', async () => {
     const result = await createUseCase().execute({ userUuid, shareId })
 
     expect(result.isFailed()).toBe(false)
-    expect(shareRepository.save).toHaveBeenCalledTimes(1)
-    const saved = (shareRepository.save as jest.Mock).mock.calls[0][0] as Share
-    expect(saved.props.revoked).toBe(true)
-    expect(saved.id.toString()).toEqual(shareId)
-    expect(saved.props.encryptedPayload).toEqual('cipher')
+    expect(shareRepository.markRevoked).toHaveBeenCalledWith(new UniqueEntityId(shareId))
+    expect(shareRepository.save).not.toHaveBeenCalled()
   })
 
-  it('fails without persisting when rebuilding the revoked share is rejected', async () => {
-    const spy = jest.spyOn(Share, 'create').mockReturnValue(Result.fail('bad props'))
-
-    const result = await createUseCase().execute({ userUuid, shareId })
-
-    expect(result.isFailed()).toBe(true)
-    expect(result.getError()).toEqual('Could not revoke share: bad props')
-    expect(shareRepository.save).not.toHaveBeenCalled()
-    spy.mockRestore()
+  it('does not report success when ciphertext cleanup fails', async () => {
+    shareRepository.markRevoked = jest.fn().mockRejectedValue(new Error('storage unavailable'))
+    await expect(createUseCase().execute({ userUuid, shareId })).rejects.toThrow('storage unavailable')
   })
 })

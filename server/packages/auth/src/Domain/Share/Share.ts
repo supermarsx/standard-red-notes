@@ -12,7 +12,7 @@ export class Share extends Entity<ShareProps> {
       return Result.fail<Share>('Share type must be one of note, tag or account')
     }
 
-    if (props.encryptedPayload.length === 0) {
+    if (!props.revoked && props.encryptedPayload.length === 0) {
       return Result.fail<Share>('Share encrypted payload cannot be empty')
     }
 

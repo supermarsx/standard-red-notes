@@ -15,4 +15,6 @@ export interface GetShareResult {
    * Informational only — expiry is enforced server-side.
    */
   viewExpiresMinutes: number | null
+  /** Absolute server deadline; null for shares without a post-open window. */
+  expiresAt: string | null
 }

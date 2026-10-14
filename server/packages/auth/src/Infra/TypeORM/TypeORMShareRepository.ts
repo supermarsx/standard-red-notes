@@ -67,6 +67,7 @@ export class TypeORMShareRepository implements ShareRepositoryInterface {
       .set({ firstOpenedAt: openedAt.getTime() })
       .where('uuid = :id', { id: id.toString() })
       .andWhere('first_opened_at IS NULL')
+      .andWhere('revoked = :revoked', { revoked: false })
       .execute()
 
     return (result.affected ?? 0) > 0
@@ -76,8 +77,27 @@ export class TypeORMShareRepository implements ShareRepositoryInterface {
     await this.ormRepository
       .createQueryBuilder()
       .update()
-      .set({ revoked: true })
+      .set({ revoked: true, encryptedPayload: '' })
       .where('uuid = :id', { id: id.toString() })
       .execute()
+  }
+
+  async revokeExpiredAndErasePayloads(now: Date, userUuid?: Uuid): Promise<void> {
+    const query = this.ormRepository
+      .createQueryBuilder()
+      .update()
+      .set({ revoked: true, encryptedPayload: '' })
+      .where(
+        '((revoked = :revoked AND encrypted_payload <> :empty) OR ' +
+          '(revoked = :active AND first_opened_at IS NOT NULL AND (' +
+          '(view_expires_minutes IS NOT NULL AND first_opened_at + view_expires_minutes * 60000 <= :now) OR ' +
+          '(one_time_view = :oneTime AND view_expires_minutes IS NULL))))',
+        { revoked: true, active: false, empty: '', now: now.getTime(), oneTime: true },
+      )
+    if (userUuid) {
+      // Parentheses keep the requesting user's scope over both branches.
+      query.andWhere('user_uuid = :userUuid', { userUuid: userUuid.value })
+    }
+    await query.execute()
   }
 }

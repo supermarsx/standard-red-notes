@@ -57,7 +57,8 @@ export class BaseSharesController extends BaseHttpController {
   }
 
   // UNAUTHENTICATED: anyone with the share link id can read the opaque ciphertext.
-  async get(request: Request, _response: Response): Promise<results.JsonResult> {
+  async get(request: Request, response: Response): Promise<results.JsonResult> {
+    response.setHeader('Cache-Control', 'no-store')
     const result = await this.sharesController.get({
       shareId: request.params.shareId as string,
     })

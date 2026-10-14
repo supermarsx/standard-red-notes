@@ -16,6 +16,7 @@ describe('ListShares', () => {
   beforeEach(() => {
     shareRepository = {} as jest.Mocked<ShareRepositoryInterface>
     shareRepository.findByUserUuid = jest.fn().mockResolvedValue(shares)
+    shareRepository.revokeExpiredAndErasePayloads = jest.fn().mockResolvedValue(undefined)
   })
 
   it('should fail without querying the repository if the user uuid is invalid', async () => {
@@ -35,5 +36,6 @@ describe('ListShares', () => {
     expect(shareRepository.findByUserUuid).toHaveBeenCalledTimes(1)
     const queriedUuid = (shareRepository.findByUserUuid as jest.Mock).mock.calls[0][0] as Uuid
     expect(queriedUuid.value).toEqual(userUuid)
+    expect(shareRepository.revokeExpiredAndErasePayloads).toHaveBeenCalledWith(expect.any(Date), queriedUuid)
   })
 })

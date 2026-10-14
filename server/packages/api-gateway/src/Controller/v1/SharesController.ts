@@ -62,6 +62,7 @@ export class SharesController extends BaseHttpController {
   // UNAUTHENTICATED on purpose: public read of the opaque ciphertext by link id.
   @httpGet('/:shareId')
   async get(request: Request, response: Response): Promise<void> {
+    response.setHeader('Cache-Control', 'no-store')
     await this.httpService.callAuthServer(
       request,
       response,

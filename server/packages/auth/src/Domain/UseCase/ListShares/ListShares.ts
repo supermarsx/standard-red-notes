@@ -15,6 +15,7 @@ export class ListShares implements UseCaseInterface<Share[]> {
     }
     const userUuid = userUuidOrError.getValue()
 
+    await this.shareRepository.revokeExpiredAndErasePayloads(new Date(), userUuid)
     const shares = await this.shareRepository.findByUserUuid(userUuid)
 
     return Result.ok(shares)
