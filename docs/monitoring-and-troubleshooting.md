@@ -64,9 +64,43 @@ Use bounded queries first:
 
 ```bash
 srn-server logs server --tail 200
+docker compose logs --timestamps --since 15m server
 docker compose exec server srn-admin logs --service auth --level error --tail 200
+docker compose exec server srn-admin logs --service api-gateway --search ws-sync --since 2026-10-14T20:58:00Z --tail 200
+docker compose exec server srn-admin logs --service auth --tail 200 --order asc
 docker compose exec server srn-admin audit --limit 100
 ```
+
+In **Preferences → Admin → Logs**, use the service, level, time window and
+literal text filters to narrow an incident. Newest first is the default;
+oldest first presents the retained results chronologically. Pause the
+15-second automatic refresh when reading or exporting a result. Exports use
+the displayed order and filters. The API and CLI share a bounded reader:
+at most 512 KiB from each current log file and 500 returned entries, rather
+than an unbounded search of all historical or rotated files.
+
+Service logger entries and startup dependency checks record UTC timestamps.
+Legacy lines without a reliable timestamp remain explicitly unavailable;
+their event time is not reconstructed from a file modification time. Startup
+checks name the dependency, report waiting at startup and every 30 seconds,
+and record when its listener becomes ready instead of printing every raw
+`nc` failure. The first wait is informational; a wait lasting 30 seconds is
+reported at warning level.
+
+`info` is a verbosity threshold, not a request to invent events that the code
+does not emit. Sync failures now report the operation, failed phase, outcome
+and elapsed milliseconds. These are bounded operational fields; command
+payloads, credentials and account identifiers are excluded. Socket metric
+summaries still aggregate successful traffic instead of writing a line for
+each keystroke. Failure context helps identify a stuck operation; it does
+not itself repair the underlying socket failure.
+
+In **Preferences → Admin → Diagnostics**, run all checks, an individual check
+or the checks belonging to a section. Account and browser sections refresh
+their readings separately. **Cancel** stops the remaining checks and ignores
+late results; supported requests are aborted. A sync or other server action
+already dispatched may still complete, and cancelling does not roll it back.
+Temporary file-transfer diagnostics still perform their cleanup.
 
 Worker programs do not expose dedicated health ports. Inspect their logs for
 event backlog, retry, mail, backup, or scheduler failures.
