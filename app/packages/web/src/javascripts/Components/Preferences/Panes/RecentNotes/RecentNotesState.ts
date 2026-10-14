@@ -1,5 +1,5 @@
-import { ContentType, PrefKey, RecentNoteEntry, SNNote } from '@standardnotes/snjs'
-import { action, makeObservable, observable, reaction, runInAction } from 'mobx'
+import { ApplicationEvent, ContentType, PrefKey, RecentNoteEntry, SNNote } from '@standardnotes/snjs'
+import { action, makeObservable, observable, runInAction } from 'mobx'
 import { WebApplication } from '@/Application/WebApplication'
 
 /**
@@ -23,53 +23,88 @@ export type ResolvedRecentNote = {
  * the list to the RecentNotesHistory preference so it survives reloads and follows
  * the user across devices.
  *
- * This is intentionally a READ-ONLY observer of the rest of the app: it watches the
- * active item controller's note via a mobx reaction and never mutates the
- * ItemList/NoteView controllers. The reaction fires whenever the active note
- * changes (i.e. a note is opened), which is the cleanest "a note was opened" signal
- * available without editing those controllers.
+ * ItemGroupController owns plain controller references, so subscribe to its
+ * committed active-controller notification rather than caching a MobX computed
+ * with no observable dependencies. No note content or editor state is changed.
  */
 export class RecentNotesState {
   entries: RecentNoteEntry[] = []
+  recordingEnabled = true
+  historyLimit = MAX_RECENT_NOTES
 
-  private disposeReaction?: () => void
+  private readonly disposers: (() => void)[] = []
+  private activeNoteUuid?: string
 
   constructor(private application: WebApplication) {
     makeObservable(this, {
       entries: observable,
+      recordingEnabled: observable,
+      historyLimit: observable,
       setEntries: action,
       clear: action,
     })
 
-    this.entries = this.readFromPreferences()
-
-    // Observe the active note. `activeControllerItem` is a mobx computed, so this
-    // reaction re-runs each time the user opens/switches to a different note.
-    this.disposeReaction = reaction(
-      () => {
-        const active = this.application.itemListController?.activeControllerItem
-        if (!active || active.content_type !== ContentType.TYPES.Note) {
-          return undefined
+    this.refreshPreferences()
+    this.disposers.push(
+      application.itemControllerGroup.addActiveControllerChangeObserver((controller) => {
+        const item = controller?.item
+        const uuid = item?.content_type === ContentType.TYPES.Note ? item.uuid : undefined
+        if (uuid === this.activeNoteUuid) {
+          return
         }
-        return active.uuid
-      },
-      (uuid) => {
-        if (uuid) {
+        this.activeNoteUuid = uuid
+        if (uuid && this.recordingEnabled && application.sync.isDatabaseLoaded()) {
           this.recordOpenedNote(uuid)
         }
-      },
-      { fireImmediately: true },
+      }),
+      application.addEventObserver(async () => this.refreshPreferences(), ApplicationEvent.PreferencesChanged),
+      application.addEventObserver(async () => {
+        this.refreshPreferences()
+        if (this.activeNoteUuid && this.recordingEnabled) {
+          this.recordOpenedNote(this.activeNoteUuid)
+        }
+      }, ApplicationEvent.LocalDataLoaded),
     )
   }
 
   deinit(): void {
-    this.disposeReaction?.()
-    this.disposeReaction = undefined
+    this.disposers.splice(0).forEach((dispose) => dispose())
     ;(this.application as unknown) = undefined
   }
 
   setEntries(entries: RecentNoteEntry[]): void {
     this.entries = entries
+  }
+
+  private refreshPreferences(): void {
+    const configuredLimit = this.application.getPreference(PrefKey.RecentNotesHistoryLimit, MAX_RECENT_NOTES)
+    runInAction(() => {
+      this.recordingEnabled = this.application.getPreference(PrefKey.RecentNotesRecordingEnabled, true) !== false
+      this.historyLimit =
+        Number.isSafeInteger(configuredLimit) && configuredLimit >= 1 && configuredLimit <= 100
+          ? configuredLimit
+          : MAX_RECENT_NOTES
+      this.setEntries(this.readFromPreferences().slice(0, this.historyLimit))
+    })
+  }
+
+  async setRecordingEnabled(enabled: boolean): Promise<void> {
+    runInAction(() => {
+      this.recordingEnabled = enabled
+    })
+    await this.application.setPreference(PrefKey.RecentNotesRecordingEnabled, enabled)
+  }
+
+  async setHistoryLimit(limit: number): Promise<void> {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+      return
+    }
+    runInAction(() => {
+      this.historyLimit = limit
+      this.setEntries(this.entries.slice(0, limit))
+    })
+    await this.application.setPreference(PrefKey.RecentNotesHistoryLimit, limit)
+    this.persist(this.entries)
   }
 
   private readFromPreferences(): RecentNoteEntry[] {
@@ -92,7 +127,7 @@ export class RecentNotesState {
   private recordOpenedNote(uuid: string): void {
     const now = Date.now()
     const existing = this.entries.filter((entry) => entry.uuid !== uuid)
-    const next = [{ uuid, openedAt: now }, ...existing].slice(0, MAX_RECENT_NOTES)
+    const next = [{ uuid, openedAt: now }, ...existing].slice(0, this.historyLimit)
     runInAction(() => {
       this.setEntries(next)
     })

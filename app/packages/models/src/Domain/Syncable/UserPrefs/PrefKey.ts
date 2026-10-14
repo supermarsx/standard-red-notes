@@ -207,6 +207,8 @@ export enum PrefKey {
   // the "Recent Notes" preferences pane. Stored as a pref so it follows the user
   // across reloads and devices.
   RecentNotesHistory = 'recentNotesHistory',
+  RecentNotesRecordingEnabled = 'recentNotesRecordingEnabled',
+  RecentNotesHistoryLimit = 'recentNotesHistoryLimit',
   // Standard Red Notes: explicit user-defined ("custom") manual orderings, each
   // stored as an array of item uuids. These drive ordering when the Custom sort
   // mode is selected, and are rewritten when the user drags to reorder.
@@ -489,6 +491,8 @@ export type PrefValue = {
   [PrefKey.MaxIndexedNotes]: number
   [PrefKey.MaxDecryptionWorkers]: number
   [PrefKey.RecentNotesHistory]: RecentNoteEntry[]
+  [PrefKey.RecentNotesRecordingEnabled]: boolean
+  [PrefKey.RecentNotesHistoryLimit]: number
   [PrefKey.CustomNotesOrder]: string[]
   [PrefKey.CustomFoldersOrder]: string[]
   [PrefKey.CustomTagsOrder]: string[]

@@ -107,9 +107,45 @@ const RecentNotes: FunctionComponent<Props> = ({ application }: Props) => {
         <HorizontalSeparator classes="my-4" />
 
         <PreferencesSegment>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={state.recordingEnabled}
+              onChange={(event) => {
+                void state.setRecordingEnabled(event.target.checked)
+              }}
+            />
+            Record recently opened notes
+          </label>
+          <Text className="mt-2">Turning recording off keeps existing history. Use Clear history to remove it.</Text>
+          <label className="mt-3 flex items-center gap-2">
+            History limit
+            <select
+              aria-label="Recent notes history limit"
+              value={state.historyLimit}
+              onChange={(event) => {
+                void state.setHistoryLimit(Number(event.target.value))
+              }}
+            >
+              {[10, 25, 50, 100].map((limit) => (
+                <option key={limit} value={limit}>
+                  {limit} notes
+                </option>
+              ))}
+            </select>
+          </label>
+        </PreferencesSegment>
+
+        <HorizontalSeparator classes="my-4" />
+
+        <PreferencesSegment>
           <Subtitle>History {recentNotes.length > 0 ? `(${recentNotes.length})` : ''}</Subtitle>
           {recentNotes.length === 0 ? (
-            <Text className="mt-2">You have not opened any notes yet. Open a note and it will appear here.</Text>
+            <Text className="mt-2">
+              {state.recordingEnabled
+                ? 'You have not opened any notes yet. Open a note and it will appear here.'
+                : 'Recording is turned off. Turn it on to save recently opened notes.'}
+            </Text>
           ) : (
             <div className="mt-3 flex flex-col gap-2">
               {recentNotes.map((entry) => (

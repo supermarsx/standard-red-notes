@@ -122,6 +122,8 @@ export const PrefDefaults = {
   // Standard Red Notes: the recently-opened-notes history starts empty and is
   // populated as the user opens notes.
   [PrefKey.RecentNotesHistory]: [],
+  [PrefKey.RecentNotesRecordingEnabled]: true,
+  [PrefKey.RecentNotesHistoryLimit]: 25,
   // Standard Red Notes: custom manual orderings start empty; until the user
   // drags to reorder, the Custom sort falls back to its stable secondary sort.
   [PrefKey.CustomNotesOrder]: [],
