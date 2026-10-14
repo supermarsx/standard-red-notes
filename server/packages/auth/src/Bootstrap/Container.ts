@@ -46,6 +46,7 @@ import { RedisEphemeralSessionRepository } from '../Infra/Redis/RedisEphemeralSe
 import { AuthSessionGenerationService } from '../Domain/Session/AuthSessionGenerationService'
 import { AdminMfaService } from '../Domain/Session/AdminMfaService'
 import { SessionActivityService } from '../Domain/Session/SessionActivityService'
+import { SessionInactivityService } from '../Domain/Session/SessionInactivityService'
 import { GetActiveSessionsForUser } from '../Domain/UseCase/GetActiveSessionsForUser'
 import { DeleteOtherSessionsForUser } from '../Domain/UseCase/DeleteOtherSessionsForUser'
 import { DeleteSessionForUser } from '../Domain/UseCase/DeleteSessionForUser'
@@ -1924,6 +1925,16 @@ export class ContainerConfigLoader {
         ),
       )
     container
+      .bind(SessionInactivityService)
+      .toConstantValue(
+        new SessionInactivityService(
+          container.get(TYPES.Auth_ORMSessionRepository),
+          container.get(TYPES.Auth_EphemeralSessionRepository),
+          undefined,
+          () => container.get<winston.Logger>(TYPES.Auth_Logger).warn('Inactive session cleanup failed'),
+        ),
+      )
+    container
       .bind(AuthSessionGenerationService)
       .toConstantValue(new AuthSessionGenerationService(container.get(TYPES.Auth_ORMUserRepository)))
     container
@@ -1945,6 +1956,7 @@ export class ContainerConfigLoader {
           container.get<GetSetting>(TYPES.Auth_GetSetting),
           container.get<boolean>(TYPES.Auth_FORCE_LEGACY_SESSIONS),
           container.get(AuthSessionGenerationService),
+          container.get(SessionInactivityService),
         ),
       )
     container
@@ -1963,6 +1975,7 @@ export class ContainerConfigLoader {
           container.get<GetCooldownSessionTokens>(TYPES.Auth_GetCooldownSessionTokens),
           container.get<winston.Logger>(TYPES.Auth_Logger),
           container.get(AuthSessionGenerationService),
+          container.get(SessionInactivityService),
         ),
       )
     const httpAgentKeepAliveTimeout = env.get('HTTP_AGENT_KEEP_ALIVE_TIMEOUT', true)
@@ -2895,6 +2908,8 @@ export class ContainerConfigLoader {
             container.get(TYPES.Auth_ORMSessionRepository),
             container.get(TYPES.Auth_GetActiveSessionsForUser),
             container.get(TYPES.Auth_SessionProjector),
+            undefined,
+            container.get(SessionInactivityService),
           ),
       )
       .inSingletonScope()
@@ -3174,6 +3189,7 @@ export class ContainerConfigLoader {
         container.get<GroupRepositoryInterface>(TYPES.Auth_GroupRepository),
         (userUuid) => container.get(SharedVaultMembershipReconciler).reconcile(userUuid),
         container.get(AuthSessionGenerationService),
+        container.get(SessionInactivityService),
       ),
     )
     container.bind<ProcessUserRequest>(TYPES.Auth_ProcessUserRequest).to(ProcessUserRequest)
@@ -3505,6 +3521,7 @@ export class ContainerConfigLoader {
           // process of a deployment is pointed at. Unset means nothing is
           // recorded, exactly as before.
           new DeletedAccountMarkers(deletedAccountMarkersDirectory(env.get('SERVER_SETTINGS_PATH', true))),
+          container.get(SessionInactivityService),
         ),
       )
     container

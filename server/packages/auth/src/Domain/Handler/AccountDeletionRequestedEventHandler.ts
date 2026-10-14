@@ -6,6 +6,7 @@ import { EphemeralSessionRepositoryInterface } from '../Session/EphemeralSession
 import { RevokedSessionRepositoryInterface } from '../Session/RevokedSessionRepositoryInterface'
 import { SessionRepositoryInterface } from '../Session/SessionRepositoryInterface'
 import { UserRepositoryInterface } from '../User/UserRepositoryInterface'
+import { SessionInactivityService } from '../Session/SessionInactivityService'
 
 export class AccountDeletionRequestedEventHandler implements DomainEventHandlerInterface {
   constructor(
@@ -21,6 +22,7 @@ export class AccountDeletionRequestedEventHandler implements DomainEventHandlerI
     // each entry point. Optional: absent in tests and where no shared location
     // is configured.
     private deletedAccountMarkers?: DeletedAccountMarkers,
+    private sessionActivity?: SessionInactivityService,
   ) {}
 
   async handle(event: AccountDeletionRequestedEvent): Promise<void> {
@@ -39,6 +41,7 @@ export class AccountDeletionRequestedEventHandler implements DomainEventHandlerI
       // The account is gone already (a redelivered event, or a deletion that
       // finished elsewhere). What other services hold about it still has to
       // go, and recording it twice is harmless.
+      await this.sessionActivity?.purgeUser(userUuid.value)
       await this.recordDeletion(userUuid.value)
 
       return
@@ -47,6 +50,7 @@ export class AccountDeletionRequestedEventHandler implements DomainEventHandlerI
     await this.removeSessions(userUuid.value)
 
     await this.userRepository.remove(user)
+    await this.sessionActivity?.purgeUser(userUuid.value)
 
     // Only now: a marker means "this account is gone, remove what you hold".
     await this.recordDeletion(userUuid.value)

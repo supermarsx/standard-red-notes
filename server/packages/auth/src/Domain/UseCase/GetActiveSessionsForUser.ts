@@ -7,6 +7,7 @@ import { GetActiveSessionsForUserResponse } from './GetActiveSessionsForUserResp
 import { UseCaseInterface } from './UseCaseInterface'
 import { AuthSessionGenerationService } from '../Session/AuthSessionGenerationService'
 import { Session } from '../Session/Session'
+import { SessionInactivityService } from '../Session/SessionInactivityService'
 
 @injectable()
 export class GetActiveSessionsForUser implements UseCaseInterface {
@@ -15,6 +16,7 @@ export class GetActiveSessionsForUser implements UseCaseInterface {
     @inject(TYPES.Auth_EphemeralSessionRepository)
     private ephemeralSessionRepository: EphemeralSessionRepositoryInterface,
     @inject(AuthSessionGenerationService) @optional() private generation?: AuthSessionGenerationService,
+    @inject(SessionInactivityService) @optional() private inactivity?: SessionInactivityService,
   ) {}
 
   async execute(dto: GetActiveSessionsForUserDTO): Promise<GetActiveSessionsForUserResponse> {
@@ -22,7 +24,7 @@ export class GetActiveSessionsForUser implements UseCaseInterface {
     const sessions = await this.sessionRepository.findAllByRefreshExpirationAndUserUuid(dto.userUuid)
 
     const generation = this.generation ? await this.generation.currentGeneration(dto.userUuid) : undefined
-    const activeSessions = sessions
+    let activeSessions = sessions
       .concat(ephemeralSessions)
       .filter(
         (session) => !this.generation || (generation !== undefined && (session.authGeneration ?? 0) === generation),
@@ -33,6 +35,9 @@ export class GetActiveSessionsForUser implements UseCaseInterface {
 
         return dateB.getTime() - dateA.getTime()
       })
+    if (this.inactivity) {
+      activeSessions = await this.inactivity.retain(activeSessions)
+    }
 
     if (dto.sessionUuid) {
       let sessions: Session[] = []

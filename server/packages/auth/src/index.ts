@@ -14,3 +14,5 @@ export * from './Infra/Diagnostics/AuthRuntimeDiagnosticsEndpoint'
 // one-process bundle, and the admin pane reported auth unreachable while auth
 // was running in the very same process.
 export * from './Infra/Diagnostics/AuthReadinessEndpoint'
+
+export * from './Domain/Session/SessionInactivityService'

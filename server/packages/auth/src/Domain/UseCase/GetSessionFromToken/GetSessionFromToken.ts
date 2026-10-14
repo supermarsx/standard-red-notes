@@ -10,6 +10,7 @@ import { EphemeralSessionRepositoryInterface } from '../../Session/EphemeralSess
 import { Logger } from 'winston'
 import { GetSessionFromTokenResult } from './GetSessionFromTokenResult'
 import { GetCooldownSessionTokens } from '../GetCooldownSessionTokens/GetCooldownSessionTokens'
+import { SessionInactivityService } from '../../Session/SessionInactivityService'
 
 export class GetSessionFromToken implements UseCaseInterface<GetSessionFromTokenResult> {
   constructor(
@@ -18,6 +19,7 @@ export class GetSessionFromToken implements UseCaseInterface<GetSessionFromToken
     private getCooldownSessionTokens: GetCooldownSessionTokens,
     private logger: Logger,
     private generation?: AuthSessionGenerationService,
+    private inactivity?: SessionInactivityService,
   ) {}
 
   async execute(dto: GetSessionFromTokenDTO): Promise<Result<GetSessionFromTokenResult>> {
@@ -94,6 +96,9 @@ export class GetSessionFromToken implements UseCaseInterface<GetSessionFromToken
     }
 
     if (this.generation && !(await this.generation.sessionCurrent(retrievedSession))) {
+      return Result.fail('Session not found')
+    }
+    if (this.inactivity && !(await this.inactivity.check(retrievedSession))) {
       return Result.fail('Session not found')
     }
 

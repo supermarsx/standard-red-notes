@@ -13,6 +13,7 @@ import { Role } from '../../Role/Role'
 import { UserRepositoryInterface } from '../../User/UserRepositoryInterface'
 
 import { AuthSessionGenerationService, AuthGenerationChangedError } from '../../Session/AuthSessionGenerationService'
+import { SessionInactivityService } from '../../Session/SessionInactivityService'
 import { CreateCrossServiceToken } from './CreateCrossServiceToken'
 import {
   Result,
@@ -58,6 +59,7 @@ describe('CreateCrossServiceToken', () => {
     applicationVersionThresholdForTokenVersion3?: string,
     refreshMemberships?: (userUuid: string) => Promise<void>,
     generation?: AuthSessionGenerationService,
+    inactivity?: SessionInactivityService,
   ) =>
     new CreateCrossServiceToken(
       userProjector,
@@ -76,7 +78,41 @@ describe('CreateCrossServiceToken', () => {
       undefined,
       refreshMemberships,
       generation,
+      inactivity,
     )
+  it('observes authenticated use before the final epoch lock and performs no async policy work after signing', async () => {
+    const order: string[] = []
+    const check = jest.fn(async () => {
+      order.push('observation')
+      return true
+    })
+    const run = jest.fn(async (_user: string, _epoch: number, encode: () => Promise<string>) => {
+      order.push('epoch-lock')
+      return encode()
+    })
+    tokenEncoder.encodeExpirableToken = jest.fn(() => {
+      order.push('encode')
+      return 'token'
+    })
+    const result = await createUseCase(
+      undefined,
+      undefined,
+      undefined,
+      { run } as unknown as AuthSessionGenerationService,
+      { check } as unknown as SessionInactivityService,
+    ).execute({ user, session })
+    expect(result.isFailed()).toBe(false)
+    expect(order).toEqual(['observation', 'epoch-lock', 'encode'])
+    expect(check).toHaveBeenCalledWith(session, true)
+  })
+  it('never signs a grant when the inactivity fence rejects its session', async () => {
+    const check = jest.fn().mockResolvedValue(false)
+    const result = await createUseCase(undefined, undefined, undefined, undefined, {
+      check,
+    } as unknown as SessionInactivityService).execute({ user, session })
+    expect(result.isFailed()).toBe(true)
+    expect(tokenEncoder.encodeExpirableToken).not.toHaveBeenCalled()
+  })
 
   it('rejects a named stale ephemeral session instead of issuing a websocket grant under a new epoch', async () => {
     user.authGeneration = 1

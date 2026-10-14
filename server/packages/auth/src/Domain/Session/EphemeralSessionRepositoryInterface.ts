@@ -8,4 +8,5 @@ export interface EphemeralSessionRepositoryInterface {
   deleteOne(uuid: string, userUuid: string): Promise<void>
   insert(ephemeralSession: EphemeralSession): Promise<void>
   update(ephemeralSession: EphemeralSession): Promise<void>
+  getNextCleanupBatch?(limit: number): Promise<EphemeralSession[]>
 }

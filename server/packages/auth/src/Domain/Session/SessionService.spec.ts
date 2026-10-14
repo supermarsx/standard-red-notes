@@ -20,6 +20,7 @@ import { TraceSession } from '../UseCase/TraceSession/TraceSession'
 import { UserSubscription } from '../Subscription/UserSubscription'
 import { Result } from '@standardnotes/domain-core'
 import { GetSetting } from '../UseCase/GetSetting/GetSetting'
+import { SessionInactivityService, InactiveSessionError } from './SessionInactivityService'
 
 describe('SessionService', () => {
   let sessionRepository: SessionRepositoryInterface
@@ -37,7 +38,7 @@ describe('SessionService', () => {
   let userSubscriptionRepository: UserSubscriptionRepositoryInterface
   const readonlyUsers = ['demo@standardnotes.com']
 
-  const createService = (forceLegacySessions = false) =>
+  const createService = (forceLegacySessions = false, inactivity?: SessionInactivityService) =>
     new SessionService(
       sessionRepository,
       ephemeralSessionRepository,
@@ -53,7 +54,25 @@ describe('SessionService', () => {
       readonlyUsers,
       getSetting,
       forceLegacySessions,
+      undefined,
+      inactivity,
     )
+  it('refuses inactive refresh before token work and records usage only after an existing session update succeeds', async () => {
+    const check = jest.fn().mockResolvedValue(false)
+    const dto = { session: existingSession, isEphemeral: false, apiVersion: ApiVersion.create('20200115').getValue() }
+    await expect(
+      createService(false, { check } as unknown as SessionInactivityService).refreshTokens(dto),
+    ).rejects.toBeInstanceOf(InactiveSessionError)
+    expect(sessionRepository.update).not.toHaveBeenCalled()
+    check.mockResolvedValue(true)
+    await createService(false, { check } as unknown as SessionInactivityService).refreshTokens(dto)
+    expect(check).toHaveBeenLastCalledWith(existingSession, true)
+    expect(sessionRepository.update).toHaveBeenCalled()
+    check.mockResolvedValueOnce(true).mockResolvedValueOnce(false)
+    await expect(
+      createService(false, { check } as unknown as SessionInactivityService).refreshTokens(dto),
+    ).rejects.toBeInstanceOf(InactiveSessionError)
+  })
 
   beforeEach(() => {
     existingSession = {} as jest.Mocked<Session>

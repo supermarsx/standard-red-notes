@@ -1,4 +1,5 @@
 import 'reflect-metadata'
+import { InactiveSessionError } from '../Session/SessionInactivityService'
 
 import { Session } from '../Session/Session'
 import { SessionServiceInterface } from '../Session/SessionServiceInterface'
@@ -127,6 +128,18 @@ describe('RefreshSessionToken', () => {
     })
 
     expect(domainEventPublisher.publish).toHaveBeenCalled()
+  })
+  it('does not return rotated credentials or emit a refresh event when inactivity revocation crosses the refresh boundary', async () => {
+    sessionService.refreshTokens = jest.fn().mockRejectedValue(new InactiveSessionError())
+    const result = await createUseCase().execute({
+      authTokenFromHeaders: '123',
+      refreshTokenFromHeaders: '1:2:3',
+      requestMetadata: { url: '/sessions/refresh', method: 'POST' },
+      apiVersion: ApiVersion.VERSIONS.v20200115,
+    })
+    expect(result).toMatchObject({ success: false, errorTag: 'invalid-refresh-token' })
+    expect(domainEventPublisher.publish).not.toHaveBeenCalled()
+    expect(cooldownSessionTokens.execute).not.toHaveBeenCalled()
   })
 
   it('rejects refresh without rotating tokens until strict email confirmation is completed', async () => {

@@ -1,4 +1,5 @@
 import { AuthGenerationChangedError } from '../Session/AuthSessionGenerationService'
+import { InactiveSessionError } from '../Session/SessionInactivityService'
 import { SessionCreationResult } from '../Session/SessionCreationResult'
 import * as crypto from 'crypto'
 import { DomainEventPublisherInterface } from '@standardnotes/domain-events'
@@ -162,7 +163,7 @@ export class RefreshSessionToken {
         application: dto.requestMetadata.application,
       })
     } catch (error) {
-      if (error instanceof AuthGenerationChangedError) {
+      if (error instanceof AuthGenerationChangedError || error instanceof InactiveSessionError) {
         return { success: false, errorTag: 'invalid-refresh-token', errorMessage: 'The refresh token is not valid.' }
       }
       throw error

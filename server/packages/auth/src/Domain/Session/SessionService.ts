@@ -11,6 +11,7 @@ import { SessionBody } from '@standardnotes/responses'
 import { CryptoNode } from '@standardnotes/sncrypto-node'
 
 import { AuthSessionGenerationService, AuthGenerationChangedError } from './AuthSessionGenerationService'
+import { SessionInactivityService, InactiveSessionError } from './SessionInactivityService'
 import { Session } from './Session'
 import { SessionRepositoryInterface } from './SessionRepositoryInterface'
 import { SessionServiceInterface } from './SessionServiceInterface'
@@ -48,6 +49,7 @@ export class SessionService implements SessionServiceInterface {
     private getSetting: GetSetting,
     private forceLegacySessions: boolean,
     private generation?: AuthSessionGenerationService,
+    private inactivity?: SessionInactivityService,
   ) {}
 
   async createNewSessionForUser(dto: {
@@ -126,6 +128,9 @@ export class SessionService implements SessionServiceInterface {
     snjs?: string
     application?: string
   }): Promise<SessionCreationResult> {
+    if (this.inactivity && !(await this.inactivity.check(dto.session))) {
+      throw new InactiveSessionError()
+    }
     const sessionPayload = await this.createTokens(dto.session, dto.apiVersion)
 
     dto.session.apiVersion = dto.apiVersion.value
@@ -161,6 +166,9 @@ export class SessionService implements SessionServiceInterface {
       await this.sessionRepository.update(dto.session)
     }
 
+    if (this.inactivity && !(await this.inactivity.check(dto.session, true))) {
+      throw new InactiveSessionError()
+    }
     return {
       ...sessionPayload,
       session: dto.session,

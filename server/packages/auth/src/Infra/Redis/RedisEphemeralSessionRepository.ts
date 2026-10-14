@@ -2,7 +2,7 @@ import * as IORedis from 'ioredis'
 
 import { inject, injectable } from 'inversify'
 import TYPES from '../../Bootstrap/Types'
-import { EphemeralSession } from '../../Domain/Session/EphemeralSession'
+import { EphemeralSession, parseEphemeralCleanupSession } from '../../Domain/Session/EphemeralSession'
 import { EphemeralSessionRepositoryInterface } from '../../Domain/Session/EphemeralSessionRepositoryInterface'
 import { AuthGenerationChangedError } from '../../Domain/Session/AuthSessionGenerationService'
 
@@ -11,6 +11,8 @@ export class RedisEphemeralSessionRepository implements EphemeralSessionReposito
   private readonly PREFIX = 'session'
   private readonly PREFIX_PRIVATE_ID = 'session-private-id'
   private readonly USER_SESSIONS_PREFIX = 'user-sessions'
+  private cleanupCursor = '0'
+  private cleanupKeys: string[] = []
 
   constructor(
     @inject(TYPES.Auth_Redis) private redisClient: IORedis.Redis,
@@ -140,5 +142,27 @@ export class RedisEphemeralSessionRepository implements EphemeralSessionReposito
     if (updated !== 1) {
       throw new AuthGenerationChangedError()
     }
+  }
+  async getNextCleanupBatch(limit: number): Promise<EphemeralSession[]> {
+    if (!this.cleanupKeys.length) {
+      const [cursor, keys] = await this.redisClient.scan(
+        this.cleanupCursor,
+        'MATCH',
+        `${this.PREFIX}:*`,
+        'COUNT',
+        limit,
+      )
+      this.cleanupCursor = cursor
+      this.cleanupKeys = keys.filter((key) => key.split(':').length === 2)
+    }
+    const keys = this.cleanupKeys.splice(0, limit)
+    if (!keys.length) {
+      return []
+    }
+    const values = await this.redisClient.mget(...keys)
+    return values
+      .filter((value): value is string => value !== null)
+      .map(parseEphemeralCleanupSession)
+      .filter((session): session is EphemeralSession => session !== undefined)
   }
 }

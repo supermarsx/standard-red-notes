@@ -1,7 +1,7 @@
 import { CacheEntryRepositoryInterface, CacheEntry } from '@standardnotes/domain-core'
 import { TimerInterface } from '@standardnotes/time'
 
-import { EphemeralSession } from '../../Domain/Session/EphemeralSession'
+import { EphemeralSession, parseEphemeralCleanupSession } from '../../Domain/Session/EphemeralSession'
 import { EphemeralSessionRepositoryInterface } from '../../Domain/Session/EphemeralSessionRepositoryInterface'
 import { Repository } from 'typeorm'
 import { TypeORMCacheEntry } from './TypeORMCacheEntry'
@@ -12,6 +12,7 @@ export class TypeORMEphemeralSessionRepository implements EphemeralSessionReposi
   private readonly PREFIX = 'session'
   private readonly PREFIX_PRIVATE_ID = 'session-private-id'
   private readonly USER_SESSIONS_PREFIX = 'user-sessions'
+  private cleanupCursor?: string
 
   constructor(
     private cacheEntryRepository: CacheEntryRepositoryInterface,
@@ -191,5 +192,23 @@ export class TypeORMEphemeralSessionRepository implements EphemeralSessionReposi
       ephemeralSessionUuidsJSON.props.expiresAt = this.timer.getUTCDateNSecondsAhead(ttl)
       await this.cacheEntryRepository.save(ephemeralSessionUuidsJSON)
     }
+  }
+  async getNextCleanupBatch(limit: number): Promise<EphemeralSession[]> {
+    const query = this.ormRepository
+      .createQueryBuilder('cache')
+      .where('cache.key LIKE :prefix AND cache.key NOT LIKE :alias', {
+        prefix: `${this.PREFIX}:%`,
+        alias: `${this.PREFIX}:%:%`,
+      })
+      .orderBy('cache.uuid', 'ASC')
+      .take(limit)
+    if (this.cleanupCursor) {
+      query.andWhere('cache.uuid > :cursor', { cursor: this.cleanupCursor })
+    }
+    const rows = await query.getMany()
+    this.cleanupCursor = rows.length ? rows[rows.length - 1].uuid : undefined
+    return rows
+      .map((row) => parseEphemeralCleanupSession(row.value))
+      .filter((session): session is EphemeralSession => session !== undefined)
   }
 }

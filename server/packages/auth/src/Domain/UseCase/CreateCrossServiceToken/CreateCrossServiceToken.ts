@@ -6,6 +6,7 @@ import { ProjectorInterface } from '../../../Projection/ProjectorInterface'
 import { Role } from '../../Role/Role'
 import { AuthSessionGenerationService, AuthGenerationChangedError } from '../../Session/AuthSessionGenerationService'
 import { Session } from '../../Session/Session'
+import { SessionInactivityService } from '../../Session/SessionInactivityService'
 import { User } from '../../User/User'
 import { UserRepositoryInterface } from '../../User/UserRepositoryInterface'
 
@@ -39,6 +40,7 @@ export class CreateCrossServiceToken implements UseCaseInterface<string> {
     private groupRepository?: GroupRepositoryInterface,
     private refreshSharedVaultMemberships?: (userUuid: string) => Promise<void>,
     private generation?: AuthSessionGenerationService,
+    private inactivity?: SessionInactivityService,
   ) {}
 
   /**
@@ -309,13 +311,15 @@ export class CreateCrossServiceToken implements UseCaseInterface<string> {
       if (resolvedSession && (resolvedSession.authGeneration ?? 0) !== expected) {
         return Result.fail('Could not find an active session for the supplied session uuid')
       }
+      if (resolvedSession && this.inactivity && !(await this.inactivity.check(resolvedSession, true))) {
+        return Result.fail('Could not find an active session for the supplied session uuid')
+      }
       authTokenData.auth_generation = expected
       try {
-        return Result.ok(
-          await this.generation.run(user.uuid, expected, async () =>
-            this.tokenEncoder.encodeExpirableToken(authTokenData, this.jwtTTL),
-          ),
+        const encoded = await this.generation.run(user.uuid, expected, async () =>
+          this.tokenEncoder.encodeExpirableToken(authTokenData, this.jwtTTL),
         )
+        return Result.ok(encoded)
       } catch (error) {
         if (error instanceof AuthGenerationChangedError) {
           return Result.fail(error.message)
@@ -323,7 +327,11 @@ export class CreateCrossServiceToken implements UseCaseInterface<string> {
         throw error
       }
     }
-    return Result.ok(this.tokenEncoder.encodeExpirableToken(authTokenData, this.jwtTTL))
+    if (resolvedSession && this.inactivity && !(await this.inactivity.check(resolvedSession, true))) {
+      return Result.fail('Could not find an active session for the supplied session uuid')
+    }
+    const encoded = this.tokenEncoder.encodeExpirableToken(authTokenData, this.jwtTTL)
+    return Result.ok(encoded)
   }
 
   private projectUser(user: User): { uuid: string; email: string } {

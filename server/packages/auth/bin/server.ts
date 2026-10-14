@@ -1,3 +1,4 @@
+import { SessionInactivityService } from '../src/Domain/Session/SessionInactivityService'
 import { safeErrorLogMetadata } from '@standardnotes/domain-core'
 import 'reflect-metadata'
 
@@ -116,6 +117,10 @@ void container
     fatalLogger = logger
     const membershipReconciler = container.get(SharedVaultMembershipReconciler)
     membershipReconciler.start()
+    const inactivity = container.get(SessionInactivityService)
+    inactivity.start()
+    process.on('SIGTERM', () => inactivity.stop())
+    process.on('SIGINT', () => inactivity.stop())
     process.on('SIGTERM', () => membershipReconciler.stop())
     const shareExpiryCleanup = new ShareExpiryCleanup(container.get(TYPES.Auth_ShareRepository), () => {
       logger.warn('Expired share cleanup failed')

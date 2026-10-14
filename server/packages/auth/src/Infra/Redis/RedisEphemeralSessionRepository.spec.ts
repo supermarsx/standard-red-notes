@@ -4,6 +4,25 @@ import { EphemeralSession } from '../../Domain/Session/EphemeralSession'
 import { AuthGenerationChangedError } from '../../Domain/Session/AuthSessionGenerationService'
 
 describe('atomic Redis ephemeral refresh', () => {
+  it('pages only primary cleanup keys and retains scan overflow without fetching an unbounded session batch', async () => {
+    const keys = Array.from({ length: 201 }, (_, index) => `session:id${index}`)
+    const redis = {
+      scan: jest
+        .fn()
+        .mockResolvedValueOnce(['7', [...keys, 'session:id:alias']])
+        .mockResolvedValue(['0', []]),
+      mget: jest.fn(async (...batch: string[]) =>
+        batch.map((key) => JSON.stringify({ uuid: key.slice(8), userUuid: 'user' })),
+      ),
+    }
+    const repository = new RedisEphemeralSessionRepository(redis as never, 120)
+    expect(await repository.getNextCleanupBatch(200)).toHaveLength(200)
+    expect(await repository.getNextCleanupBatch(200)).toHaveLength(1)
+    expect(redis.scan).toHaveBeenCalledTimes(1)
+    expect(await repository.getNextCleanupBatch(200)).toEqual([])
+    expect(redis.scan).toHaveBeenLastCalledWith('7', 'MATCH', 'session:*', 'COUNT', 200)
+    expect(redis.mget.mock.calls.every((batch) => batch.length <= 200)).toBe(true)
+  })
   it('issues one conditional atomic command, reports missing sessions and never calls insert', async () => {
     const redis = { eval: jest.fn().mockResolvedValue(1), pipeline: jest.fn() }
     const repository = new RedisEphemeralSessionRepository(redis as never, 120)

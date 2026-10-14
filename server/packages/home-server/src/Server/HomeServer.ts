@@ -79,6 +79,7 @@ import { Service as FilesService, FileStorageUsage } from '@standardnotes/files-
 import { DirectCallDomainEventPublisher } from '@standardnotes/domain-events-infra'
 import {
   Service as AuthService,
+  SessionInactivityService,
   SharedVaultMembershipReconciler,
   AuthServiceInterface,
   type AuthReadinessSources,
@@ -624,6 +625,7 @@ export class HomeServer implements HomeServerInterface {
   private internalDiagnosticsServer: http.Server | undefined
   private logStream: PassThrough | undefined
   private runtimeLogLevelApplier: RuntimeLogLevelApplier | undefined
+  private inactivity: SessionInactivityService | undefined
   private membershipReconciler: SharedVaultMembershipReconciler | undefined
   private starting = false
   private stopPromise: Promise<Result<string>> | undefined
@@ -752,6 +754,8 @@ export class HomeServer implements HomeServerInterface {
       membershipReconciler.setReader((userUuid) => container.get(SharedVaultMembershipAuthority).read(userUuid))
       membershipReconciler.start()
       this.membershipReconciler = membershipReconciler
+      this.inactivity = container.get(SessionInactivityService)
+      this.inactivity.start()
       await revisionsService.getContainer({
         logger: winston.loggers.get('revisions-server'),
         environmentOverrides,
@@ -1631,6 +1635,8 @@ export class HomeServer implements HomeServerInterface {
 
       return Result.ok('Server started.')
     } catch (error) {
+      this.inactivity?.stop()
+      this.inactivity = undefined
       this.membershipReconciler?.stop()
       this.membershipReconciler = undefined
       const startupError = error as Error
@@ -1740,6 +1746,8 @@ export class HomeServer implements HomeServerInterface {
   }
 
   private async stopRunningServer(): Promise<Result<string>> {
+    this.inactivity?.stop()
+    this.inactivity = undefined
     this.membershipReconciler?.stop()
     this.membershipReconciler = undefined
     const errors: Error[] = []

@@ -1,6 +1,6 @@
 import { DataSource } from 'typeorm'
 import { Session } from './Session'
-import { SessionActivityService } from './SessionActivityService'
+import { SessionActivityService, SESSION_DEVICE_ID } from './SessionActivityService'
 import { GetActiveSessionsForUser } from '../UseCase/GetActiveSessionsForUser'
 import { sessionDeviceActivity1792022400000 } from '../../../migrations/sqlite/1792022400000-session-device-activity'
 
@@ -70,5 +70,18 @@ describe('authenticated session/device activity storage', () => {
       {} as never,
     )
     expect(await clock.list(user)).toEqual([])
+  })
+  it('does not publish a device observation when its inactivity fence refuses an authenticated heartbeat', async () => {
+    const guarded = new SessionActivityService(
+      db.getRepository(Session),
+      { execute: async () => ({ sessions: current }) } as GetActiveSessionsForUser,
+      {} as never,
+      () => new Date(now),
+      { check: async () => false } as never,
+    )
+    expect(await guarded.record(user, sessionId, 'profile-a')).toBeUndefined()
+    expect(await db.query('SELECT COUNT(*) AS count FROM session_device_activity')).toEqual([{ count: 0 }])
+    expect(SESSION_DEVICE_ID.test('profile-a')).toBe(true)
+    expect(SESSION_DEVICE_ID.test('../profile')).toBe(false)
   })
 })
