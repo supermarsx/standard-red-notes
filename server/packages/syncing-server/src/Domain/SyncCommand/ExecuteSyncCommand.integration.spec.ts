@@ -21,6 +21,8 @@ import { ExecuteSyncCommand } from './ExecuteSyncCommand'
 import { GetSyncCommandStatus } from './GetSyncCommandStatus'
 import { SyncCommandOutboxDispatcher } from './SyncCommandOutboxDispatcher'
 import { computeSyncCommandDigest, SyncCommandProtocolError } from './SyncCommandTypes'
+import { SQLCollaborationSaveFence } from '../../Infra/TypeORM/SQLCollaborationSaveFence'
+import { CollaborationSaveFences1791936000001 } from '../../../migrations/sqlite/1791936000001-collaboration-save-fences'
 
 @Entity({ name: 'sync_command_test_mutations' })
 class SyncCommandTestMutation {
@@ -87,6 +89,193 @@ describe('durable sync command transaction integration', () => {
 
   afterEach(async () => {
     await dataSource.destroy()
+  })
+
+  it('removes an unclaimed acceptance after a fence refusal, then writes a valid idempotent retry exactly once', async () => {
+    const runner = dataSource.createQueryRunner()
+    await new CollaborationSaveFences1791936000001().up(runner)
+    await runner.release()
+    const fence = new SQLCollaborationSaveFence(dataSource, transactionContext, 'test-secret')
+    const owner = {
+      room: '00000000-0000-4000-8000-000000000001',
+      roomEpoch: 'test-epoch',
+      userUuid: 'other-owner',
+      deviceId: 'other-device',
+      leaseId: 'other-lease',
+      action: 'claim' as const,
+    }
+    const claim = await fence.request(owner)
+    const perform = jest.fn(() =>
+      fence.run('user-1', [owner.room], undefined, async () => {
+        await transactionContext
+          .manager!.getRepository(SyncCommandTestMutation)
+          .insert({ uuid: 'retry-write', value: 'ciphertext' })
+        return { sync_token: 'retry-token' }
+      }),
+    )
+    const request = {
+      userUuid: 'user-1',
+      sessionUuid: 'session-1',
+      metadata,
+      canonicalPayload: payload,
+      execute: perform,
+    }
+    await expect(executeSyncCommand.execute(request)).rejects.toMatchObject({ code: 'collaboration_save_fence_lost' })
+    expect(await dataSource.getRepository(SyncCommandTestMutation).count()).toBe(0)
+    expect(
+      await new GetSyncCommandStatus(commandRepository).execute({
+        userUuid: 'user-1',
+        sessionUuid: 'session-1',
+        commandId: metadata.id,
+        requestDigest: metadata.digest,
+      }),
+    ).toEqual({ command: { id: metadata.id, status: 'unknown' } })
+    // The room ended; an ordinary authenticated retry is now permitted by the same SQL guard.
+    await fence.request({ ...owner, action: 'release', token: claim.token })
+    const written = await executeSyncCommand.execute(request)
+    const replayed = await executeSyncCommand.execute(request)
+    expect(written.replayed).toBe(false)
+    expect(replayed.replayed).toBe(true)
+    expect(replayed.response).toEqual(written.response)
+    expect(perform).toHaveBeenCalledTimes(2)
+    expect(await dataSource.getRepository(SyncCommandTestMutation).count()).toBe(1)
+  })
+
+  it('recovers an old pre-fix unclaimed acceptance through STATUS, then commits and replays exactly once', async () => {
+    await commandRepository.insertAcceptedIfAbsent({
+      uuid: 'old-acceptance',
+      userUuid: 'user-1',
+      sessionUuid: 'session-1',
+      commandId: metadata.id,
+      requestDigest: metadata.digest,
+      status: 'accepted',
+      responseJson: null,
+      expiresAtTimestamp: Date.now() + 60_000,
+    })
+    await dataSource
+      .getRepository(TypeORMSyncCommand)
+      .update({ uuid: 'old-acceptance' }, { createdAtTimestamp: Date.now() - 30_001 })
+    const status = new GetSyncCommandStatus(commandRepository)
+    expect(
+      await status.execute({
+        userUuid: 'user-1',
+        sessionUuid: 'session-1',
+        commandId: metadata.id,
+        requestDigest: metadata.digest,
+      }),
+    ).toEqual({ command: { id: metadata.id, status: 'unknown' } })
+    const perform = jest.fn(async () => {
+      await transactionContext
+        .manager!.getRepository(SyncCommandTestMutation)
+        .insert({ uuid: 'old-orphan-retry', value: 'ciphertext' })
+      return { sync_token: 'once' }
+    })
+    const dto = { userUuid: 'user-1', sessionUuid: 'session-1', metadata, canonicalPayload: payload, execute: perform }
+    await executeSyncCommand.execute(dto)
+    expect((await executeSyncCommand.execute(dto)).replayed).toBe(true)
+    expect(perform).toHaveBeenCalledTimes(1)
+    expect(await dataSource.getRepository(SyncCommandTestMutation).count()).toBe(1)
+  })
+
+  it.each(['claimed', 'committed', 'fresh-replacement', 'changed-digest'] as const)(
+    'does not discard a %s row that races old-acceptance STATUS cleanup',
+    async (race) => {
+      await commandRepository.insertAcceptedIfAbsent({
+        uuid: 'racing-acceptance',
+        userUuid: 'user-1',
+        sessionUuid: 'session-1',
+        commandId: metadata.id,
+        requestDigest: metadata.digest,
+        status: 'accepted',
+        responseJson: null,
+        expiresAtTimestamp: Date.now() + 60_000,
+      })
+      await dataSource
+        .getRepository(TypeORMSyncCommand)
+        .update({ uuid: 'racing-acceptance' }, { createdAtTimestamp: Date.now() - 30_001 })
+      const remove = commandRepository.deleteAcceptedIfUnclaimed.bind(commandRepository)
+      jest.spyOn(commandRepository, 'deleteAcceptedIfUnclaimed').mockImplementationOnce(async (...args) => {
+        const patch =
+          race === 'claimed'
+            ? { executionToken: 'in-flight-executor' }
+            : race === 'committed'
+              ? { status: 'committed' as const, responseJson: JSON.stringify({ sync_token: 'committed-result' }) }
+              : race === 'changed-digest'
+                ? { createdAtTimestamp: Date.now(), requestDigest: 'b'.repeat(64) }
+                : { createdAtTimestamp: Date.now() }
+        await dataSource.getRepository(TypeORMSyncCommand).update({ uuid: 'racing-acceptance' }, patch)
+        return remove(...args)
+      })
+      const result = new GetSyncCommandStatus(commandRepository).execute({
+        userUuid: 'user-1',
+        sessionUuid: 'session-1',
+        commandId: metadata.id,
+        requestDigest: metadata.digest,
+      })
+      if (race === 'changed-digest') {
+        await expect(result).rejects.toMatchObject({ code: 'sync_command_digest_mismatch' })
+      } else {
+        expect(await result).toMatchObject({ command: { status: race === 'committed' ? 'committed' : 'accepted' } })
+      }
+      expect(await dataSource.getRepository(TypeORMSyncCommand).count()).toBe(1)
+    },
+  )
+
+  it('retains a new acceptance during its grace period and never cleans another session scope', async () => {
+    await commandRepository.insertAcceptedIfAbsent({
+      uuid: 'new-acceptance',
+      userUuid: 'user-1',
+      sessionUuid: 'session-1',
+      commandId: metadata.id,
+      requestDigest: metadata.digest,
+      status: 'accepted',
+      responseJson: null,
+      expiresAtTimestamp: Date.now() + 60_000,
+    })
+    const remove = jest.spyOn(commandRepository, 'deleteAcceptedIfUnclaimed')
+    expect(
+      await new GetSyncCommandStatus(commandRepository).execute({
+        userUuid: 'user-1',
+        sessionUuid: 'session-1',
+        commandId: metadata.id,
+      }),
+    ).toMatchObject({ command: { status: 'accepted' } })
+    expect(
+      await new GetSyncCommandStatus(commandRepository).execute({
+        userUuid: 'user-1',
+        sessionUuid: 'different-session',
+        commandId: metadata.id,
+      }),
+    ).toEqual({ command: { id: metadata.id, status: 'unknown' } })
+    expect(remove).not.toHaveBeenCalled()
+    expect(await dataSource.getRepository(TypeORMSyncCommand).count()).toBe(1)
+  })
+
+  it('does not reap an old acceptance when the authenticated caller presents a conflicting digest', async () => {
+    await commandRepository.insertAcceptedIfAbsent({
+      uuid: 'digest-protected',
+      userUuid: 'user-1',
+      sessionUuid: 'session-1',
+      commandId: metadata.id,
+      requestDigest: metadata.digest,
+      status: 'accepted',
+      responseJson: null,
+      expiresAtTimestamp: Date.now() + 60_000,
+    })
+    await dataSource
+      .getRepository(TypeORMSyncCommand)
+      .update({ uuid: 'digest-protected' }, { createdAtTimestamp: Date.now() - 30_001 })
+    const remove = jest.spyOn(commandRepository, 'deleteAcceptedIfUnclaimed')
+    await expect(
+      new GetSyncCommandStatus(commandRepository).execute({
+        userUuid: 'user-1',
+        sessionUuid: 'session-1',
+        commandId: metadata.id,
+        requestDigest: 'b'.repeat(64),
+      }),
+    ).rejects.toMatchObject({ code: 'sync_command_digest_mismatch' })
+    expect(remove).not.toHaveBeenCalled()
+    expect(await dataSource.getRepository(TypeORMSyncCommand).count()).toBe(1)
   })
 
   it('rolls item work and outbox back together, then commits and replays the exact stored response', async () => {
@@ -531,7 +720,7 @@ describe('durable sync command transaction integration', () => {
       status: 'accepted',
       responseJson: null,
       executionToken: null,
-      createdAtTimestamp: 1,
+      createdAtTimestamp: Date.now(),
       updatedAtTimestamp: 1,
       expiresAtTimestamp: Date.now() + 60_000,
     })

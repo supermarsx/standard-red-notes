@@ -89,7 +89,10 @@ export class ExecuteSyncCommand {
       } catch (error) {
         // "Still being processed" and "accepted under another digest" are answers, not
         // failures: someone else holds this command, and it is theirs to finish.
-        if (error instanceof SyncCommandProtocolError) {
+        if (
+          error instanceof SyncCommandProtocolError &&
+          ['sync_command_pending', 'sync_command_digest_mismatch'].includes(error.code)
+        ) {
           throw error
         }
         if (attempt < MAX_SYNC_COMMAND_EXECUTION_ATTEMPTS && this.wasAbortedByDatabase(error)) {

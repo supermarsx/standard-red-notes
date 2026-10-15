@@ -6,6 +6,8 @@ import {
   validateSyncCommandMetadata,
 } from './SyncCommandTypes'
 
+export const SYNC_COMMAND_UNCLAIMED_GRACE_MS = 30_000
+
 export type SyncCommandStatusResult =
   | { command: { id: string; status: 'unknown' } }
   | {
@@ -25,7 +27,7 @@ export class GetSyncCommandStatus {
     const validationDigest = dto.requestDigest ?? '0'.repeat(64)
     validateSyncCommandMetadata({ id: dto.commandId, digest: validationDigest })
 
-    const command = await this.commandRepository.find(dto.userUuid, dto.sessionUuid ?? '', dto.commandId)
+    let command = await this.commandRepository.find(dto.userUuid, dto.sessionUuid ?? '', dto.commandId)
     if (!command) {
       return { command: { id: dto.commandId, status: 'unknown' } }
     }
@@ -34,6 +36,35 @@ export class GetSyncCommandStatus {
       const metadata: SyncCommandMetadata = { id: dto.commandId, digest: dto.requestDigest }
       validateSyncCommandMetadata(metadata)
       if (!syncCommandDigestsEqual(command.requestDigest, dto.requestDigest)) {
+        throw new SyncCommandProtocolError(
+          'sync_command_digest_mismatch',
+          'Sync command id was already accepted with a different request digest.',
+          409,
+        )
+      }
+    }
+
+    const cutoff = Date.now() - SYNC_COMMAND_UNCLAIMED_GRACE_MS
+    if (
+      command.status === 'accepted' &&
+      command.createdAtTimestamp !== undefined &&
+      Number.isFinite(command.createdAtTimestamp) &&
+      command.createdAtTimestamp >= 0 &&
+      command.createdAtTimestamp <= cutoff
+    ) {
+      // The SQL predicate rechecks age/status/claim under its row lock. A concurrent
+      // committed result or an executing claim can never be erased by this read.
+      const removed = await this.commandRepository.deleteAcceptedIfUnclaimed(
+        dto.userUuid,
+        dto.sessionUuid ?? '',
+        dto.commandId,
+        cutoff,
+      )
+      command = removed ? null : await this.commandRepository.find(dto.userUuid, dto.sessionUuid ?? '', dto.commandId)
+      if (!command) {
+        return { command: { id: dto.commandId, status: 'unknown' } }
+      }
+      if (dto.requestDigest !== undefined && !syncCommandDigestsEqual(command.requestDigest, dto.requestDigest)) {
         throw new SyncCommandProtocolError(
           'sync_command_digest_mismatch',
           'Sync command id was already accepted with a different request digest.',

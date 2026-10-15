@@ -62,6 +62,33 @@ describe('SQL collaboration save fence commit boundary', () => {
   const write = async (value: string) =>
     context.manager!.query('UPDATE test_notes SET content=? WHERE uuid=?', [value, ROOM])
 
+  it('rejects foreign or stale release bindings and cannot release a successor fence', async () => {
+    const lease = await fence.request(identity(ALICE))
+    for (const patch of [
+      { userUuid: BOB },
+      { deviceId: 'another-device' },
+      { leaseId: 'another-lease' },
+      { roomEpoch: 'another-epoch' },
+      { token: 'f'.repeat(64) },
+    ]) {
+      await expect(
+        fence.request({ ...identity(ALICE), action: 'release', token: lease.token, ...patch }),
+      ).rejects.toMatchObject({ code: 'collaboration_save_fence_lost' })
+    }
+    await expect(fence.request({ ...identity(ALICE), action: 'renew', token: lease.token })).resolves.toMatchObject({
+      token: lease.token,
+    })
+    now += 30_000
+    const successor = await fence.request(identity(BOB))
+    await expect(fence.request({ ...identity(ALICE), action: 'release', token: lease.token })).rejects.toMatchObject({
+      code: 'collaboration_save_fence_lost',
+    })
+    await fence.run(BOB, [ROOM], proof(successor.token!, BOB), () => write('successor-still-authorized'))
+    expect(await source.query('SELECT content FROM test_notes WHERE uuid=?', [ROOM])).toEqual([
+      { content: 'successor-still-authorized' },
+    ])
+  })
+
   it('holds the note lock through commit: a takeover waits for an already-dispatched slow save', async () => {
     const leaseA = await fence.request(identity(ALICE))
     let allowWrite!: () => void

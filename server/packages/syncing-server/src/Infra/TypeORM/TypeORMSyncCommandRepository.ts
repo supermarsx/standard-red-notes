@@ -89,11 +89,16 @@ export class TypeORMSyncCommandRepository implements SyncCommandRepositoryInterf
     }
   }
 
-  async deleteAcceptedIfUnclaimed(userUuid: string, sessionUuid: string, commandId: string): Promise<boolean> {
+  async deleteAcceptedIfUnclaimed(
+    userUuid: string,
+    sessionUuid: string,
+    commandId: string,
+    acceptedBeforeTimestamp?: number,
+  ): Promise<boolean> {
     // Both conditions matter. A committed command keeps its stored result for replay, and a
     // claimed one is being executed by someone else: its claim is a row lock this statement
     // waits behind, and by the time it is released the row is either committed or free.
-    const result = await this.repository
+    const query = this.repository
       .createQueryBuilder()
       .delete()
       .from(TypeORMSyncCommand)
@@ -102,7 +107,10 @@ export class TypeORMSyncCommandRepository implements SyncCommandRepositoryInterf
       .andWhere('command_id = :commandId', { commandId })
       .andWhere('status = :status', { status: 'accepted' })
       .andWhere('execution_token IS NULL')
-      .execute()
+    if (acceptedBeforeTimestamp !== undefined) {
+      query.andWhere('created_at_timestamp <= :acceptedBeforeTimestamp', { acceptedBeforeTimestamp })
+    }
+    const result = await query.execute()
 
     return (result.affected ?? 0) > 0
   }
@@ -132,6 +140,7 @@ export class TypeORMSyncCommandRepository implements SyncCommandRepositoryInterf
       status: command.status,
       responseJson: command.responseJson,
       expiresAtTimestamp: Number(command.expiresAtTimestamp),
+      createdAtTimestamp: Number(command.createdAtTimestamp),
     }
   }
 }
