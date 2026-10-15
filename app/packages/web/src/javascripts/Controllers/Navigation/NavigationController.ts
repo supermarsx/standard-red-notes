@@ -23,6 +23,7 @@ import {
   InternalEventPublishStrategy,
   VectorIconNameOrEmoji,
   isTag,
+  isFolderItem,
   PrefKey,
   ApplicationEvent,
   InternalEventBusInterface,
@@ -301,13 +302,18 @@ export class NavigationController
         if (!tagUuid) {
           this.setAllNotesCount(this.items.allCountableNotesCount())
         } else {
-          const tag = this.items.findItem<SNTag>(tagUuid)
+          const tag = this.items.findItem(tagUuid)
           if (tag) {
-            this.tagsCountsState.update([tag])
+            if (isFolderItem(tag)) {
+              this.tagsCountsState.updateFolders([tag])
+            } else if (isTag(tag)) {
+              this.tagsCountsState.update([tag])
+            }
           }
         }
       }),
     )
+    this.setAllNotesCount(this.items.allCountableNotesCount())
 
     this.disposers.push(
       reaction(
@@ -339,12 +345,14 @@ export class NavigationController
   private reloadFolders(): void {
     runInAction(() => {
       this.folders = this.items.getItems<SNFolder>(FolderContentType)
+      this.tagsCountsState.updateFolders(this.folders)
     })
   }
 
   private reloadTags(): void {
     runInAction(() => {
       this.tags = this.items.getDisplayableTags()
+      this.tagsCountsState.update(this.tags)
       this.starredTags = this.tags.filter((tag) => tag.starred)
       this.smartViews = this.items.getSmartViews().filter((view) => {
         if (!this.isSearching) {
@@ -1475,6 +1483,10 @@ export class NavigationController
 
   public getNotesCount(tag: SNTag): number {
     return this.tagsCountsState.counts[tag.uuid] || 0
+  }
+
+  public getFolderNotesCount(folder: SNFolder): number {
+    return this.tagsCountsState.folderCounts[folder.uuid] || 0
   }
 
   /**

@@ -60,14 +60,16 @@ const BulkOrganizeModal = ({ isOpen, close }: Props) => {
    * place that always lists it, whatever the sidebar's reveal toggle happens to be set to.
    * Nothing a user hides can become unreachable from here.
    */
-  const rows: Row[] = useMemo(() => {
+  // Read observable count snapshots on every render; memoizing by folder/tag
+  // object identity would retain old counts after note-only deletions.
+  const rows: Row[] = (() => {
     if (tab === 'folders') {
       return folders.map((folder) => ({
         uuid: folder.uuid,
         title: folder.title,
         parentUuid: folder.parentId,
         parentTitle: folder.parentId ? (folderTitleByUuid.get(folder.parentId) ?? '') : '',
-        noteCount: folder.noteReferences.length,
+        noteCount: navigationController.getFolderNotesCount(folder),
         hidden: navigationController.isFolderHidden(folder),
         hiddenByAncestor:
           navigationController.isFolderInHiddenSubtree(folder) && !navigationController.isFolderHidden(folder),
@@ -85,7 +87,7 @@ const BulkOrganizeModal = ({ isOpen, close }: Props) => {
         hiddenByAncestor: navigationController.isTagInHiddenSubtree(tag) && !navigationController.isTagHidden(tag),
       }
     })
-  }, [tab, folders, tags, folderTitleByUuid, navigationController])
+  })()
 
   const setRowsHidden = useCallback(
     async (uuids: string[], hidden: boolean) => {

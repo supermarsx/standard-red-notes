@@ -66,7 +66,7 @@ export const FoldersListItem: FunctionComponent<Props> = observer(
     const isSelected = navigationController.selectedFolder === folder && navigationController.selectedLocation === TYPE
     const isEditing = navigationController.editingFolder === folder
     const isAddingSubfolder = navigationController.addingSubfolderTo === folder
-    const noteCounts = computed(() => folder.noteCount)
+    const noteCounts = computed(() => navigationController.getFolderNotesCount(folder))
 
     const childrenFolders = computed(() => navigationController.getFolderChildren(folder)).get()
     const hasChildren = childrenFolders.length > 0

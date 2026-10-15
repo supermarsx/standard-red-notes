@@ -125,6 +125,8 @@ export class NotesController
   contextMenuMaxHeight: number | 'auto' = 'auto'
   showProtectedWarning = false
   shouldShowSuperExportModal = false
+  trashedNotesCount_ = 0
+  private readonly trashedNoteUuids = new Set<string>()
 
   commandRegisterDisposers: (() => void)[] = []
   private readonly commentMutationQueues = new WeakMap<object, Map<string, Promise<void>>>()
@@ -140,6 +142,7 @@ export class NotesController
       contextMenuOpen: observable,
       showProtectedWarning: observable,
       shouldShowSuperExportModal: observable,
+      trashedNotesCount_: observable,
 
       selectedNotes: computed,
       firstSelectedNote: computed,
@@ -161,6 +164,28 @@ export class NotesController
 
     application.events.addEventHandler(this, ApplicationEvent.PreferencesChanged)
     application.events.addEventHandler(this, CrossControllerEvent.UnselectAllNotes)
+
+    for (const note of application.items.trashedItems) {
+      this.trashedNoteUuids.add(note.uuid)
+    }
+    this.trashedNotesCount_ = this.trashedNoteUuids.size
+    this.disposers.push(
+      application.items.addObserver<SNNote>(ContentType.TYPES.Note, ({ changed, inserted, removed, unerrored }) => {
+        for (const note of [...changed, ...inserted, ...unerrored]) {
+          if (note.trashed) {
+            this.trashedNoteUuids.add(note.uuid)
+          } else {
+            this.trashedNoteUuids.delete(note.uuid)
+          }
+        }
+        for (const note of removed) {
+          this.trashedNoteUuids.delete(note.uuid)
+        }
+        runInAction(() => {
+          this.trashedNotesCount_ = this.trashedNoteUuids.size
+        })
+      }),
+    )
 
     this.disposers.push(
       reaction(
@@ -321,7 +346,7 @@ export class NotesController
   }
 
   get trashedNotesCount(): number {
-    return this.application.items.trashedItems.length
+    return this.trashedNotesCount_
   }
 
   setContextMenuOpen = (open: boolean) => {

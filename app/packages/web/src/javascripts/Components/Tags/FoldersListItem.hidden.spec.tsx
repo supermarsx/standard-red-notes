@@ -1,6 +1,7 @@
 /** @jest-environment jsdom */
 import { act, createElement } from 'react'
 import { createRoot, Root } from 'react-dom/client'
+import { observable, runInAction } from 'mobx'
 
 /**
  * A hidden folder only reaches this row while the sidebar's reveal toggle is on, so the row
@@ -57,7 +58,7 @@ describe('FoldersListItem hidden marker', () => {
     container.remove()
   })
 
-  const renderRow = async (isHidden: boolean) => {
+  const renderRow = async (isHidden: boolean, getFolderNotesCount = () => 0) => {
     const folder = {
       uuid: 'folder-1',
       title: 'Receipts',
@@ -77,6 +78,7 @@ describe('FoldersListItem hidden marker', () => {
             contextMenuTagSection: 'folders',
             editingFolder: undefined,
             getFolderChildren: jest.fn(() => []),
+            getFolderNotesCount,
             isFolderHidden: jest.fn(() => isHidden),
             renameFolder: jest.fn(async () => undefined),
             selectedFolder: undefined,
@@ -117,5 +119,17 @@ describe('FoldersListItem hidden marker', () => {
 
     expect(container.querySelector(`[aria-label="${HIDDEN_MARKER_LABEL}"]`)).toBeNull()
     expect(container.querySelector('.tag')?.className).not.toContain('opacity-60')
+  })
+
+  it('renders live scoped counts and updates them without replacing the folder payload', async () => {
+    const counts = observable({ value: 3 })
+    await renderRow(false, () => counts.value)
+    expect(container.querySelector('.count')?.textContent).toBe('3')
+    act(() =>
+      runInAction(() => {
+        counts.value = 0
+      }),
+    )
+    expect(container.querySelector('.count')?.textContent).toBe('0')
   })
 })

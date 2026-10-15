@@ -368,6 +368,10 @@ export class ItemManager extends Services.AbstractService implements Services.It
     return this.itemCounter.countableItemsForTag(tag)
   }
 
+  public countableNotesForFolder(folder: Models.SNFolder, includeDescendants = false): number {
+    return this.itemCounter.countableNotesForFolder(folder, includeDescendants)
+  }
+
   public getNoteCount(): number {
     return this.noteCount
   }

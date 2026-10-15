@@ -22,6 +22,7 @@
  */
 import { createElement, act } from 'react'
 import { createRoot, Root } from 'react-dom/client'
+import { observable, runInAction } from 'mobx'
 
 jest.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }))
 jest.mock('@/Components/Popover/Popover', () => () => null)
@@ -91,6 +92,7 @@ const makeApp = () =>
       isTagInHiddenSubtree: () => false,
       getTagParentForDisplay: () => undefined,
       getNotesCount: () => 0,
+      getFolderNotesCount: (folder: Folder) => folder.noteReferences.length,
       bulkSetFoldersHidden: jest.fn(async () => undefined),
       bulkSetTagsHidden: jest.fn(async () => undefined),
       bulkDeleteFolders: jest.fn(async () => undefined),
@@ -144,8 +146,7 @@ afterEach(() => {
   Element.prototype.animate = originalAnimate
 })
 
-const render = () => {
-  const app = makeApp()
+const render = (app = makeApp()) => {
   act(() => {
     root.render(
       createElement(ApplicationProvider, {
@@ -271,4 +272,24 @@ describe('BulkOrganizeModal column contract', () => {
       SHOWN_TOOLTIP,
     ])
   })
+})
+
+it('updates folder note totals while the modal stays open and folder instances remain unchanged', () => {
+  const counts = observable({ value: 7 })
+  const app = makeApp() as unknown as { navigationController: { getFolderNotesCount(folder: Folder): number } }
+  app.navigationController.getFolderNotesCount = () => counts.value
+  render(app as never)
+  expect(cellsOfRow(bodyRows()[0], 'first folder')[3].textContent).toBe('7')
+  act(() =>
+    runInAction(() => {
+      counts.value = 2
+    }),
+  )
+  expect(cellsOfRow(bodyRows()[0], 'first folder')[3].textContent).toBe('2')
+  act(() =>
+    runInAction(() => {
+      counts.value = 0
+    }),
+  )
+  expect(cellsOfRow(bodyRows()[0], 'first folder')[3].textContent).toBe('0')
 })

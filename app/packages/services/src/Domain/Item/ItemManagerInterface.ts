@@ -8,6 +8,7 @@ import {
   PredicateInterface,
   DecryptedPayload,
   SNTag,
+  SNFolder,
   ItemInterface,
   AnyItemInterface,
   ItemCollection,
@@ -114,6 +115,7 @@ export interface ItemManagerInterface extends AbstractService {
   allCountableNotesCount(): number
   allCountableFilesCount(): number
   countableNotesForTag(tag: SNTag | SmartView): number
+  countableNotesForFolder(folder: SNFolder, includeDescendants?: boolean): number
   getNoteCount(): number
   getDisplayableTags(): SNTag[]
   getTagChildren(itemToLookupUuidFor: SNTag): SNTag[]
