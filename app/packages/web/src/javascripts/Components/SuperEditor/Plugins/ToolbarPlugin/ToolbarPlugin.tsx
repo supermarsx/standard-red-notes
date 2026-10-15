@@ -1858,8 +1858,8 @@ const ToolbarPlugin = ({
 
   const [isFocusInEditor, setIsFocusInEditor] = useState(false)
   const [isFocusInToolbar, setIsFocusInToolbar] = useState(false)
-  const canShowToolbarOnMobile = isFocusInEditor || isFocusInToolbar || (!isEditable && Boolean(note))
-  const canShowAllItems = isMobile || isToolbarFixedToTop || (!isEditable && Boolean(note))
+  const canShowToolbarOnMobile = isFocusInEditor || isFocusInToolbar
+  const canShowAllItems = isMobile || isToolbarFixedToTop
 
   useEffect(() => {
     const container = containerRef.current
@@ -3414,10 +3414,8 @@ const ToolbarPlugin = ({
   // only for the non-ribbon floating selection toolbar, further below.)
   const hasContextualTab = canShowAllItems && !!effectiveContextualWidget && contextualButtons.length > 0
   const ribbonTabs = [
-    ...superGroupTabs
-      .filter((tab) => isEditable || tab.id === 'checklistTab')
-      .map((tab) => ({ id: tab.id as string, label: tab.label })),
-    ...(note ? [{ id: 'review', label: 'Review' }] : []),
+    ...superGroupTabs.filter(() => isEditable).map((tab) => ({ id: tab.id as string, label: tab.label })),
+    ...(note && isEditable ? [{ id: 'review', label: 'Review' }] : []),
     ...(hasContextualTab && isEditable ? [{ id: CONTEXTUAL_TAB_ID, label: effectiveContextualWidget!.label }] : []),
   ]
   const effectiveTabId =
@@ -3659,7 +3657,7 @@ const ToolbarPlugin = ({
       <div
         className={classNames(
           'bg-contrast',
-          !isEditable && !note ? 'hidden opacity-0' : '',
+          !isEditable ? 'hidden opacity-0' : '',
           isMobile && !canShowToolbarOnMobile ? 'hidden' : '',
           !isMobile && 'border-border bg-default border-b',
           !isMobile

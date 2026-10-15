@@ -107,12 +107,13 @@ afterEach(async () => {
   container.remove()
 })
 
-const mount = async (withChecklist = true) => {
+const mount = async (withChecklist = true, readonly = false) => {
   await act(async () => {
     root.render(
       <ApplicationProvider application={fakeApp}>
         <AndroidBackHandlerProvider application={fakeApp}>
           <BlocksEditorComposer
+            readonly={readonly}
             initialValue={() => {
               if (withChecklist) {
                 $getRoot().append(
@@ -131,7 +132,7 @@ const mount = async (withChecklist = true) => {
     )
     await Promise.resolve()
   })
-  if (withChecklist) {
+  if (withChecklist && !readonly) {
     await clickTab('Checklist')
   }
 }
@@ -228,10 +229,40 @@ it('uses ribbon groups for per-item settings and Review, with no duplicate task 
   expect(container.querySelector('[aria-label="Review tools"]')).toBeNull()
   await clickTab('Review')
   await act(async () => editor.setEditable(false))
-  expect(findTab('Review')?.getAttribute('aria-selected')).toBe('true')
+  expect(findTab('Review')).toBeUndefined()
+  expect(findTab('Checklist')).toBeUndefined()
   expect(findTab('Home')).toBeUndefined()
-  expect(container.querySelector('[aria-label="Review tools"]')).not.toBeNull()
+  expect(container.querySelector('[aria-label="Review tools"]')).toBeNull()
+  expect(container.querySelector('#super-mobile-toolbar')?.classList.contains('hidden')).toBe(true)
+  await act(async () => editor.setEditable(true))
+  expect(findTab('Review')?.getAttribute('aria-selected')).toBe('true')
+  expect(findTab('Checklist')).toBeDefined()
+  expect(container.querySelector('#super-mobile-toolbar')?.classList.contains('hidden')).toBe(false)
   await act(async () => editor.update(() => $getRoot().clear().append($createParagraphNode()), { discrete: true }))
   expect(findTab('Checklist')).toBeUndefined()
+  expect(findTab('Review')).toBeDefined()
+})
+
+it('removes checklist controls when the editor stops being editable and restores them when it resumes', async () => {
+  await mount()
+  expect(container.querySelector('[aria-label="Checklist tasks"]')).not.toBeNull()
+  await act(async () => editor.setEditable(false))
+  expect(findTab('Checklist')).toBeUndefined()
+  expect(findTab('Review')).toBeUndefined()
+  expect(container.querySelector('[aria-label="Checklist tasks"]')).toBeNull()
+  expect(container.querySelector('[aria-label="Review tools"]')).toBeNull()
+  await act(async () => editor.setEditable(true))
+  expect(findTab('Checklist')?.getAttribute('aria-selected')).toBe('true')
+  expect(container.querySelector('[aria-label="Checklist tasks"]')).not.toBeNull()
+})
+
+it('does not offer Checklist or Review during an initially readonly editor lifetime', async () => {
+  await mount(true, true)
+  expect(findTab('Checklist')).toBeUndefined()
+  expect(findTab('Review')).toBeUndefined()
+  expect(container.querySelector('[aria-label="Checklist tasks"]')).toBeNull()
+  expect(container.querySelector('[aria-label="Review tools"]')).toBeNull()
+  await act(async () => editor.setEditable(true))
+  expect(findTab('Checklist')).toBeDefined()
   expect(findTab('Review')).toBeDefined()
 })
