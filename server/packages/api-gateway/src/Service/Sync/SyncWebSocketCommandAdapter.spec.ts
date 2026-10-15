@@ -273,6 +273,7 @@ describe('SyncWebSocketCommandAdapter', () => {
 
   it.each([
     ['read-only session', { session: { uuid: 'session-1', readonly_access: true } }, 'READ_ONLY'],
+    ['database tinyint read-only session', { session: { uuid: 'session-1', readonly_access: 1 } }, 'READ_ONLY'],
     ['content limit', { hasContentLimit: true }, 'CONTENT_LIMIT'],
     ['shadow ban', { shadow_banned: true }, 'SHADOW_BANNED'],
     // The per-user "Live sync" switch has its own public, permanent code: it is
@@ -300,6 +301,25 @@ describe('SyncWebSocketCommandAdapter', () => {
         new AbortController().signal,
       ),
     ).resolves.toEqual({ authorized: false, code })
+  })
+
+  // The token's `belongs_to_shared_vaults` is built from auth's event-replicated
+  it('accepts the legacy signed tinyint write policy and forwards a canonical boolean session', async () => {
+    const { adapter, durable } = build({ session: { uuid: 'session-1', readonly_access: 0 } })
+    const digest = 'a'.repeat(64)
+    const payload = { command: 'SYNC_ITEMS', body: { api: '20200115', items: [] } }
+    await expect(adapter.authorize({ identity, operation: 'COMMAND', commandId: 'tinyint-write', digest, payloadLength: 1, payload }, new AbortController().signal)).resolves.toMatchObject({ authorized: true })
+    await adapter.execute({ identity, commandId: 'tinyint-write', digest, payload }, new AbortController().signal)
+    const response = (durable.sync as jest.Mock).mock.calls[0][1] as { locals: { session: { readonly_access: unknown }; readOnlyAccess: unknown } }
+    expect(response.locals.session.readonly_access).toBe(false)
+    expect(response.locals.readOnlyAccess).toBe(false)
+  })
+
+  it.each([undefined, null, -1, 2, '0', '1', 'false'])('rejects a signed malformed access-policy representation: %s', async (value) => {
+    const { adapter, durable } = build({ session: { uuid: 'session-1', readonly_access: value } })
+    await expect(adapter.authorize({ identity, operation: 'STATUS', commandId: 'invalid-policy', digest: 'a'.repeat(64), payloadLength: 0 }, new AbortController().signal)).rejects.toThrow('invalid token shape')
+    expect(durable.sync).not.toHaveBeenCalled()
+    expect(durable.getSyncCommandStatus).not.toHaveBeenCalled()
   })
 
   // The token's `belongs_to_shared_vaults` is built from auth's event-replicated

@@ -578,7 +578,7 @@ export class SyncWebSocketCommandAdapter
       typeof token.user.uuid !== 'string' ||
       !this.isJsonObject(token.session) ||
       typeof token.session.uuid !== 'string' ||
-      typeof token.session.readonly_access !== 'boolean' ||
+      ![true, false, 0, 1].includes(token.session.readonly_access as boolean | number) ||
       !Array.isArray(token.roles) ||
       token.roles.some((role) => !this.isJsonObject(role) || typeof role.name !== 'string')
     ) {
@@ -588,7 +588,8 @@ export class SyncWebSocketCommandAdapter
         'stale',
       )
     }
-    const session = token.session
+    // Existing signed authority tokens may still carry the driver's tinyint representation.
+    const session = { ...token.session, readonly_access: token.session.readonly_access === true || (token.session.readonly_access as unknown) === 1 }
     if (token.user.uuid !== identity.userUuid || session?.uuid !== identity.sessionUuid) {
       throw new SessionValidationError(
         'Sync session identity changed.',

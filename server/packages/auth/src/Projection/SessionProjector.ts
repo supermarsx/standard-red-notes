@@ -23,7 +23,7 @@ export class SessionProjector implements CustomProjectorInterface<Session> {
       updated_at: this.timer.convertDateToISOString(session.updatedAt),
       device_info: this.sessionService.getDeviceInfo(session),
       ip_address: session.ipAddress ?? null,
-      readonly_access: session.readonlyAccess,
+      readonly_access: this.projectReadonlyAccess(session),
       access_expiration: this.timer.convertDateToISOString(session.accessExpiration),
       refresh_expiration: this.timer.convertDateToISOString(session.refreshExpiration),
     }
@@ -40,10 +40,22 @@ export class SessionProjector implements CustomProjectorInterface<Session> {
           device_info: this.sessionService.getDeviceInfo(session),
           ip_address: session.ipAddress ?? null,
           current: session.uuid === currentSession.uuid,
-          readonly_access: session.readonlyAccess,
+          readonly_access: this.projectReadonlyAccess(session),
         }
       default:
         throw new Error(`Not supported projection type: ${projectionType}`)
     }
+  }
+
+  private projectReadonlyAccess(session: Session): boolean {
+    // MySQL/MariaDB hydrate the tinyint column as 0/1, despite its declared TS type.
+    const value: unknown = session.readonlyAccess
+    if (value === true || value === 1) {
+      return true
+    }
+    if (value === false || value === 0) {
+      return false
+    }
+    throw new Error('Session access policy has an invalid representation.')
   }
 }
