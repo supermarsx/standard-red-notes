@@ -26,14 +26,25 @@ export class SessionInactivityService {
   async check(session: Session, observe = false): Promise<boolean> {
     const active = await runAuthTypeORMTransaction(this.sessions.manager.connection, async (manager) => {
       const now = this.now().getTime()
-      await manager
-        .createQueryBuilder()
-        .insert()
-        .into('session_activity')
-        .values({ user_uuid: session.userUuid, session_uuid: session.uuid, last_seen_at: null, revoked_at: null })
-        .orIgnore()
-        .execute()
-      const suffix = ['mysql', 'mariadb'].includes(this.sessions.manager.connection.options.type) ? ' FOR UPDATE' : ''
+      const usesRowLocks = ['mysql', 'mariadb'].includes(this.sessions.manager.connection.options.type)
+      if (usesRowLocks) {
+        // A duplicate INSERT IGNORE holds a shared lock. Concurrent checks then
+        // deadlock upgrading it to FOR UPDATE. This no-op upsert takes the
+        // exclusive lock immediately and preserves observations and tombstones.
+        await manager.query(
+          'INSERT INTO session_activity (user_uuid, session_uuid, last_seen_at, revoked_at) VALUES (?, ?, NULL, NULL) ON DUPLICATE KEY UPDATE session_uuid = session_uuid',
+          [session.userUuid, session.uuid],
+        )
+      } else {
+        await manager
+          .createQueryBuilder()
+          .insert()
+          .into('session_activity')
+          .values({ user_uuid: session.userUuid, session_uuid: session.uuid, last_seen_at: null, revoked_at: null })
+          .orIgnore()
+          .execute()
+      }
+      const suffix = usesRowLocks ? ' FOR UPDATE' : ''
       const [row] = await manager.query(
         'SELECT last_seen_at, revoked_at FROM session_activity WHERE user_uuid = ? AND session_uuid = ?' + suffix,
         [session.userUuid, session.uuid],
