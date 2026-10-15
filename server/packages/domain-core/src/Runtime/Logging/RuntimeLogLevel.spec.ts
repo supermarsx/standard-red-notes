@@ -280,3 +280,53 @@ async function flushPromises(): Promise<void> {
   await Promise.resolve()
   await Promise.resolve()
 }
+
+it('rejects a file that grows beyond the bound while opening and closes it', async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'srn-log-open-race-'))
+  const filename = path.join(directory, 'settings.json')
+  const originalOpen = fs.open.bind(fs)
+  let handle: Awaited<ReturnType<typeof fs.open>> | undefined
+  try {
+    await fs.writeFile(filename, JSON.stringify({ logging: { level: 'debug' } }))
+    jest.spyOn(fs, 'open').mockImplementationOnce(async (...args) => {
+      await fs.appendFile(filename, ' '.repeat(1024 * 1024))
+      handle = await originalOpen(...args)
+      return handle
+    })
+    await expect(new ServerSettingsLogLevelResolver(filename, 'warn').resolve()).resolves.toBe('warn')
+    expect(handle).toBeDefined()
+    await expect(handle!.stat()).rejects.toMatchObject({ code: 'EBADF' })
+  } finally {
+    jest.restoreAllMocks()
+    await fs.rm(directory, { recursive: true, force: true })
+  }
+})
+
+it('rejects valid JSON that grows during read and closes the handle', async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'srn-log-read-race-'))
+  const filename = path.join(directory, 'settings.json')
+  const originalOpen = fs.open.bind(fs)
+  let handle: Awaited<ReturnType<typeof fs.open>> | undefined
+  try {
+    await fs.writeFile(filename, JSON.stringify({ logging: { level: 'debug' } }))
+    jest.spyOn(fs, 'open').mockImplementationOnce(async (...args) => {
+      const opened = await originalOpen(...args)
+      handle = opened
+      const originalStat = opened.stat.bind(opened)
+      jest.spyOn(opened, 'stat').mockImplementationOnce(async () => {
+        const stats = await originalStat()
+        // Whitespace preserves valid JSON, so a missing size-change guard
+        // would incorrectly accept the new logging level.
+        await fs.appendFile(filename, ' ')
+        return stats
+      })
+      return opened
+    })
+    await expect(new ServerSettingsLogLevelResolver(filename, 'warn').resolve()).resolves.toBe('warn')
+    expect(handle).toBeDefined()
+    await expect(handle!.stat()).rejects.toMatchObject({ code: 'EBADF' })
+  } finally {
+    jest.restoreAllMocks()
+    await fs.rm(directory, { recursive: true, force: true })
+  }
+})

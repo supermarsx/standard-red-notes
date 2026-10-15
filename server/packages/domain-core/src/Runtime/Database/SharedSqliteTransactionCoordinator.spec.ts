@@ -70,3 +70,52 @@ describe('Shared SQLite transaction coordination', () => {
     expect(sharedSqliteTransactionQueueStatsForTesting()).toEqual({ activeQueueKeyCount: 0, sqliteFileQueueCount: 0 })
   })
 })
+
+it('serializes normalized shared memory URIs without conflating independent named memory databases', async () => {
+  const firstEntered = deferred(),
+    gate = deferred()
+  let sameEntered = false,
+    otherEntered = false
+  const first = runSharedSqliteTransaction({}, 'file:shared-memory?cache=shared&mode=memory', async () => {
+    firstEntered.release()
+    await gate.promise
+    return 'first'
+  })
+  await firstEntered.promise
+  const same = runSharedSqliteTransaction({}, 'file:shared-memory?mode=memory&cache=shared', async () => {
+    sameEntered = true
+    return 'same'
+  })
+  const other = runSharedSqliteTransaction({}, 'file:other-memory?mode=memory&cache=shared', async () => {
+    otherEntered = true
+    return 'other'
+  })
+  await other
+  expect(sameEntered).toBe(false)
+  expect(otherEntered).toBe(true)
+  gate.release()
+  expect(await Promise.all([first, same])).toEqual(['first', 'same'])
+  expect(sharedSqliteTransactionQueueStatsForTesting()).toEqual({ activeQueueKeyCount: 0, sqliteFileQueueCount: 0 })
+})
+
+it('normalizes percent-encoded file URIs and the explicit memory URI form', async () => {
+  const started = deferred(),
+    gate = deferred()
+  let sameEntered = false
+  const first = runSharedSqliteTransaction({}, 'file:encoded%20shared.sqlite', async () => {
+    started.release()
+    await gate.promise
+  })
+  await started.promise
+  const second = runSharedSqliteTransaction({}, resolve('encoded shared.sqlite'), async () => {
+    sameEntered = true
+  })
+  await Promise.resolve()
+  expect(sameEntered).toBe(false)
+  gate.release()
+  await Promise.all([first, second])
+  await expect(runSharedSqliteTransaction({}, 'file::memory:?cache=shared', async () => 'memory')).resolves.toBe(
+    'memory',
+  )
+  expect(sharedSqliteTransactionQueueStatsForTesting()).toEqual({ activeQueueKeyCount: 0, sqliteFileQueueCount: 0 })
+})
