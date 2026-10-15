@@ -11,6 +11,7 @@ jest.mock('../Icon/Icon', () => ({ __esModule: true, default: () => null }))
 it('retains the attribution slot when empty and exposes full names despite visual truncation', () => {
   const container = document.createElement('div'),
     root = createRoot(container)
+  const measure = jest.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ width: 43 } as DOMRect)
   const contact = { name: 'A very long collaborator name', uuid: 'alice' } as TrustedContactInterface
   try {
     act(() => root.render(createElement(LastEditedByBadge, { contact })))
@@ -22,6 +23,13 @@ it('retains the attribution slot when empty and exposes full names despite visua
     expect(badge.getAttribute('aria-hidden')).toBe('true')
     expect(badge.textContent).toBe('')
     expect(badge.getAttribute('title')).toBeNull()
+    expect((badge as HTMLElement).style.width).toBe('43px')
+    act(() =>
+      root.render(createElement(LastEditedByBadge, { contact: { name: 'Jo', uuid: 'jo' } as TrustedContactInterface })),
+    )
+    expect((badge as HTMLElement).style.width).toBe('')
+    expect(badge.classList.contains('w-auto')).toBe(true)
+    expect(badge.classList.contains('w-24')).toBe(false)
   } finally {
     act(() => root.unmount())
   }
