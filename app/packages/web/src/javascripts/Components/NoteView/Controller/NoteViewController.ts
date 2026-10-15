@@ -543,9 +543,15 @@ export class NoteViewController implements ItemViewControllerInterface {
         return
       }
       if (CollaborationSaverRegistry.get(noteUuid)) {
-        // A non-saver never dirties the account item. Only the room's remote
-        // acknowledgement can prove its retained edits are safe to discard.
-        throw error
+        // Readiness can disappear after the last edit was already acknowledged,
+        // or before an initially read-only room ever accepted an edit. Prove
+        // local propagation and exact retained-state coverage before allowing
+        // navigation; unknown or pending CRDT work must keep its owner mounted.
+        await this.syncController.awaitCurrentLocalPropagationStrict()
+        if (!CollaborationSaverRegistry.isDurabilityConfirmed(noteUuid)) {
+          throw error
+        }
+        return
       }
       await this.retainNoteAfterDurabilityFlushFailure(error)
     }

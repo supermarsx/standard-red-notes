@@ -146,6 +146,21 @@ describe('collaboration saver election', () => {
       expect(CollaborationSaverRegistry.get('room')).toMatchObject({ isSaver: false, paused: true })
       expect(awareness.getLocalState()?.saver.canSaveOverSocket).toBe(false)
     })
+    it('reclaims a proof promptly when the lane recovers instead of waiting out the old quarantine', async () => {
+      const stamp = createCollaborationRevisionStamp('epoch', documentStateOf(doc), '', Date.now())!
+      content = { text: '', appData: { 'org.standardnotes.sn': { collaborationRevision: stamp } } }
+      jest.mocked(renewCollaborationSaveFence).mockRejectedValueOnce(new Error('temporary outage'))
+      await jest.advanceTimersByTimeAsync(23_000)
+      expect(CollaborationSaverRegistry.get('room')).toMatchObject({ paused: true, isSaver: false })
+      lane = { usable: false }
+      changeLane()
+      lane = { usable: true }
+      changeLane()
+      await jest.advanceTimersByTimeAsync(2_000)
+      expect(CollaborationSaverRegistry.get('room')).toMatchObject({ paused: false, isSaver: true })
+      expect(claimCollaborationSaveFence).toHaveBeenCalledTimes(2)
+      expect(application.sync.sync).toHaveBeenCalledTimes(2)
+    })
     it('waits for the elected peer to hold its server fence before enabling edits', async () => {
       await jest.advanceTimersByTimeAsync(2_000)
       awareness.getStates().set(999, { saver: { ...participant('0', 'peer'), saving: false } })

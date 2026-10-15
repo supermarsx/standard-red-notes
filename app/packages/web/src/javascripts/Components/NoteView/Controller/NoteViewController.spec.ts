@@ -368,6 +368,48 @@ describe('note view controller', () => {
     consoleError.mockRestore()
   })
 
+  it.each([false, true, undefined])(
+    'allows a paused collaboration handover only with explicit durability coverage (pending=%s)',
+    async (pending) => {
+      const note = { uuid: 'paused-note', text: '' } as jest.Mocked<SNNote>
+      application.items.findItem = jest.fn().mockReturnValue(note)
+      const controller = new NoteViewController(
+        note,
+        application.items,
+        application.mutator,
+        application.sync,
+        application.sessions,
+        application.preferences,
+        application.componentManager,
+        application.alerts,
+        application.isNativeMobileWebUseCase,
+      )
+      await controller.initialize()
+      controller.registerEditorDurabilityFlush(
+        jest.fn().mockRejectedValue(new Error('Checklist collaboration provider is not mutation-ready.')),
+      )
+      CollaborationSaverRegistry.set(note.uuid, {
+        active: true,
+        leaseId: 'paused',
+        isSaver: false,
+        paused: true,
+        saveRequest: 0,
+      })
+      if (pending !== undefined) {
+        CollaborationSaverRegistry.setPendingReader(note.uuid, () => pending)
+      }
+      try {
+        if (pending === false) {
+          await expect(controller.flushAndAwaitPendingSave()).resolves.toBeUndefined()
+        } else {
+          await expect(controller.flushAndAwaitPendingSave()).rejects.toThrow('not mutation-ready')
+        }
+      } finally {
+        CollaborationSaverRegistry.clear(note.uuid, 'paused')
+      }
+    },
+  )
+
   /**
    * The relay flush may only be waived once the LOCAL copy is proved durable. When
    * local persistence also failed there is genuine unsaved content, so the teardown

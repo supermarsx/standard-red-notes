@@ -122,10 +122,21 @@ class CollaborationSaverRegistryImpl {
   hasUndurableState(room: string): boolean {
     return this.pendingReaders.get(room)?.() ?? false
   }
+  isDurabilityConfirmed(room: string): boolean {
+    const reader = this.pendingReaders.get(room)
+    if (!reader) {
+      return false
+    }
+    try {
+      return !reader()
+    } catch {
+      return false
+    }
+  }
 }
 
 export const CollaborationSaverRegistry = new CollaborationSaverRegistryImpl()
-export const SAVER_HANDOFF_SETTLE_MS = 2_000
+export const SAVER_HANDOFF_SETTLE_MS = 200
 export const SAVER_DURABILITY_TIMEOUT_MS = 15_000
 export const SAVER_INITIALIZATION_TIMEOUT_MS = 15_000
 const pendingFenceReleasesByApplication = new WeakMap<WebApplication, Map<string, Promise<void>>>()
@@ -159,6 +170,7 @@ export function installCollaborationSaver(
   let generation = 0
   let initializationTimer: ReturnType<typeof setTimeout> | undefined
   let blockedInitialization: number | undefined
+  let lastSaveLaneUsable = application.syncSaveLane.usable
   let fenceIdentity = identity
   const pendingFenceReleases = pendingFenceReleasesByApplication.get(application) ?? new Map<string, Promise<void>>()
   pendingFenceReleasesByApplication.set(application, pendingFenceReleases)
@@ -270,8 +282,9 @@ export function installCollaborationSaver(
     }
     publishRegistry()
     if (next) {
-      // Allow awareness changes and the previous editor's mutation debounce to
-      // drain before taking over. Recheck at every boundary, including the save.
+      // Coalesce an awareness burst before taking over. The authoritative SQL
+      // fence and awaited server-base pull protect the previous saver handoff;
+      // waiting for its UI debounce would only add avoidable read-only time.
       settleTimer = setTimeout(() => {
         settleTimer = undefined
         if (disposed || electedLease !== next) {
@@ -456,7 +469,18 @@ export function installCollaborationSaver(
     advertise()
   }
   awareness.on('change', elect)
-  const stopLane = application.subscribeSyncSaveLane(advertise)
+  const stopLane = application.subscribeSyncSaveLane(() => {
+    const usable = application.syncSaveLane.usable
+    if (usable && !lastSaveLaneUsable && blockedInitialization === undefined) {
+      // A newly recovered lane is stronger evidence than the retry timer. Run
+      // the normal fenced takeover now; never bypass its flush or server-base
+      // check, and never overlap an unabortable initialization still in flight.
+      quarantineUntil = 0
+      stalled = false
+    }
+    lastSaveLaneUsable = usable
+    advertise()
+  })
   const stopCanonical = provider.onCanonicalReadyChange(advertise)
   const stopIdentity = provider.onActiveEditorLeaseChange(rebindIdentity)
   CollaborationSaverRegistry.setFlusher(room, () => provider.flush())
