@@ -62,6 +62,16 @@ describe('PreferencesSessionController — self-serve Invite pane gating', () =>
     expect(hasInvite(controller)).toBe(false)
   })
 
+  it('keeps disabled capability discovery successful without adding the menu entry', async () => {
+    const { application, listMyInviteLinks } = makeApplication(
+      okList({ enabled: false, invitesPerUser: 0, inviteLinks: [], quota: { used: 0, total: 0 } }),
+    )
+    const controller = new PreferencesSessionController(application, false)
+    await flush()
+    expect(listMyInviteLinks).toHaveBeenCalledTimes(1)
+    expect(hasInvite(controller)).toBe(false)
+  })
+
   it('does NOT add the entry when the probe errors (non-2xx)', async () => {
     const { application } = makeApplication({ status: 403, data: { error: { message: 'nope' } } })
     const controller = new PreferencesSessionController(application, false)

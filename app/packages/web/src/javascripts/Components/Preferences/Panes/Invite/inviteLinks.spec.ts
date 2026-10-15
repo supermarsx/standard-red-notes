@@ -54,6 +54,18 @@ describe('parseSelfServeInviteState — gating', () => {
     expect(state.links).toHaveLength(1)
   })
 
+  it('honors an explicit disabled state even when a quota is also supplied', () => {
+    expect(parseSelfServeInviteState(ok({ enabled: false, inviteLinks: [], invitesPerUser: 3 })).enabled).toBe(false)
+  })
+
+  it('reads the quota.total shape from older servers', () => {
+    expect(parseSelfServeInviteState(ok({ inviteLinks: [], quota: { used: 0, total: 0 } })).enabled).toBe(false)
+    expect(parseSelfServeInviteState(ok({ inviteLinks: [], quota: { used: 1, total: 3 } }))).toMatchObject({
+      enabled: true,
+      invitesPerUser: 3,
+    })
+  })
+
   it('is enabled (quota unknown) when invitesPerUser is omitted but an inviteLinks array is present', () => {
     const state = parseSelfServeInviteState(ok({ inviteLinks: [] }))
     expect(state.enabled).toBe(true)

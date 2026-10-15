@@ -20,8 +20,8 @@ import { ResponseLocals } from '../ResponseLocals'
  * privilege guard lives in CreateSignupInviteLink) — so a referral can never grant
  * privilege or bypass the approval queue.
  *
- * When the feature is DISABLED (invitesPerUser <= 0) every endpoint returns 403 so
- * the web pane can gate itself on a 200.
+ * The authenticated list also discovers feature availability. Disabled reads
+ * return an explicit empty state; disabled mutations remain forbidden.
  */
 export class BaseMeInviteLinksController extends BaseHttpController {
   constructor(
@@ -82,7 +82,13 @@ export class BaseMeInviteLinksController extends BaseHttpController {
 
     const quota = await this.invitesPerUser()
     if (quota <= 0) {
-      return this.json({ error: { message: 'Self-serve invites are not enabled.' } }, 403)
+      return this.json({
+        enabled: false,
+        invitesPerUser: 0,
+        inviteLinks: [],
+        invitedCount: 0,
+        quota: { used: 0, total: 0 },
+      })
     }
 
     const result = await this.doListSignupInviteLinks.execute({ creatorUserUuid: userUuid })
@@ -96,6 +102,8 @@ export class BaseMeInviteLinksController extends BaseHttpController {
     const invitedCount = await this.inviteUseRepository.countByReferrer(userUuid)
 
     return this.json({
+      enabled: true,
+      invitesPerUser: quota,
       inviteLinks: links.map((link) => this.linkView(link, now)),
       invitedCount,
       quota: { used: activeCount, total: quota },

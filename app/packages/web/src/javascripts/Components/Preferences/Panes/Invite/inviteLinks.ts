@@ -119,10 +119,9 @@ export const parseInviteLink = (raw: unknown): SelfServeInviteLinkView | undefin
  *
  * Gating: the pane is `enabled` only when self-serve is available. We treat it as
  * available when the call returns a non-error response carrying an `inviteLinks`
- * array AND the server-reported quota (`invitesPerUser`) is not explicitly 0. A
- * disabled server is expected to answer non-2xx OR `invitesPerUser: 0`; either
- * hides the pane. When the server omits `invitesPerUser` entirely the quota is
- * left undefined and the pane shows the active-link count without a cap.
+ * array without `enabled: false` or a zero quota (`invitesPerUser`, or older
+ * servers' `quota.total`). Old servers' non-2xx disabled replies are supported.
+ * Without either quota field the active-link count is displayed without a cap.
  */
 export const parseSelfServeInviteState = (response: HttpResponse): SelfServeInviteState => {
   if (isErrorResponse(response)) {
@@ -137,8 +136,14 @@ export const parseSelfServeInviteState = (response: HttpResponse): SelfServeInvi
 
   const links = rawLinks.map(parseInviteLink).filter((link): link is SelfServeInviteLinkView => link !== undefined)
 
-  const invitesPerUser = typeof data?.invitesPerUser === 'number' ? data.invitesPerUser : undefined
-  const enabled = invitesPerUser === undefined ? true : invitesPerUser > 0
+  const quota = asRecord(data?.quota)
+  const invitesPerUser =
+    typeof data?.invitesPerUser === 'number'
+      ? data.invitesPerUser
+      : typeof quota?.total === 'number'
+        ? quota.total
+        : undefined
+  const enabled = data?.enabled !== false && (invitesPerUser === undefined || invitesPerUser > 0)
 
   const invitedCount =
     typeof data?.invitedCount === 'number' ? data.invitedCount : links.reduce((sum, link) => sum + link.usedCount, 0)

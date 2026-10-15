@@ -125,6 +125,13 @@ Registration has more than an on/off switch. The server supports:
 - account caps; and
 - a UTC signup window.
 
+Self-serve signup invitations use `registration.invitesPerUser`. A value of zero
+disables the Invite friends section. The authenticated discovery endpoint,
+`GET /v1/users/me/invite-links`, returns HTTP 200 with `enabled: false` and an
+empty list in that state; creating or revoking links remains forbidden (403).
+Unauthenticated requests still require authentication (401). These signup links
+are separate from shared-vault collaboration invitations.
+
 Test policy changes with a non-admin account. Keep at least one known-good admin
 session open until the new registration and sign-in behavior is confirmed.
 
