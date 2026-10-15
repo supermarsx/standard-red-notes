@@ -14,6 +14,16 @@ import type { DisplayNoteComment } from '@/Comments/CommentAuthorship'
 type Props = {
   note: SNNote
   anchor?: CommentAnchor
+  onNavigate?: (anchor: CommentAnchor) => void
+}
+function commentContextKey(anchor?: CommentAnchor): string {
+  if (anchor?.kind === 'checklist') {
+    return `checklist:${anchor.todoId}`
+  }
+  if (anchor?.kind === 'super') {
+    return `super:${anchor.blockKey}`
+  }
+  return 'note'
 }
 
 function formatTime(iso: string): string {
@@ -54,7 +64,8 @@ const CommentRow: FunctionComponent<{
   onDelete: () => void
   onToggleResolved?: () => void
   onReply?: () => void
-}> = ({ comment, isSelf, isReply, onDelete, onToggleResolved, onReply }) => {
+  onNavigate?: (anchor: CommentAnchor) => void
+}> = ({ comment, isSelf, isReply, onDelete, onToggleResolved, onReply, onNavigate }) => {
   const color = collaboratorColor(comment.verifiedAuthorUuid ?? 'legacy-comment')
   return (
     <div className={`flex gap-2 ${isReply ? 'ml-6' : ''} ${comment.resolved ? 'opacity-60' : ''}`}>
@@ -82,9 +93,15 @@ const CommentRow: FunctionComponent<{
           {comment.resolved && <span className="text-success text-[0.6rem] uppercase">resolved</span>}
         </div>
         {comment.anchor?.snippet && (
-          <div className="border-border text-passive-1 mt-0.5 border-l-2 pl-2 text-xs italic">
+          <button
+            type="button"
+            disabled={!onNavigate}
+            onClick={() => comment.anchor && onNavigate?.(comment.anchor)}
+            className="border-border text-passive-1 hover:text-info mt-0.5 border-l-2 pl-2 text-left text-xs italic"
+            aria-label="Go to commented text"
+          >
             “{comment.anchor.snippet}”
-          </div>
+          </button>
         )}
         <div className="mt-0.5">
           <CommentBody text={comment.text} />
@@ -132,10 +149,11 @@ const CommentsPanelContent: FunctionComponent<ScopedProps & { api: CommentsApi; 
   setScope,
   api,
   candidates,
+  onNavigate,
 }) => {
   const application = useApplication()
   const { quarantinedCount, addComment, removeComment, setResolved, selfUuid } = api
-  const draftKey = `${scope}:${note.uuid}:${anchor?.kind === 'checklist' ? `checklist:${anchor.todoId}` : 'note'}`
+  const draftKey = `${scope}:${note.uuid}:${commentContextKey(anchor)}`
   const comments = api.comments.filter((comment) => {
     return anchor?.kind === 'checklist'
       ? comment.anchor?.kind === 'checklist' && comment.anchor.todoId === anchor.todoId
@@ -235,6 +253,7 @@ const CommentsPanelContent: FunctionComponent<ScopedProps & { api: CommentsApi; 
             <div key={comment.id} className="space-y-2">
               <CommentRow
                 comment={comment}
+                onNavigate={onNavigate}
                 isSelf={isSelf(comment)}
                 onDelete={() => canWrite && perform(removeComment(comment.id))}
                 onToggleResolved={canWrite ? () => perform(setResolved(comment.id, !comment.resolved)) : undefined}
@@ -244,6 +263,7 @@ const CommentsPanelContent: FunctionComponent<ScopedProps & { api: CommentsApi; 
                 <CommentRow
                   key={reply.id}
                   comment={reply}
+                  onNavigate={onNavigate}
                   isSelf={isSelf(reply)}
                   isReply
                   onDelete={() => canWrite && perform(removeComment(reply.id))}
@@ -291,12 +311,18 @@ const CollaborativeCommentsPanel: FunctionComponent<ScopedProps> = (props) => {
 }
 
 /** Private is the default and never mounts the shared-key/room-access hook. */
-export const CommentsPanel: FunctionComponent<Props> = ({ note, anchor }) => {
+export const CommentsPanel: FunctionComponent<Props> = ({ note, anchor, onNavigate }) => {
   const application = useApplication()
-  const scopeKey = `${application.sessions.getUser()?.uuid ?? 'offline'}:${note.uuid}:${anchor?.kind === 'checklist' ? `checklist:${anchor.todoId}` : 'note'}`
+  const scopeKey = `${application.sessions.getUser()?.uuid ?? 'offline'}:${note.uuid}:${commentContextKey(anchor)}`
   const [state, setState] = useState<{ key: string; scope: CommentScope }>({ key: scopeKey, scope: 'private' })
   const scope = state.key === scopeKey ? state.scope : 'private'
-  const props = { note, anchor, scope, setScope: (value: CommentScope) => setState({ key: scopeKey, scope: value }) }
+  const props = {
+    note,
+    anchor,
+    onNavigate,
+    scope,
+    setScope: (value: CommentScope) => setState({ key: scopeKey, scope: value }),
+  }
   return scope === 'private' ? (
     <PrivateCommentsPanel key={scopeKey} {...props} />
   ) : (

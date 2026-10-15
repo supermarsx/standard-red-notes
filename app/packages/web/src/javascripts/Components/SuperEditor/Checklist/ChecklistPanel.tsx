@@ -1,9 +1,8 @@
-import { ReactElement, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { ReactElement, useEffect, useMemo, useState } from 'react'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
 import { $getNodeByKey, $getRoot, $isElementNode, LexicalNode } from 'lexical'
 import { $isListItemNode } from '@lexical/list'
 import { SNNote } from '@standardnotes/snjs'
-import CommentsPanel from '@/Components/Comments/CommentsPanel'
 import {
   $ensureChecklistTodoId,
   $getChecklistFlags,
@@ -38,7 +37,6 @@ const priorityRank = { high: 0, normal: 1, low: 2 }
 
 /** Ribbon sections share task identity; sorting this view never reorders the document. */
 export function ChecklistPanel({
-  note,
   activeSection,
   onOpenReview,
   flushChanges,
@@ -51,11 +49,9 @@ export function ChecklistPanel({
   const [editor] = useLexicalComposerContext()
   const application = useApplicationOrNull()
   const selfUuid = application?.sessions.getUser()?.uuid
-  const [reviewVisited, setReviewVisited] = useState(activeSection === 'review')
   const [rows, setRows] = useState<Row[]>([])
   const [editable, setEditable] = useState(editor.isEditable())
   const controlsState = useEditorControlsState()
-  const { commentTarget: selected } = useSyncExternalStore(controlsState.subscribe, controlsState.getSnapshot)
   const setSelected = controlsState.setCommentTarget
   useEffect(() => {
     const refresh = () =>
@@ -103,11 +99,6 @@ export function ChecklistPanel({
       stopEditable()
     }
   }, [editor, selfUuid])
-  useEffect(() => {
-    if (activeSection === 'review') {
-      setReviewVisited(true)
-    }
-  }, [activeSection])
   const ordered = useMemo(
     () =>
       [...rows].sort(
@@ -116,7 +107,6 @@ export function ChecklistPanel({
       ),
     [rows],
   )
-  const selectedRow = selected ? rows.find((row) => row.todoId === selected) : undefined
   const change = (
     key: string,
     patch: { pinned?: boolean; priority?: ChecklistPriority; checked?: boolean; perPerson?: boolean },
@@ -254,49 +244,6 @@ export function ChecklistPanel({
             </div>
           ))}
           {rows.length === 0 && <p className="text-passive-1 text-xs">Add a checklist to manage its tasks here.</p>}
-        </div>
-      </section>
-      <section hidden={activeSection !== 'review'} aria-label="Review comments" className="w-full p-2 text-sm">
-        <label className="mb-2 flex flex-wrap items-center gap-2 font-medium">
-          Comments for
-          <select
-            className="border-border bg-default max-w-full min-w-0 rounded border px-2 py-1 font-normal"
-            aria-label="Comment target"
-            value={selectedRow?.key ?? (selected ? 'removed' : 'note')}
-            onChange={(event) => {
-              if (event.target.value === 'note') {
-                setSelected(undefined)
-              } else {
-                const row = rows.find((candidate) => candidate.key === event.target.value)
-                if (row) {
-                  showComments(row)
-                }
-              }
-            }}
-          >
-            <option value="note">Whole note</option>
-            {selected && !selectedRow && <option value="removed">Removed task</option>}
-            {rows.map((row) => (
-              <option key={row.key} value={row.key} disabled={!row.todoId && !editable}>
-                {row.text.slice(0, 100)}
-              </option>
-            ))}
-          </select>
-        </label>
-        <div className="max-h-64 overflow-y-auto">
-          {selected && !selectedRow ? (
-            <p className="text-passive-1 text-xs">This task is no longer in the note.</p>
-          ) : reviewVisited ? (
-            <CommentsPanel
-              key={`${note.uuid}:${selected ? `checklist:${selected}` : 'note'}`}
-              note={note}
-              anchor={
-                selectedRow?.todoId
-                  ? { kind: 'checklist', todoId: selectedRow.todoId, snippet: selectedRow.text.slice(0, 512) }
-                  : undefined
-              }
-            />
-          ) : null}
         </div>
       </section>
     </>

@@ -34,7 +34,7 @@ it('keeps ribbon state and drafts through a composer replacement and clears them
   expect(container.textContent).toBe('review:task-1:Unfinished private comment')
   await act(async () => render({}, 'replacement'))
   expect(container.textContent).not.toContain('Unfinished private comment')
-  expect(controls.getSnapshot()).toEqual({ tabId: null, commentTarget: undefined })
+  expect(controls.getSnapshot()).toMatchObject({ tabId: null, commentTarget: undefined, commentsOpen: false })
   await act(async () => root.unmount())
 })
 

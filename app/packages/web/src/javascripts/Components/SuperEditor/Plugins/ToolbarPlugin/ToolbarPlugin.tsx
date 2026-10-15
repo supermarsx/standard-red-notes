@@ -156,6 +156,7 @@ import { NavigationLayoutSubsection, applyNavigationPatch } from './NavigationLa
 import { ChecklistSubsection } from './ChecklistSubsection'
 import { ChecklistPanel } from '../../Checklist/ChecklistPanel'
 import { useEditorControlsState } from '../../EditorControlsContext'
+import { CAPTURE_COMMENT_ANCHOR_COMMAND } from '../CommentsPlugin/CommentsPlugin'
 import { resolveChecklistBackfillSettings } from '../../Checklist/checklistBackfill'
 import {
   $generateMissedChecklistOccurrences,
@@ -4253,13 +4254,41 @@ const ToolbarPlugin = ({
               </div>
             )}
             {note && canShowAllItems && (
-              <ChecklistPanel
-                key={note.uuid}
-                note={note}
-                activeSection={isReviewActive ? 'review' : effectiveTabId === 'checklistTab' ? 'checklist' : null}
-                onOpenReview={() => selectRibbonTab('review')}
-                flushChanges={flushChanges}
-              />
+              <>
+                {isReviewActive && (
+                  <div className="flex w-full flex-wrap gap-2 p-2" aria-label="Review tools">
+                    <button
+                      type="button"
+                      className="border-border hover:bg-contrast rounded border px-3 py-1 text-sm"
+                      onClick={() => controlsState.openComments()}
+                    >
+                      Show comments
+                    </button>
+                    <button
+                      type="button"
+                      className="border-border hover:bg-contrast rounded border px-3 py-1 text-sm"
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() =>
+                        editor.dispatchCommand(CAPTURE_COMMENT_ANCHOR_COMMAND, (anchor) =>
+                          controlsState.openComments(anchor ?? undefined),
+                        )
+                      }
+                    >
+                      New comment on selection
+                    </button>
+                  </div>
+                )}
+                <ChecklistPanel
+                  key={note.uuid}
+                  note={note}
+                  activeSection={effectiveTabId === 'checklistTab' ? 'checklist' : null}
+                  onOpenReview={() => {
+                    selectRibbonTab('review')
+                    controlsState.openComments()
+                  }}
+                  flushChanges={flushChanges}
+                />
+              </>
             )}
           </div>
         </div>

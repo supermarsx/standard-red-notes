@@ -25,9 +25,11 @@ jest.mock('@/Components/Comments/CommentsPanel', () => ({
 }))
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 const flushChanges = jest.fn()
+const openReview = jest.fn()
 beforeEach(() => {
   jest.mocked(useApplicationOrNull).mockReturnValue(undefined)
   flushChanges.mockClear()
+  openReview.mockClear()
 })
 
 function Sections() {
@@ -36,7 +38,10 @@ function Sections() {
     <ChecklistPanel
       note={{ uuid: 'note-1' } as never}
       activeSection={section}
-      onOpenReview={() => setSection('review')}
+      onOpenReview={() => {
+        openReview()
+        setSection('review')
+      }}
       flushChanges={flushChanges}
     />
   )
@@ -81,7 +86,7 @@ it('does not assign a task identity after readonly changes before a queued comme
     ).toBeUndefined()
   })
   expect(container.querySelector('[data-comment-target]')).toBeNull()
-  expect(container.querySelector('[aria-label="Review comments"]')?.hasAttribute('hidden')).toBe(true)
+  expect(openReview).not.toHaveBeenCalled()
   queuedUpdate.mockRestore()
   await act(async () => root.unmount())
   container.remove()
@@ -132,9 +137,10 @@ it('shows a dedicated sorted task panel, pins without reordering the document, a
   await act(async () =>
     [...firstRow.querySelectorAll('button')].find((button) => button.textContent === 'Comments')!.click(),
   )
-  expect(container.querySelector('[data-comment-target]')?.getAttribute('data-comment-target')).toBe('todo-first')
+  expect(openReview).toHaveBeenCalledTimes(1)
+  expect(container.querySelector('[data-comment-target]')).toBeNull()
   expect(container.querySelector('[aria-label="Checklist tasks"]')?.hasAttribute('hidden')).toBe(true)
-  expect(container.querySelector('[aria-label="Review comments"]')?.hasAttribute('hidden')).toBe(false)
+  expect(container.querySelector('[aria-label="Review comments"]')).toBeNull()
   await act(async () => editor.setEditable(false))
   expect(
     [...container.querySelectorAll<HTMLSelectElement>('[aria-label="Checklist tasks"] select')].every(

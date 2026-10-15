@@ -63,7 +63,7 @@ export function CommentsPlugin(): null {
             current = current.getParent()!
           }
           const block = anchorNode.getTopLevelElementOrThrow()
-          const text = block.getTextContent().trim()
+          const text = (selection.isCollapsed() ? block.getTextContent() : selection.getTextContent()).trim()
           const anchor: SuperCommentAnchor = { kind: 'super', blockKey: block.getKey() }
           if (text) {
             anchor.snippet = text.length > SNIPPET_MAX ? `${text.slice(0, SNIPPET_MAX)}…` : text

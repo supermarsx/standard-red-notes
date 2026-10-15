@@ -1,9 +1,25 @@
 import { createContext, ReactNode, SetStateAction, useContext, useMemo } from 'react'
+import type { CommentAnchor } from '@/Comments/comments'
 
 /** Ephemeral UI state lives above replaceable Lexical composers, scoped to the
  * exact note/session/encryption identity. Drafts never enter shared note data. */
 export function createEditorControlsState(identity?: object) {
-  let snapshot: { tabId: string | null; commentTarget: string | undefined } = { tabId: null, commentTarget: undefined }
+  let snapshot: {
+    tabId: string | null
+    commentTarget: string | undefined
+    commentAnchor?: CommentAnchor
+    commentsOpen: boolean
+    commentsCollapsed: boolean
+    commentsExpanded: boolean
+    commentsWidth: number
+  } = {
+    tabId: null,
+    commentTarget: undefined,
+    commentsOpen: false,
+    commentsCollapsed: false,
+    commentsExpanded: false,
+    commentsWidth: 320,
+  }
   const listeners = new Set<() => void>()
   return {
     identity,
@@ -24,10 +40,36 @@ export function createEditorControlsState(identity?: object) {
       listeners.forEach((listener) => listener())
     },
     setCommentTarget: (commentTarget: string | undefined) => {
-      if (commentTarget === snapshot.commentTarget) {
+      if (commentTarget === snapshot.commentTarget && !snapshot.commentAnchor) {
         return
       }
-      snapshot = { ...snapshot, commentTarget }
+      snapshot = { ...snapshot, commentTarget, commentAnchor: undefined }
+      listeners.forEach((listener) => listener())
+    },
+    openComments: (anchor?: CommentAnchor) => {
+      snapshot = {
+        ...snapshot,
+        commentsOpen: true,
+        commentsCollapsed: false,
+        ...(anchor
+          ? { commentAnchor: anchor, commentTarget: anchor.kind === 'checklist' ? anchor.todoId : undefined }
+          : {}),
+      }
+      listeners.forEach((listener) => listener())
+    },
+    setCommentsLayout: (
+      patch: Partial<
+        Pick<typeof snapshot, 'commentsOpen' | 'commentsCollapsed' | 'commentsExpanded' | 'commentsWidth'>
+      >,
+    ) => {
+      const next = { ...snapshot, ...patch }
+      next.commentsWidth = Math.max(240, Math.min(600, Number.isFinite(next.commentsWidth) ? next.commentsWidth : 320))
+      if (
+        Object.keys(patch).every((key) => snapshot[key as keyof typeof snapshot] === next[key as keyof typeof snapshot])
+      ) {
+        return
+      }
+      snapshot = next
       listeners.forEach((listener) => listener())
     },
   }

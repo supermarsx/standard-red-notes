@@ -52,6 +52,7 @@ import { AssistantStructuralBridgePlugin } from './Plugins/AssistantStructuralBr
 import { AssistantChangeDecorationsPlugin } from './Plugins/AssistantChangeDecorationsPlugin'
 import { EditorResumePlugin } from './Plugins/EditorResume/EditorResumePlugin'
 import { editorResumeStorageKey } from './Plugins/EditorResume/EditorResumeStorage'
+import { CommentsSidebar } from './CommentsSidebar'
 
 type BlocksEditorProps = {
   /** Exact note lifetime owned by this composer; required for aggregate todo mutations. */
@@ -338,9 +339,9 @@ export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
         Draggable-block / Table-action-menu floating plugins) depend on it. The
         sidebar renders null when hidden or on mobile.
       */}
-      <div className="flex min-h-0 flex-grow flex-row overflow-hidden">
+      <div className="relative flex min-h-0 flex-grow flex-row overflow-hidden">
         <NavigationSidebar />
-        <div className="relative min-h-0 flex-grow">
+        <div className="relative min-h-0 min-w-0 flex-grow">
           <RichTextPlugin
             contentEditable={
               <div id="blocks-editor" className="editor-scroller h-full min-h-0">
@@ -367,6 +368,7 @@ export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
             ErrorBoundary={LexicalErrorBoundary}
           />
         </div>
+        {commentNote && <CommentsSidebar note={commentNote} />}
       </div>
       {isMobile && <ToolbarPlugin noteUuid={noteUuid} note={commentNote} flushChanges={flushWithBypass} />}
       <ListPlugin />
