@@ -241,23 +241,23 @@ describe('AdminUsersTab — after "Recalculate storage quota"', () => {
     // Load: none stored. Read on the answer: still none. Then the worker gets there.
     const application = makeApplication([null, null, null, 0])
     await renderUser(application, TARGET_UUID, TARGET_EMAIL)
-    expect(storageReadout()).toContain('Current usage: Not reported')
+    expect(storageReadout()).toContain('Upload quota counter: Not reported')
 
     await requestRecount()
 
     // The request is answered and the one read the pane always made is back: stale.
     expect(application.legacyApi.adminFixUserQuota).toHaveBeenCalledWith(TARGET_UUID)
-    expect(storageReadout()).toContain('Current usage: Not reported')
+    expect(storageReadout()).toContain('Upload quota counter: Not reported')
     expect(recountStatus()).toBe(
       'Recount requested. The stored usage still reads Not reported; this panel re-reads it for up to 30 seconds.',
     )
 
     await wait(1000)
-    expect(storageReadout()).toContain('Current usage: Not reported')
+    expect(storageReadout()).toContain('Upload quota counter: Not reported')
 
     // Three seconds in, the figure is there, and the pane has it.
     await wait(2000)
-    expect(storageReadout()).toContain('Current usage: 0 B')
+    expect(storageReadout()).toContain('Upload quota counter: 0 B')
     expect(recountStatus()).toBe('Recount requested. The stored usage read Not reported before it and 0 B after it.')
   })
 
@@ -266,7 +266,7 @@ describe('AdminUsersTab — after "Recalculate storage quota"', () => {
     await renderUser(application, TARGET_UUID, TARGET_EMAIL)
     await requestRecount()
     await wait(1000)
-    expect(storageReadout()).toContain('Current usage: 0 B')
+    expect(storageReadout()).toContain('Upload quota counter: 0 B')
     const readsWhenItChanged = usageReadsFor(application, TARGET_UUID)
 
     await wait(WINDOW_MS)
@@ -281,7 +281,7 @@ describe('AdminUsersTab — after "Recalculate storage quota"', () => {
 
     await requestRecount()
 
-    expect(storageReadout()).toContain('Current usage: 0 B')
+    expect(storageReadout()).toContain('Upload quota counter: 0 B')
     expect(recountStatus()).toBe('Recount requested. The stored usage read Not reported before it and 0 B after it.')
     const reads = usageReadsFor(application, TARGET_UUID)
     await wait(WINDOW_MS)
@@ -293,8 +293,8 @@ describe('AdminUsersTab — after "Recalculate storage quota"', () => {
     await renderUser(application, TARGET_UUID, TARGET_EMAIL)
     await requestRecount()
     await wait(1000)
-    expect(storageReadout()).toContain('Current usage: 0 B')
-    expect(container.querySelector('[data-test-id="storage-total"]')?.textContent).toBe('Total: 0 B')
+    expect(storageReadout()).toContain('Upload quota counter: 0 B')
+    expect(container.querySelector('[data-test-id="storage-total"]')?.textContent).toBe('Total measured storage0 B')
   })
 
   it('stops looking after the window and says so, without claiming the recount ran', async () => {
@@ -341,7 +341,7 @@ describe('AdminUsersTab — after "Recalculate storage quota"', () => {
     // No further read for the user who is no longer on the panel, nothing of
     // theirs on it, and no recount line about a recount nobody asked for here.
     expect(usageReadsFor(application, TARGET_UUID)).toBe(targetReads)
-    expect(storageReadout()).toContain('Current usage: 777 B')
+    expect(storageReadout()).toContain('Upload quota counter: 777 B')
     expect(recountStatus()).toBeNull()
   })
 
@@ -369,7 +369,7 @@ describe('AdminUsersTab — after "Recalculate storage quota"', () => {
     expect(toastMessages()).toEqual([`Recount requested for ${TARGET_EMAIL}.`])
     // But the panel is the other user's: their figure, no recount line, and no
     // read of the first user's usage into it.
-    expect(storageReadout()).toContain('Current usage: 777 B')
+    expect(storageReadout()).toContain('Upload quota counter: 777 B')
     expect(recountStatus()).toBeNull()
     expect(usageReadsFor(application, TARGET_UUID)).toBe(targetReads)
   })
@@ -397,7 +397,7 @@ describe('AdminUsersTab — after "Recalculate storage quota"', () => {
     })
     await wait(WINDOW_MS)
 
-    expect(storageReadout()).toContain('Current usage: 777 B')
+    expect(storageReadout()).toContain('Upload quota counter: 777 B')
     expect(recountStatus()).toBeNull()
   })
 
@@ -436,7 +436,7 @@ describe('AdminUsersTab — after "Recalculate storage quota"', () => {
 
     await wait(1000)
 
-    expect(storageReadout()).toContain('Current usage: 0 B')
+    expect(storageReadout()).toContain('Upload quota counter: 0 B')
     expect(container.querySelector<HTMLInputElement>('input[placeholder="e.g. 5"]')?.value).toBe('12')
   })
 

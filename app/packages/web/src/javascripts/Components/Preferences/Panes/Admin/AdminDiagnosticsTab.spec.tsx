@@ -1494,7 +1494,7 @@ describe('AdminDiagnosticsTab — Database & internal comms', () => {
       }),
     )
 
-    expect(sectionRow('Admin status endpoint')[1]).toBe('did not answer')
+    expect(sectionRow('Admin status endpoint')[1]).toBe('answered with 403; status data unavailable')
     expect(sectionRow('Why the read failed')[1]).toBe('forbidden')
     expect(text).toContain('The admin status endpoint could not be read')
   })

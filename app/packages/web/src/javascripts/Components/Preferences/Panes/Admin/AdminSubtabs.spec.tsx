@@ -45,6 +45,7 @@ import AdminLogsContainer from './AdminLogsContainer'
 // resolves to an empty, non-error payload so the components reach their rendered
 // (non-loading) state. Extra methods are harmless.
 const makeApplication = () => ({
+  addEventObserver: jest.fn().mockReturnValue(() => undefined),
   featuresController: { isAdminUser: () => true },
   sessions: { getUser: () => ({ uuid: 'current-admin-uuid' }) },
   legacyApi: {
@@ -58,6 +59,9 @@ const makeApplication = () => ({
     adminGetLogs: jest.fn().mockResolvedValue({ data: { logs: [] } }),
     adminGetAuditLog: jest.fn().mockResolvedValue({ data: { events: [], total: 0 } }),
     adminListUsers: jest.fn().mockResolvedValue({ data: { users: [], total: 0 } }),
+    adminGetServerStatus: jest
+      .fn()
+      .mockResolvedValue({ error: { message: 'Unavailable in this fixture' }, status: 503 }),
   },
   // Diagnostics tab: reads the admin sync-diagnostics endpoint and the live
   // transport directly off the application, not through legacyApi. The pane's
@@ -213,6 +217,11 @@ describe('Admin shell — top-level tab set after folding Audit into Logs', () =
     expect(container.textContent).toContain('REDIS_URL')
     // Over plain HTTP: a read on the socket lane carries no origin, so the
     // gateway could not say whether this client's origin is admitted.
-    expect(application.httpOnlyJsonRequest).toHaveBeenCalledWith('GET', '/v1/admin/sync-diagnostics')
+    expect(application.httpOnlyJsonRequest).toHaveBeenCalledWith(
+      'GET',
+      '/v1/admin/sync-diagnostics',
+      undefined,
+      expect.objectContaining({ aborted: false }),
+    )
   })
 })
