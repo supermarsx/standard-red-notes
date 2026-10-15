@@ -2,11 +2,13 @@ import { LegacySession, Result, Session } from '@standardnotes/domain-core'
 import { HttpRequest, HttpRequestParams, HttpResponse, HttpResponseMeta } from '@standardnotes/responses'
 
 import { HttpRequestOptions } from './HttpRequestOptions'
+import { AuthenticatedJsonTransport } from './AuthenticatedJsonTransport'
 import { SessionRefreshResponseBody } from '../Response'
 
 export interface HttpServiceInterface {
   setHost(host: string): void
   getHost(): string
+  setAuthenticatedJsonTransport?(transport?: AuthenticatedJsonTransport): void
 
   get<T>(path: string, params?: HttpRequestParams, options?: HttpRequestOptions): Promise<HttpResponse<T>>
   getExternal<T>(url: string, params?: HttpRequestParams): Promise<HttpResponse<T>>

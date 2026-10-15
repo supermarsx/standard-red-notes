@@ -119,6 +119,7 @@ import {
 } from '@/Services/SyncTransport/WebSocketSyncTransport'
 import { LANE_STATE_CARRIER } from '@/Services/SyncTransport/LaneDegradationLedger'
 import { syncFallbackDisposition } from '@/Services/SyncTransport/syncTransportProtocol'
+import { createAuthenticatedJsonTransport } from '@/Services/SyncTransport/AuthenticatedJsonTransport'
 import { CollaborationSaverRegistry } from '@/Components/SuperEditor/Collaboration/CollaborationSaverElection'
 import { collaborationConflictPolicy } from '@/Components/SuperEditor/Collaboration/CollaborationConflictPolicy'
 import { installTabCensusResponder } from '@/Utils/TabCensus'
@@ -572,6 +573,12 @@ export class WebApplication extends SNApplication implements WebApplicationInter
       },
     })
     this._webSocketSyncTransport = transport
+    this.http?.setAuthenticatedJsonTransport?.(
+      createAuthenticatedJsonTransport({
+        getTransport: () => this._webSocketSyncTransport,
+        getAccountScope: () => (this.sessions.isSignedIn() ? this.sessions.userUuid : undefined),
+      }),
+    )
     this.sync.setAccountSyncTransport(transport)
     this.sync.setConflictPolicy(collaborationConflictPolicy)
     this.sync.setOnlineUploadPolicy((uuid) => transport.isCollaborativeItemUploadAllowed(uuid))

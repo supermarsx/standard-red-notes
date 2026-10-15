@@ -74,7 +74,7 @@ export class LoopbackSyncApiRpcAdapter implements SyncApiRpcAdapter {
     //
     // Checked before the method/route allow-list below so a forbidden path answers
     // the same way whatever method asked for it.
-    if (isForbiddenRpcPath(input.path)) {
+    if (isForbiddenRpcPath(input.path, input.method)) {
       throw new SyncApiRpcRefusalError('RPC_PATH_FORBIDDEN')
     }
     if (!isAllowedRpcRequest(input, this.negotiatedOperations)) {
@@ -165,6 +165,7 @@ function isAllowedRpcRequest(
   const pathname = new URL(input.path, 'http://rpc.invalid').pathname
   return (
     (pathname === '/v1/assistant/stream' && operations.includes('STREAM_ASSISTANT')) ||
+    pathname === '/v1/sessions/activity' ||
     pathname === '/v1/collaboration/authorize'
   )
 }
@@ -229,10 +230,15 @@ function normalizeRpcPathname(path: string): string | undefined {
   return collapsed === '' ? '/' : collapsed
 }
 
-function isForbiddenRpcPath(path: string): boolean {
+function isForbiddenRpcPath(path: string, method: string): boolean {
   const pathname = normalizeRpcPathname(path)
   if (pathname === undefined) {
     return true
+  }
+  // Signed-in observation only. Session issuance, refresh and revocation stay
+  // blocked, including other verbs on this exact path.
+  if (pathname === '/v1/sessions/activity' && method === 'POST') {
+    return false
   }
 
   return FORBIDDEN_RPC_ROUTE_FAMILIES.some((family) => pathname === family || pathname.startsWith(`${family}/`))

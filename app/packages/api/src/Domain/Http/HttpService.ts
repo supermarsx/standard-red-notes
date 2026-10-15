@@ -10,6 +10,7 @@ import {
   HttpResponseMeta,
   isErrorResponse,
   ApiEndpointParam,
+  ErrorTag,
 } from '@standardnotes/responses'
 import { HttpServiceInterface } from './HttpServiceInterface'
 
@@ -17,7 +18,7 @@ import { ApiVersion } from '../Api'
 import { Paths } from '../Server/Auth/Paths'
 import { SessionRefreshResponseBody } from '../Response/Auth/SessionRefreshResponseBody'
 import { FetchRequestHandler } from './FetchRequestHandler'
-import { RequestHandlerInterface } from './RequestHandlerInterface'
+import { AuthenticatedJsonTransport } from './AuthenticatedJsonTransport'
 import { HttpRequestOptions } from './HttpRequestOptions'
 
 export class HttpService implements HttpServiceInterface {
@@ -31,7 +32,13 @@ export class HttpService implements HttpServiceInterface {
   private updateMetaCallback!: (meta: HttpResponseMeta) => void
   private refreshSessionCallback!: (session: Session) => void
 
-  private requestHandler: RequestHandlerInterface
+  private requestHandler: FetchRequestHandler
+  private authenticatedJsonTransport?: AuthenticatedJsonTransport
+  private accountGeneration = 0
+
+  setAuthenticatedJsonTransport(transport?: AuthenticatedJsonTransport): void {
+    this.authenticatedJsonTransport = transport
+  }
 
   constructor(
     private environment: Environment,
@@ -52,16 +59,27 @@ export class HttpService implements HttpServiceInterface {
   }
 
   public deinit(): void {
+    this.accountGeneration += 1
+    this.authenticatedJsonTransport = undefined
     ;(this.session as unknown) = undefined
     ;(this.updateMetaCallback as unknown) = undefined
     ;(this.refreshSessionCallback as unknown) = undefined
   }
 
   setSession(session: Session | LegacySession): void {
+    const previous = this.getSessionAccessToken()
+    const next = session instanceof Session ? session.accessToken.value : session.accessToken
+    const identity = (token?: string) => token?.match(/^[12]:[^:]+/)?.[0] ?? token
+    if (identity(previous) !== identity(next)) {
+      this.accountGeneration += 1
+    }
     this.session = session
   }
 
   setHost(host: string): void {
+    if (this.host !== host) {
+      this.accountGeneration += 1
+    }
     this.host = host
   }
 
@@ -148,6 +166,11 @@ export class HttpService implements HttpServiceInterface {
   }
 
   async runHttp<T>(httpRequest: HttpRequest): Promise<HttpResponse<T>> {
+    return this.runHttpWithRefresh<T>(httpRequest, 1)
+  }
+
+  private async runHttpWithRefresh<T>(httpRequest: HttpRequest, refreshesRemaining: number): Promise<HttpResponse<T>> {
+    const generation = this.accountGeneration
     if (this.__latencySimulatorMs) {
       await sleep(this.__latencySimulatorMs, true)
     }
@@ -163,7 +186,33 @@ export class HttpService implements HttpServiceInterface {
       httpRequest.authentication = this.getSessionAccessToken()
     }
 
-    const response = await this.requestHandler.handleRequest<T>(httpRequest)
+    if (generation !== this.accountGeneration) {
+      return this.accountChangedResponse()
+    }
+    const socketResponse =
+      !isRefreshRequest && this.authenticatedJsonTransport
+        ? await this.authenticatedJsonTransport(httpRequest, {
+            host: this.host,
+            authentication: this.getSessionAccessToken(),
+            applicationVersion: `${Environment[this.environment]}-${this.appVersion}`,
+            snjsVersion: this.snjsVersion,
+          })
+        : undefined
+    if (generation !== this.accountGeneration) {
+      return this.accountChangedResponse()
+    }
+    // Fetch adds GET parameters to its request URL. Keep the logical request
+    // intact so a refresh retry or later socket attempt does not append twice.
+    const response = socketResponse
+      ? await this.requestHandler.handleFetchResponse<T>(
+          socketResponse,
+          httpRequest.responseType,
+          httpRequest.abortSignal,
+        )
+      : await this.requestHandler.handleRequest<T>({ ...httpRequest })
+    if (generation !== this.accountGeneration) {
+      return this.accountChangedResponse()
+    }
 
     if (this.loggingEnabled && isErrorResponse(response)) {
       this.logger.error('Request failed', safeHttpLogMetadata(httpRequest, response))
@@ -173,7 +222,12 @@ export class HttpService implements HttpServiceInterface {
       this.updateMetaCallback?.(response.meta)
     }
 
-    if (response.status === HttpStatusCode.ExpiredAccessToken && !isRefreshRequest && !httpRequest.external) {
+    if (
+      response.status === HttpStatusCode.ExpiredAccessToken &&
+      !isRefreshRequest &&
+      !httpRequest.external &&
+      refreshesRemaining > 0
+    ) {
       if (this.inProgressRefreshSessionPromise) {
         await this.inProgressRefreshSessionPromise
       } else {
@@ -193,15 +247,28 @@ export class HttpService implements HttpServiceInterface {
         }
       }
 
+      if (generation !== this.accountGeneration) {
+        return this.accountChangedResponse()
+      }
       httpRequest.authentication = this.getSessionAccessToken()
 
-      return this.runHttp(httpRequest)
+      return this.runHttpWithRefresh(httpRequest, refreshesRemaining - 1)
     }
 
     return response
   }
 
+  private accountChangedResponse<T>(): HttpResponse<T> {
+    return {
+      status: HttpStatusCode.InternalServerError,
+      data: {
+        error: { tag: ErrorTag.ClientValidationError, message: 'The account changed while the request was pending.' },
+      },
+    }
+  }
+
   async refreshSession(): Promise<Result<HttpResponse<SessionRefreshResponseBody>>> {
+    const generation = this.accountGeneration
     if (!this.session) {
       return Result.fail('No session to refresh')
     }
@@ -214,6 +281,9 @@ export class HttpService implements HttpServiceInterface {
       access_token: this.session.accessToken.value,
       refresh_token: this.session.refreshToken.value,
     })
+    if (generation !== this.accountGeneration) {
+      return Result.fail('The account changed while refreshing its session')
+    }
 
     if (this.__simulateNextSessionRefreshResponseDrop) {
       this.__simulateNextSessionRefreshResponseDrop = false
@@ -253,7 +323,9 @@ export class HttpService implements HttpServiceInterface {
       return Result.fail(sessionOrError.getError())
     }
 
-    this.setSession(sessionOrError.getValue())
+    // This refresh belongs to the unchanged account checked by runHttp. Token
+    // rotation must not look like selecting another account to the retry fence.
+    this.session = sessionOrError.getValue()
 
     this.refreshSessionCallback(this.session)
 

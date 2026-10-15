@@ -184,7 +184,7 @@ export class FetchRequestHandler implements RequestHandlerInterface {
     }
   }
 
-  private async handleFetchResponse<T>(
+  async handleFetchResponse<T>(
     fetchResponse: Response,
     responseType?: XMLHttpRequestResponseType,
     requestSignal?: AbortSignal,

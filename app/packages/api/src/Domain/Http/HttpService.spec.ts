@@ -37,9 +37,15 @@ describe('HttpService', () => {
 
   beforeEach(() => {
     handleRequest = jest.fn().mockResolvedValue({ status: HttpStatusCode.Success, data: {} })
-    FetchRequestHandlerMock.mockImplementation(
-      () => ({ handleRequest }) as unknown as InstanceType<typeof FetchRequestHandler>,
-    )
+    FetchRequestHandlerMock.mockImplementation(() => {
+      const Actual =
+        jest.requireActual<typeof import('./FetchRequestHandler')>('./FetchRequestHandler').FetchRequestHandler
+      const decoder = new Actual('4.5.6', '1.2.3', Environment.Web, logger)
+      return {
+        handleRequest,
+        handleFetchResponse: decoder.handleFetchResponse.bind(decoder),
+      } as unknown as InstanceType<typeof FetchRequestHandler>
+    })
 
     logger = { error: jest.fn(), debug: jest.fn(), info: jest.fn(), warn: jest.fn(), setLevel: jest.fn() }
 
@@ -410,12 +416,12 @@ describe('HttpService', () => {
     })
 
     it('should retry without refreshing when the token was renewed in between', async () => {
-      service.setSession(sessionWith('old-access'))
+      service.setSession(sessionWith('1:account-a:old'))
       service.setCallbacks(jest.fn(), jest.fn())
 
       handleRequest.mockImplementationOnce(async () => {
         // Simulate another caller installing a fresh session while this request was in flight.
-        service.setSession(sessionWith('renewed-access'))
+        service.setSession(sessionWith('1:account-a:renewed'))
         return { status: HttpStatusCode.ExpiredAccessToken, data: {} }
       })
       handleRequest.mockResolvedValueOnce({ status: HttpStatusCode.Success, data: {} })
@@ -424,7 +430,7 @@ describe('HttpService', () => {
 
       expect(response.status).toBe(HttpStatusCode.Success)
       expect(handleRequest).toHaveBeenCalledTimes(2)
-      expect(lastRequest().authentication).toBe('renewed-access')
+      expect(lastRequest().authentication).toBe('1:account-a:renewed')
     })
   })
 
@@ -574,6 +580,139 @@ describe('HttpService', () => {
       // The simulator disarms itself, so the next refresh succeeds.
       const next = await service.refreshSession()
       expect(next.isFailed()).toBe(false)
+    })
+  })
+
+  describe('optional authenticated JSON transport', () => {
+    it('uses the existing decoder for status, meta, data, headers and errors without an HTTP request', async () => {
+      service.setSession(sessionWith('1:account-a:secret'))
+      const meta = jest.fn()
+      service.setCallbacks(meta, jest.fn())
+      service.setAuthenticatedJsonTransport(
+        async () =>
+          new Response(
+            JSON.stringify({
+              meta: { auth: { userUuid: 'account-a' } },
+              data: { approvals: [] },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json', 'retry-after': '3' } },
+          ),
+      )
+      const response = await service.get<{ approvals: [] }>('/v1/pending-mfa-approvals')
+      expect(response).toMatchObject({ status: 200, data: { approvals: [] } })
+      expect(response.headers?.get('retry-after')).toBe('3')
+      expect(meta).toHaveBeenCalledWith({ auth: { userUuid: 'account-a' } })
+      expect(handleRequest).not.toHaveBeenCalled()
+      service.setAuthenticatedJsonTransport(
+        async () =>
+          new Response(JSON.stringify({ error: { tag: 'denied' } }), {
+            status: 401,
+            headers: { 'content-type': 'application/json' },
+          }),
+      )
+      expect(await service.get('/v1/pending-mfa-approvals')).toMatchObject({
+        status: 401,
+        data: { error: { tag: 'denied' } },
+      })
+      expect(handleRequest).not.toHaveBeenCalled()
+    })
+
+    it('falls back only when the optional transport declines before sending', async () => {
+      service.setAuthenticatedJsonTransport(async () => undefined)
+      expect(await service.get('/v1/pending-mfa-approvals')).toMatchObject({ status: 200 })
+      expect(handleRequest).toHaveBeenCalledTimes(1)
+    })
+
+    it('preserves the original GET URL when an HTTP attempt adds parameters before a socket refresh retry', async () => {
+      service.setSession(sessionWith('1:account-a:old'))
+      service.setCallbacks(jest.fn(), jest.fn())
+      const seenUrls: string[] = []
+      service.setAuthenticatedJsonTransport(async (request) => {
+        seenUrls.push(request.url)
+        if (seenUrls.length === 1) return undefined
+        return new Response(JSON.stringify({ data: { approvals: [] } }), {
+          headers: { 'content-type': 'application/json' },
+        })
+      })
+      handleRequest
+        .mockImplementationOnce(async (request: HttpRequest) => {
+          request.url += '?api=0'
+          return { status: 498, data: { error: { message: 'expired' } } }
+        })
+        .mockResolvedValueOnce({ status: 200, data: refreshBody('1:account-a:new', 'new-refresh') })
+      expect((await service.get('/v1/pending-mfa-approvals', { limit: 2 })).status).toBe(200)
+      expect(seenUrls).toEqual([`${HOST}/v1/pending-mfa-approvals`, `${HOST}/v1/pending-mfa-approvals`])
+    })
+
+    it.each(['account', 'host', 'deinit'] as const)(
+      'fences a late transport response before HTTP or metadata callbacks after %s changes',
+      async (change) => {
+        service.setSession(sessionWith('1:account-a:secret'))
+        const meta = jest.fn()
+        service.setCallbacks(meta, jest.fn())
+        let finish!: (response: Response | undefined) => void
+        service.setAuthenticatedJsonTransport(
+          () =>
+            new Promise((resolve) => {
+              finish = resolve
+            }),
+        )
+        const pending = service.get('/v1/pending-mfa-approvals')
+        if (change === 'account') service.setSession(sessionWith('1:account-b:secret'))
+        if (change === 'host') service.setHost('https://other.example.test')
+        if (change === 'deinit') service.deinit()
+        finish(
+          change === 'account'
+            ? undefined
+            : new Response(JSON.stringify({ meta: { auth: {} }, data: {} }), {
+                headers: { 'content-type': 'application/json' },
+              }),
+        )
+        expect(await pending).toMatchObject({ status: 500, data: { error: { tag: 'client-validation-error' } } })
+        expect(meta).not.toHaveBeenCalled()
+        expect(handleRequest).not.toHaveBeenCalled()
+      },
+    )
+
+    it('refreshes through HTTP once and retries the same logical request without an endless 498 loop', async () => {
+      service.setSession(sessionWith('1:account-a:old'))
+      service.setCallbacks(jest.fn(), jest.fn())
+      const requests: Readonly<HttpRequest>[] = []
+      service.setAuthenticatedJsonTransport(async (request) => {
+        requests.push(request)
+        return new Response(JSON.stringify({ error: { tag: 'expired-access-token' } }), {
+          status: 498,
+          headers: { 'content-type': 'application/json' },
+        })
+      })
+      handleRequest.mockResolvedValue({ status: 200, data: refreshBody('1:account-a:new', 'refresh-new') })
+      const response = await service.post('/v1/sessions/activity', { device_id: 'device' })
+      expect(response.status).toBe(498)
+      expect(requests).toHaveLength(2)
+      expect(requests[0]).toBe(requests[1])
+      expect(handleRequest).toHaveBeenCalledTimes(1)
+      expect(lastRequest().url).toBe(`${HOST}/v1/sessions/refresh`)
+    })
+
+    it('does not overwrite account B with a late account A refresh or invoke A callbacks', async () => {
+      service.setSession(sessionWith('1:account-a:old'))
+      const refreshed = jest.fn()
+      service.setCallbacks(jest.fn(), refreshed)
+      let finish!: (response: HttpResponse) => void
+      handleRequest.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve
+          }),
+      )
+      const pending = service.refreshSession()
+      service.setSession(sessionWith('1:account-b:current'))
+      finish({ status: 200, data: refreshBody('1:account-a:new', 'refresh-new') })
+      expect((await pending).isFailed()).toBe(true)
+      expect(refreshed).not.toHaveBeenCalled()
+      handleRequest.mockResolvedValue({ status: 200, data: {} })
+      await service.get('/v1/pending-mfa-approvals')
+      expect(lastRequest().authentication).toBe('1:account-b:current')
     })
   })
 

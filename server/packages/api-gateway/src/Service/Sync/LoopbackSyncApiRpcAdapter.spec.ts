@@ -10,6 +10,44 @@ const identity = {
 }
 
 describe('LoopbackSyncApiRpcAdapter', () => {
+  it('permits only an idempotency-keyed authenticated POST on the activity route while keeping other session operations blocked', async () => {
+    const fetch = jest.fn(async () => Response.json({ data: { active: true } }))
+    const adapter = new LoopbackSyncApiRpcAdapter({
+      origin: 'http://127.0.0.1:3000',
+      operations: ['API_RPC'],
+      fetch: fetch as typeof globalThis.fetch,
+    })
+    const input = {
+      identity,
+      method: 'POST' as const,
+      path: '/v1/sessions/activity',
+      headers: {},
+      body: { device_id: 'profile' },
+      idempotencyKey: 'heartbeat-1',
+      stream: false,
+    }
+    expect((await adapter.execute(input, new AbortController().signal)).status).toBe(200)
+    expect(fetch).toHaveBeenCalledWith(
+      expect.any(URL),
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.any(Headers),
+      }),
+    )
+    expect(fetch.mock.calls[0][1].headers.get('idempotency-key')).toBe('heartbeat-1')
+    for (const path of ['/v1/sessions/refresh', '/v1/sessions', '/v1/sessions/activity/other']) {
+      await expect(adapter.execute({ ...input, path }, new AbortController().signal)).rejects.toMatchObject({
+        code: 'RPC_PATH_FORBIDDEN',
+      })
+    }
+    await expect(adapter.execute({ ...input, method: 'GET' }, new AbortController().signal)).rejects.toMatchObject({
+      code: 'RPC_PATH_FORBIDDEN',
+    })
+    await expect(
+      adapter.execute({ ...input, idempotencyKey: undefined }, new AbortController().signal),
+    ).rejects.toThrow()
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
   it('rejects every non-loopback or path-bearing origin', () => {
     expect(
       () => new LoopbackSyncApiRpcAdapter({ origin: 'https://api.example.test', operations: ['API_RPC'] }),

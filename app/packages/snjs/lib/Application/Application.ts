@@ -1181,7 +1181,7 @@ export class SNApplication implements ApplicationInterface, AppGroupManagedAppli
     return this.dependencies.get<MigrationService>(TYPES.MigrationService)
   }
 
-  private get http(): HttpServiceInterface {
+  protected get http(): HttpServiceInterface {
     return this.dependencies.get<HttpServiceInterface>(TYPES.HttpService)
   }
 

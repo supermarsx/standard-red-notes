@@ -2976,6 +2976,8 @@ const RPC_REQUEST_HEADER_NAMES = new Set([
   'if-match',
   'if-none-match',
   'x-shared-vault-owner-context',
+  'x-snjs-version',
+  'x-application-version',
 ])
 
 function normalizeAuthenticatedRpcRequest(request: AuthenticatedRpcStreamRequest): WorkerAuthenticatedRpcRequest {

@@ -1,4 +1,5 @@
 export * from './HttpService'
+export * from './AuthenticatedJsonTransport'
 export * from './FetchRequestHandler'
 export * from './HttpRequestOptions'
 export * from './HttpServiceInterface'
