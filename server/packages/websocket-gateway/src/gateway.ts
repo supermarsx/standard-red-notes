@@ -1825,6 +1825,19 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
               syncOptions!.apiRpc,
               async (input) => collaborationPlane.validateSaverEditor?.(input) ?? false,
               syncOptions!.collaborationSaveFence,
+              async (input, signal) => {
+                const verdict = await syncOptions!.authorization.authorize(
+                  {
+                    identity: input.identity,
+                    operation: 'STATUS',
+                    commandId: 'collaboration-fence-release',
+                    digest: '0'.repeat(64),
+                    payloadLength: 0,
+                  },
+                  signal,
+                )
+                return verdict.authorized
+              },
             )
           : undefined,
         inviteEvents: socketInviteEvents,

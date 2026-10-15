@@ -13,7 +13,8 @@ export interface BrokerPort {
 export interface BrokerRuntime {
   handle(message: MainToSyncWorkerMessage): Promise<void>
   isBrokerPrimaryIdle(): boolean
-  detachBrokerClient(requestIds: ReadonlySet<string>): Promise<void>
+  detachBrokerClient(requestIds: ReadonlySet<string>, clientId?: string): Promise<void>
+  registerBrokerRpcOwner?(requestId: string, clientId: string): void
 }
 
 type Client = {
@@ -249,6 +250,9 @@ export class SharedSyncTransportBroker {
       this.queue.push({ clientId, message })
       await this.pump()
     } else {
+      if (message.type === 'OPEN_RPC') {
+        this.runtime.registerBrokerRpcOwner?.(message.clientRequestId, clientId)
+      }
       await this.runtime.handle(message)
     }
   }
@@ -451,7 +455,7 @@ export class SharedSyncTransportBroker {
       }
     }
     this.inviteAcks.delete(clientId)
-    await this.runtime.detachBrokerClient(new Set(client.requests.values()))
+    await this.runtime.detachBrokerClient(new Set(client.requests.values()), clientId)
     for (const room of client.savers.keys()) {
       await this.publishSaver(room)
     }

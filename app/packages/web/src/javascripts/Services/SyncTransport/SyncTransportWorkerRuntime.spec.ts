@@ -2642,6 +2642,182 @@ describe('SyncTransportWorkerRuntime', () => {
       return socket
     }
 
+    describe('departing broker saver proofs', () => {
+      const identity = { room: FILE_UUID, roomEpoch: ROOM_EPOCH, leaseId: 'editor-a' }
+      const token = 'cd'.repeat(32)
+      const fenceRequest = (action = 'claim', extra = {}) => ({
+        method: 'POST' as const,
+        path: '/v1/collaboration/save-fence',
+        deadlineMs: 30_000,
+        initialCreditBytes: 4_096,
+        stream: false,
+        idempotencyKey: 'fence-operation',
+        body: { ...identity, action, ...extra },
+      })
+      const answer = async (socket: FakeSocket, result: unknown, status = 200) => {
+        const frame = framesOfType(socket, 'RPC_REQUEST').at(-1)!
+        socket.receive(serverFrame('RPC_ACCEPTED', frame.commandId, { accepted: true }))
+        socket.receive(
+          serverFrame('RPC_RESPONSE', frame.commandId, { status, headers: {}, stream: false, body: result }),
+        )
+        socket.receive(serverFrame('RPC_END', frame.commandId, { status: 'COMPLETED' }))
+        await flush()
+      }
+      const claim = async (harness: ReturnType<typeof setup>, socket: FakeSocket, owner = 'tab-a', proof = token) => {
+        const id = `claim-${owner}`
+        harness.runtime.registerBrokerRpcOwner(id, owner)
+        await harness.runtime.handle({
+          type: 'OPEN_RPC',
+          clientRequestId: id,
+          sessionScope: SESSION_A,
+          request: fenceRequest(),
+        })
+        await answer(socket, { room: identity.room, token: proof, expiresAt: Date.now() + 20_000 })
+      }
+
+      it('releases a completed claim immediately on its port departure without closing the sibling socket', async () => {
+        const harness = setup()
+        const socket = await openRpcSocket(harness)
+        await claim(harness, socket)
+        await harness.runtime.detachBrokerClient(new Set(), 'tab-a')
+        const release = framesOfType(socket, 'RPC_REQUEST').at(-1)!
+        expect(release.payload).toMatchObject({
+          method: 'POST',
+          path: '/v1/collaboration/save-fence',
+          deadlineMs: 2_000,
+          body: { ...identity, action: 'release', token },
+        })
+        expect(socket.readyState).toBe(1)
+        expect(harness.sockets).toHaveLength(1)
+        await jest.advanceTimersByTimeAsync(2_000)
+        expect(framesOfType(socket, 'RPC_CANCEL').at(-1)?.payload).toEqual({ targetRequestId: release.commandId })
+        expect(socket.readyState).toBe(1)
+      })
+
+      it('does not release another port or substitute its newer token', async () => {
+        const harness = setup()
+        const socket = await openRpcSocket(harness)
+        await claim(harness, socket)
+        const successorToken = 'ef'.repeat(32)
+        await claim(harness, socket, 'tab-b', successorToken)
+        await harness.runtime.detachBrokerClient(new Set(), 'unrelated')
+        expect(framesOfType(socket, 'RPC_REQUEST')).toHaveLength(3)
+        await harness.runtime.detachBrokerClient(new Set(), 'tab-a')
+        expect(framesOfType(socket, 'RPC_REQUEST').at(-1)?.payload.body).toEqual({
+          ...identity,
+          action: 'release',
+          token,
+        })
+        await harness.runtime.detachBrokerClient(new Set(), 'tab-b')
+        expect(framesOfType(socket, 'RPC_REQUEST').at(-1)?.payload.body).toEqual({
+          ...identity,
+          action: 'release',
+          token: successorToken,
+        })
+      })
+
+      it('does not forget a newer claim when the earlier release reply arrives late', async () => {
+        const harness = setup()
+        const socket = await openRpcSocket(harness)
+        await claim(harness, socket)
+        harness.runtime.registerBrokerRpcOwner('old-release', 'tab-a')
+        await harness.runtime.handle({
+          type: 'OPEN_RPC',
+          clientRequestId: 'old-release',
+          sessionScope: SESSION_A,
+          request: fenceRequest('release', { token }),
+        })
+        const oldRelease = framesOfType(socket, 'RPC_REQUEST').at(-1)!
+        const newToken = 'ef'.repeat(32)
+        await claim(harness, socket, 'tab-a', newToken)
+        socket.receive(serverFrame('RPC_ACCEPTED', oldRelease.commandId, { accepted: true }))
+        socket.receive(
+          serverFrame('RPC_RESPONSE', oldRelease.commandId, {
+            status: 200,
+            headers: {},
+            stream: false,
+            body: { room: identity.room, expiresAt: 0 },
+          }),
+        )
+        socket.receive(serverFrame('RPC_END', oldRelease.commandId, { status: 'COMPLETED' }))
+        await flush()
+        await harness.runtime.detachBrokerClient(new Set(), 'tab-a')
+        expect(framesOfType(socket, 'RPC_REQUEST').at(-1)?.payload.body).toEqual({
+          ...identity,
+          action: 'release',
+          token: newToken,
+        })
+      })
+
+      it('cancels an unfinished claim without inventing a token or accepting its late response', async () => {
+        const harness = setup()
+        const socket = await openRpcSocket(harness)
+        harness.runtime.registerBrokerRpcOwner('unfinished', 'tab-a')
+        await harness.runtime.handle({
+          type: 'OPEN_RPC',
+          clientRequestId: 'unfinished',
+          sessionScope: SESSION_A,
+          request: fenceRequest(),
+        })
+        const pending = framesOfType(socket, 'RPC_REQUEST').at(-1)!
+        await harness.runtime.detachBrokerClient(new Set(['unfinished']), 'tab-a')
+        socket.receive(serverFrame('RPC_ACCEPTED', pending.commandId, { accepted: true }))
+        socket.receive(
+          serverFrame('RPC_RESPONSE', pending.commandId, {
+            status: 200,
+            headers: {},
+            stream: false,
+            body: { room: identity.room, token, expiresAt: Date.now() + 20_000 },
+          }),
+        )
+        await flush()
+        await harness.runtime.detachBrokerClient(new Set(), 'tab-a')
+        expect(framesOfType(socket, 'RPC_REQUEST')).toHaveLength(2)
+        expect(socket.readyState).toBe(1)
+      })
+
+      it.each([
+        [409, { room: FILE_UUID, token, expiresAt: Date.now() + 20_000 }],
+        [200, { room: 'other-room', token, expiresAt: Date.now() + 20_000 }],
+        [200, { room: FILE_UUID, token: 'bad', expiresAt: Date.now() + 20_000 }],
+      ])('does not remember refused or malformed claim responses (%s)', async (status, response) => {
+        const harness = setup()
+        const socket = await openRpcSocket(harness)
+        harness.runtime.registerBrokerRpcOwner('claim', 'tab-a')
+        await harness.runtime.handle({
+          type: 'OPEN_RPC',
+          clientRequestId: 'claim',
+          sessionScope: SESSION_A,
+          request: fenceRequest(),
+        })
+        await answer(socket, response, Number(status))
+        await harness.runtime.detachBrokerClient(new Set(), 'tab-a')
+        expect(framesOfType(socket, 'RPC_REQUEST')).toHaveLength(2)
+      })
+
+      it('forgets an exact successful release and never redials a detached proof on an unavailable socket', async () => {
+        const harness = setup()
+        const socket = await openRpcSocket(harness)
+        await claim(harness, socket)
+        harness.runtime.registerBrokerRpcOwner('release', 'tab-a')
+        await harness.runtime.handle({
+          type: 'OPEN_RPC',
+          clientRequestId: 'release',
+          sessionScope: SESSION_A,
+          request: fenceRequest('release', { token }),
+        })
+        await answer(socket, { room: identity.room, expiresAt: 0 })
+        await harness.runtime.detachBrokerClient(new Set(), 'tab-a')
+        expect(framesOfType(socket, 'RPC_REQUEST')).toHaveLength(3)
+        await claim(harness, socket, 'tab-b')
+        socket.close()
+        await flush()
+        const before = harness.messages.filter((message) => message.type === 'NEED_TICKET').length
+        await harness.runtime.detachBrokerClient(new Set(), 'tab-b')
+        expect(harness.messages.filter((message) => message.type === 'NEED_TICKET')).toHaveLength(before)
+      })
+    })
+
     const answerRefresh = async (harness: ReturnType<typeof setup>, index: number) => {
       const refresh = refreshRequests(harness)[index]
       expect(refresh).toBeDefined()

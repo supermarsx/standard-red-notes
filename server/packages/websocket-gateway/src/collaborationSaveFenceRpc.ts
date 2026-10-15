@@ -28,6 +28,7 @@ export function withCollaborationSaveFenceRpc(
   adapter: SyncApiRpcAdapter,
   validateEditor: (input: CollaborationSaverEditorIdentity) => Promise<boolean>,
   dispatch?: CollaborationSaveFenceDispatch,
+  authorizeRelease?: (input: SyncApiRpcRequest, signal: AbortSignal) => Promise<boolean>,
 ): SyncApiRpcAdapter {
   return {
     idempotencyScope: adapter.idempotencyScope,
@@ -52,7 +53,8 @@ export function withCollaborationSaveFenceRpc(
         body.leaseId.length === 0 ||
         body.leaseId.length > 128 ||
         !['claim', 'renew', 'release'].includes(body.action as string) ||
-        (body.token !== undefined && (typeof body.token !== 'string' || body.token.length > 128))
+        (body.token !== undefined && (typeof body.token !== 'string' || body.token.length > 128)) ||
+        (body.action === 'release' && (typeof body.token !== 'string' || !/^[a-f0-9]{64}$/.test(body.token)))
       ) {
         return { status: 400, body: { error: 'Invalid collaboration save lease request' } }
       }
@@ -63,7 +65,14 @@ export function withCollaborationSaveFenceRpc(
         userUuid: input.identity.userUuid,
         sessionUuid: input.identity.sessionUuid,
       }
-      if (!(await validateEditor(identity))) {
+      // Ending the editor lease can race its final release. The authenticated
+      // owner may still release only its exact SQL-bound token/room/epoch/device/lease;
+      // the backend enforces those bindings under the fence row lock.
+      const authorized =
+        body.action === 'release' && authorizeRelease
+          ? await authorizeRelease(input, signal)
+          : await validateEditor(identity)
+      if (!authorized) {
         return { status: 403, body: { error: 'An active editor lease is required' } }
       }
       return dispatch(

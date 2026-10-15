@@ -884,7 +884,49 @@ export class SyncTransportWorkerRuntime {
     return !this.active && !this.shuttingDown
   }
 
-  async detachBrokerClient(requestIds: ReadonlySet<string>): Promise<void> {
+  private readonly brokerRpcOwners = new Map<string, string>()
+  private readonly brokerSaveFences = new Map<
+    string,
+    Map<string, { sessionScope: string; room: string; roomEpoch: string; leaseId: string; token: string }>
+  >()
+
+  registerBrokerRpcOwner(requestId: string, clientId: string): void {
+    if (this.brokerRpcOwners.size < 1_024) {
+      this.brokerRpcOwners.set(requestId, clientId)
+    }
+  }
+
+  async detachBrokerClient(requestIds: ReadonlySet<string>, clientId?: string): Promise<void> {
+    const fences = clientId ? this.brokerSaveFences.get(clientId) : undefined
+    if (clientId) {
+      this.brokerSaveFences.delete(clientId)
+      for (const [requestId, owner] of this.brokerRpcOwners) {
+        if (owner === clientId) {
+          this.brokerRpcOwners.delete(requestId)
+        }
+      }
+    }
+    // The shared socket survives its page. Release only proofs this exact port
+    // obtained, without waiting for the closed page's React cleanup or the TTL.
+    // A crash or unavailable socket still uses the unchanged server lease expiry.
+    if (!this.shuttingDown && this.state === 'READY' && this.socket?.readyState === 1) {
+      for (const fence of fences?.values() ?? []) {
+        if (fence.sessionScope !== this.sessionScope) {
+          continue
+        }
+        const { sessionScope, ...proof } = fence
+        await this.openRpc(`detached-fence:${this.uuid()}`, sessionScope, {
+          method: 'POST',
+          path: '/v1/collaboration/save-fence',
+          deadlineMs: 2_000,
+          initialCreditBytes: DEFAULT_RPC_CREDIT_BYTES,
+          stream: false,
+          idempotencyKey: this.uuid(),
+          headers: { accept: 'application/json', 'content-type': 'application/json' },
+          body: { ...proof, action: 'release' },
+        })
+      }
+    }
     for (const id of requestIds) {
       await this.cancelRpc(id)
       await this.cancelFileDownload(id, 'CANCELLED')
@@ -1244,6 +1286,7 @@ export class SyncTransportWorkerRuntime {
       !isValidWorkerRpcRequest(request) ||
       this.rpcRequests.has(clientRequestId)
     ) {
+      this.brokerRpcOwners.delete(clientRequestId)
       this.dependencies.postMessage({
         type: 'RPC_ERROR',
         clientRequestId,
@@ -3561,6 +3604,7 @@ export class SyncTransportWorkerRuntime {
           this.refreshSocketCredential()
         }
         rpc.responseStarted = true
+        this.rememberBrokerSaveFence(rpc, frame)
         this.dependencies.postMessage({
           type: 'RPC_RESPONSE',
           clientRequestId: rpc.clientRequestId,
@@ -3664,6 +3708,68 @@ export class SyncTransportWorkerRuntime {
       this.cancelTimeout(rpc.deadlineTimer)
     }
     this.rpcRequests.delete(rpc.clientRequestId)
+    this.brokerRpcOwners.delete(rpc.clientRequestId)
+  }
+
+  private rememberBrokerSaveFence(rpc: ActiveRpcRequest, frame: SyncServerFrame): void {
+    const owner = this.brokerRpcOwners.get(rpc.clientRequestId)
+    const request = rpc.request.body as Record<string, unknown> | undefined
+    const result = frame.payload.body as Record<string, unknown> | undefined
+    if (
+      !owner ||
+      rpc.request.method !== 'POST' ||
+      rpc.request.path !== '/v1/collaboration/save-fence' ||
+      Number(frame.payload.status) < 200 ||
+      Number(frame.payload.status) >= 300 ||
+      frame.payload.stream !== false ||
+      !request ||
+      typeof request !== 'object' ||
+      !result ||
+      typeof result !== 'object' ||
+      typeof request.room !== 'string' ||
+      request.room.length === 0 ||
+      request.room.length > 128 ||
+      typeof request.roomEpoch !== 'string' ||
+      request.roomEpoch.length === 0 ||
+      request.roomEpoch.length > 128 ||
+      typeof request.leaseId !== 'string' ||
+      request.leaseId.length === 0 ||
+      request.leaseId.length > 128 ||
+      result.room !== request.room
+    ) {
+      return
+    }
+    const fences = this.brokerSaveFences.get(owner) ?? new Map()
+    if (request.action === 'release') {
+      const previous = fences.get(request.room)
+      if (
+        previous?.token === request.token &&
+        previous.leaseId === request.leaseId &&
+        previous.roomEpoch === request.roomEpoch
+      ) {
+        fences.delete(request.room)
+      }
+    } else if (
+      (request.action === 'claim' || request.action === 'renew') &&
+      typeof result.token === 'string' &&
+      /^[a-f0-9]{64}$/.test(result.token) &&
+      Number.isSafeInteger(result.expiresAt) &&
+      Number(result.expiresAt) > this.now() &&
+      (fences.has(request.room) || fences.size < 32)
+    ) {
+      fences.set(request.room, {
+        sessionScope: rpc.sessionScope,
+        room: request.room,
+        roomEpoch: request.roomEpoch,
+        leaseId: request.leaseId,
+        token: result.token,
+      })
+    }
+    if (fences.size) {
+      this.brokerSaveFences.set(owner, fences)
+    } else {
+      this.brokerSaveFences.delete(owner)
+    }
   }
 
   private async sendCollaborationAuthorization(): Promise<void> {
@@ -4907,6 +5013,8 @@ export class SyncTransportWorkerRuntime {
   }
 
   private async revokeSession(requestId: string, sessionScope: string): Promise<void> {
+    this.brokerSaveFences.clear()
+    this.brokerRpcOwners.clear()
     this.shuttingDown = true
     let quarantined = false
     try {
@@ -4945,6 +5053,8 @@ export class SyncTransportWorkerRuntime {
   }
 
   private async shutdown(): Promise<void> {
+    this.brokerSaveFences.clear()
+    this.brokerRpcOwners.clear()
     this.shuttingDown = true
     await this.closeSocketAndReleaseOwner()
     this.failAllFileDownloads('SHUTDOWN', false)

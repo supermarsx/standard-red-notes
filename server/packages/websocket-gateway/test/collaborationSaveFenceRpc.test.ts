@@ -29,6 +29,65 @@ const adapter = (): SyncApiRpcAdapter => ({
   execute: vi.fn().mockResolvedValue({ status: 200, body: { ordinary: true } }),
 })
 describe('collaboration fence RPC authorization', () => {
+  it('allows a freshly authenticated exact-token release after the editor lease ended, preserving gateway identities', async () => {
+    const validate = vi.fn().mockResolvedValue(false)
+    const authorize = vi.fn().mockResolvedValue(true)
+    const dispatch = vi.fn().mockResolvedValue({ status: 200, body: { expiresAt: 0 } })
+    const input = { ...request(), body: { ...(request().body as object), action: 'release', token: 'a'.repeat(64) } }
+    await expect(
+      withCollaborationSaveFenceRpc(adapter(), validate, dispatch, authorize).execute(
+        input,
+        new AbortController().signal,
+      ),
+    ).resolves.toMatchObject({ status: 200 })
+    expect(authorize).toHaveBeenCalledWith(input, expect.anything())
+    expect(validate).not.toHaveBeenCalled()
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'release',
+        userUuid: 'authenticated-user',
+        deviceId: 'authenticated-device',
+        token: 'a'.repeat(64),
+      }),
+      expect.anything(),
+    )
+  })
+  it('denies a revoked release and preserves live editor checks for claim and renew', async () => {
+    const validate = vi.fn().mockResolvedValue(false)
+    const dispatch = vi.fn()
+    const authorize = vi.fn().mockResolvedValue(false)
+    const rpc = withCollaborationSaveFenceRpc(adapter(), validate, dispatch, authorize)
+    for (const action of ['release', 'renew', 'claim']) {
+      await expect(
+        rpc.execute(
+          { ...request(), body: { ...(request().body as object), action, token: 'a'.repeat(64) } },
+          new AbortController().signal,
+        ),
+      ).resolves.toMatchObject({ status: 403 })
+    }
+    expect(authorize).toHaveBeenCalledTimes(1)
+    expect(validate).toHaveBeenCalledTimes(2)
+    expect(dispatch).not.toHaveBeenCalled()
+  })
+  it('requires the exact bounded release token and falls back to the strict live editor check without a fresh auth callback', async () => {
+    const dispatch = vi.fn()
+    const rpc = withCollaborationSaveFenceRpc(adapter(), async () => false, dispatch)
+    for (const token of [undefined, 'short', 'g'.repeat(64)]) {
+      await expect(
+        rpc.execute(
+          { ...request(), body: { ...(request().body as object), action: 'release', token } },
+          new AbortController().signal,
+        ),
+      ).resolves.toMatchObject({ status: 400 })
+    }
+    await expect(
+      rpc.execute(
+        { ...request(), body: { ...(request().body as object), action: 'release', token: 'a'.repeat(64) } },
+        new AbortController().signal,
+      ),
+    ).resolves.toMatchObject({ status: 403 })
+    expect(dispatch).not.toHaveBeenCalled()
+  })
   it('requires the activated editor lease and overwrites supplied identities', async () => {
     const validate = vi.fn().mockResolvedValue(true)
     const dispatch = vi.fn().mockResolvedValue({ status: 200, body: { token: 'fence' } })

@@ -69,6 +69,29 @@ describe('shared authenticated socket broker', () => {
     expect(last(a)).toMatchObject({ type: 'CHECKPOINT_CLEARED', requestId: 'checkpoint' })
   })
 
+  it('binds RPC proof ownership to the port and detaches completed work with that identity', async () => {
+    runtime.registerBrokerRpcOwner = jest.fn()
+    await send('a', {
+      type: 'OPEN_RPC',
+      clientRequestId: 'claim',
+      sessionScope: scope,
+      request: {
+        method: 'POST',
+        path: '/v1/collaboration/save-fence',
+        deadlineMs: 2_000,
+        initialCreditBytes: 4_096,
+        stream: false,
+        idempotencyKey: 'claim',
+        body: {},
+      },
+    })
+    expect(runtime.registerBrokerRpcOwner).toHaveBeenCalledWith('a:claim', 'a')
+    broker.publish({ type: 'RPC_END', clientRequestId: 'a:claim' })
+    await broker.receive('a', a, { type: 'BROKER_DETACH' })
+    expect(runtime.detachBrokerClient).toHaveBeenCalledWith(new Set(), 'a')
+    expect(broker.hasClients).toBe(true)
+  })
+
   it('merges per-room savers without letting a follower disable or impersonate its owning port', async () => {
     await send('a', { type: 'SET_COLLABORATION_SAVER', room: 'same-note', canSave: true })
     await send('b', { type: 'SET_COLLABORATION_SAVER', room: 'same-note', canSave: false })
