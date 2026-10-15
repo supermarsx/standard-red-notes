@@ -251,9 +251,19 @@ If collaborators see stale content:
 
 ## Comments and mentions
 
-The Super editor's **Review** ribbon tab lets you comment on the whole note or
-an individual checklist item. Choose a task with **Comments for**, or click its
-**Comments** action in the **Checklist** tab to open Review with that task selected.
+The Super editor's **Review** ribbon tab contains **Show comments** and
+**New comment on selection**. Comments open in a separate sidebar to the right
+of the document. Drag its left edge to resize it (or focus the divider and use
+the arrow keys), collapse it to a narrow rail, expand it, or close it. Switching
+ribbon tabs does not close the sidebar. On small screens it opens over the right
+side of the document. Comments load only when opened; a comments rendering error
+is contained in the sidebar rather than replacing the editor.
+Choose the whole note or a task with **Comments for**, or click a task's
+**Comments** action in the **Checklist** tab to open the sidebar for that task.
+Quoted context in a comment can be clicked to jump to its referenced block or
+task. Text references use the block key and a unique matching snippet as a
+fallback after reopening; a missing or ambiguous reference is reported rather
+than jumping to unrelated text.
 Switching ribbon tabs or reconnecting the editor keeps an unfinished comment
 in place while this note remains open. Closing the note or changing accounts
 clears unfinished drafts. Comments start in **Private** mode:
@@ -262,6 +272,14 @@ the note belongs to a shared vault. Choose **Collaborative** explicitly to use
 the note's signed, encrypted comment stream. Changing the note or comment target
 returns the selector to Private. Collaborative comments follow the note's access
 permissions; a private comment does not give another person access.
+
+Switching notes does not wait for a remote collaboration saver. When the outgoing
+document still has changes awaiting acknowledgment, its exact editor stays mounted
+in a hidden background tab marked **Pending sync** while the new note opens. It
+is released only once the room's persisted server revision covers its retained
+state. A local persistence failure still stops the switch. Server save fences and
+authorization checks remain in force; a retained editor is not a claim that its
+changes have already synced.
 
 Private comments sync with your account preferences and appear in encrypted
 account backups. They have a combined 256 KiB limit, with at most 256 notes,
