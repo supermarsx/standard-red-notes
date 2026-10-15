@@ -293,10 +293,11 @@ export function syncChecklistDueShell(
     syncChecklistRecurrenceCustomVisibility(shell)
   }
 
-  if (!existing) {
-    const nestedList = Array.from(itemElement.children).find(
-      (child) => child.tagName === 'UL' || child.tagName === 'OL',
-    )
+  // Lexical can replace a text DOM wrapper when its format changes, inserting
+  // that managed node after our existing imperative controls. Keep the same
+  // shell (including its open inputs) anchored after inline content each time.
+  const nestedList = Array.from(itemElement.children).find((child) => child.tagName === 'UL' || child.tagName === 'OL')
+  if (shell.parentElement !== itemElement || shell.nextSibling !== (nestedList ?? null)) {
     itemElement.insertBefore(shell, nestedList ?? null)
   }
   // This runs on every editor update AND on the due-date interval tick, so it
