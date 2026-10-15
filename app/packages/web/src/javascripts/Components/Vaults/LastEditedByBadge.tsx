@@ -9,10 +9,10 @@ const LastEditedByBadge = ({ contact }: { contact?: TrustedContactInterface }) =
       title={contact ? `${t('lastEditedBy')}: ${contact.name}` : undefined}
       aria-hidden={contact ? undefined : true}
       data-last-edited-badge
-      className={`bg-info text-info-contrast flex h-7 w-36 max-w-full shrink-0 items-center rounded px-1.5 py-1 select-none ${contact ? '' : 'invisible'}`}
+      className={`bg-info text-info-contrast inline-flex h-5 w-24 max-w-full shrink-0 items-center gap-1 overflow-hidden rounded px-1 whitespace-nowrap select-none ${contact ? '' : 'invisible'}`}
     >
-      <Icon ariaLabel={t('lastEditedBy')} type="pencil" className="text-info-contrast mr-1 shrink-0" size="medium" />
-      <span className="min-w-0 truncate text-sm font-semibold lg:text-xs">{contact?.name}</span>
+      <Icon ariaLabel={t('lastEditedBy')} type="pencil" className="text-info-contrast h-3 w-3 shrink-0" size="custom" />
+      <span className="min-w-0 truncate text-[11px] leading-none">{contact?.name}</span>
     </div>
   )
 }
