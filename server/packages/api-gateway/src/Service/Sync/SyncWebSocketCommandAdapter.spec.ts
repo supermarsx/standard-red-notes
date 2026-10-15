@@ -358,7 +358,7 @@ describe('SyncWebSocketCommandAdapter', () => {
   // told the client to re-ticket. Auth ANSWERING that the captured bearer no
   // longer validates -- a non-200, or a token now bound to another identity --
   // is the public, retryable SESSION_STALE. Failures where auth did not answer
-  // (or the token is unverifiable) stay the private SESSION_REVOKED.
+  // or returns an unreadable result remain retryable infrastructure failures.
   it.each([
     ['a session now bound to another session id', { session: { uuid: 'different-session', readonly_access: false } }],
     ['a session now bound to another user', { user: { uuid: 'user-2', email: 'other@example.test' } }],
@@ -431,11 +431,12 @@ describe('SyncWebSocketCommandAdapter', () => {
       },
       identity,
     ],
-  ])('keeps the private SESSION_REVOKED when %s', async (_label, arrange, ticketIdentity) => {
-    const { adapter, serviceProxy, durable } = build()
-    arrange(serviceProxy)
-    await expect(
-      adapter.authorize(
+  ])(
+    'does not misclassify unavailable authority evidence as revoked when %s',
+    async (label, arrange, ticketIdentity) => {
+      const { adapter, serviceProxy, durable } = build()
+      arrange(serviceProxy)
+      const decision = adapter.authorize(
         {
           identity: ticketIdentity,
           operation: 'COMMAND',
@@ -444,8 +445,44 @@ describe('SyncWebSocketCommandAdapter', () => {
           payloadLength: 0,
         },
         new AbortController().signal,
+      )
+      if (label === 'the socket carries no bearer') {
+        await expect(decision).resolves.toEqual({ authorized: false, code: 'SESSION_REVOKED' })
+      } else {
+        await expect(decision).rejects.toMatchObject({ name: 'SessionValidationError', kind: 'unavailable' })
+      }
+      expect(durable.sync).not.toHaveBeenCalled()
+    },
+  )
+
+  it.each(['COMMAND', 'STATUS'] as const)(
+    'keeps an explicit revoked-session refusal terminal on %s',
+    async (operation) => {
+      const { adapter, serviceProxy, durable } = build()
+      ;(serviceProxy.validateSession as jest.Mock).mockResolvedValue({
+        status: 401,
+        data: { error: { tag: 'revoked-session' } },
+        headers: {},
+      })
+      expect(
+        await adapter.authorize(
+          { identity, operation, commandId: 'command-1', digest: 'a'.repeat(64), payloadLength: 0 },
+          new AbortController().signal,
+        ),
+      ).toEqual({ authorized: false, code: 'SESSION_REVOKED' })
+      expect(durable.sync).not.toHaveBeenCalled()
+    },
+  )
+
+  it('treats an authority 503 as unavailable rather than requiring credential rotation', async () => {
+    const { adapter, serviceProxy, durable } = build()
+    ;(serviceProxy.validateSession as jest.Mock).mockResolvedValue({ status: 503, data: {}, headers: {} })
+    await expect(
+      adapter.authorize(
+        { identity, operation: 'COMMAND', commandId: 'command-1', digest: 'a'.repeat(64), payloadLength: 0 },
+        new AbortController().signal,
       ),
-    ).resolves.toEqual({ authorized: false, code: 'SESSION_REVOKED' })
+    ).rejects.toMatchObject({ kind: 'unavailable' })
     expect(durable.sync).not.toHaveBeenCalled()
   })
 

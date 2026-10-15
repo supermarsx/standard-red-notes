@@ -2780,6 +2780,24 @@ describe('SyncCommandHandler', () => {
     handler.disconnect()
   })
 
+  it('reports unavailable authorization as retryable BACKEND_ERROR without executing, then permits authoritative status recovery', async () => {
+    const authorization = allowAuthorization()
+    authorization.authorize = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('temporary session authority failure'))
+      .mockResolvedValue({ authorized: true })
+    const backend = committingBackend()
+    backend.status = vi.fn(async (input) => ({ status: 'UNKNOWN' as const, digest: input.digest }))
+    const { handler, socket } = await authenticatedHandler({ authorization, backend })
+    enqueue(handler, commandFrame('authority-unavailable', 1))
+    await vi.waitFor(() => expect(socket.frames.at(-1)?.payload).toEqual({ code: 'BACKEND_ERROR', retryable: true }))
+    expect(backend.execute).not.toHaveBeenCalled()
+    expect(socket.frames.some((frame) => frame.type === 'ACCEPTED')).toBe(false)
+    enqueue(handler, statusFrame('authority-unavailable', 2, 'a'.repeat(64)))
+    await vi.waitFor(() => expect(payloadOf(socket.frames.at(-1)).status).toBe('UNKNOWN'))
+    handler.disconnect()
+  })
+
   it('shares the post-ACCEPTED budget and resolves an execution that commits after its timed-out reply through STATUS', async () => {
     let committed = false
     const authorization = allowAuthorization()

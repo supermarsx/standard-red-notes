@@ -109,9 +109,10 @@ const COLLABORATION_AUTHORIZATION_ROUTE = { method: 'POST', url: '/items/collabo
  * `kind` -- the SYNC lane's recovery hint, unchanged. `stale` means the auth
  * service answered and the bearer captured at ticket time no longer validates
  * (rotated, refreshed, or now bound to another identity) and maps to the PUBLIC,
- * retryable SESSION_STALE so the client re-tickets once; everything else (no
- * bearer, plane unready, transport failure, unverifiable token) stays the private
- * SESSION_REVOKED (NOT_AUTHORIZED on the wire). It is deliberately lenient: a
+ * retryable SESSION_STALE so the client re-tickets once. A missing bearer or
+ * unready plane stays the private SESSION_REVOKED (NOT_AUTHORIZED on the wire).
+ * Transport failures and unreadable authority answers throw as unavailable,
+ * so the gateway reports a retryable backend error. It is deliberately lenient: a
  * re-ticket goes through real authenticated HTTP, so a session that can no longer
  * authenticate simply cannot obtain a new ticket, and collapsing a rotation past
  * auth's cooldown (a flat 401) onto NOT_AUTHORIZED would delete that recovery.
@@ -128,7 +129,7 @@ const COLLABORATION_AUTHORIZATION_ROUTE = { method: 'POST', url: '/items/collabo
 class SessionValidationError extends Error {
   constructor(
     message: string,
-    readonly kind: 'stale' | 'revoked',
+    readonly kind: 'stale' | 'revoked' | 'unavailable',
     readonly credential: 'stale' | 'revoked',
   ) {
     super(message)
@@ -212,6 +213,11 @@ export class SyncWebSocketCommandAdapter
     try {
       validated = await this.validate(input.identity, signal)
     } catch (error) {
+      if (error instanceof SessionValidationError && error.kind === 'unavailable') {
+        // No authorization verdict was obtained. The gateway reports its
+        // retryable backend failure instead of claiming the session is revoked.
+        throw error
+      }
       return {
         authorized: false,
         code: error instanceof SessionValidationError && error.kind === 'stale' ? 'SESSION_STALE' : 'SESSION_REVOKED',
@@ -272,8 +278,12 @@ export class SyncWebSocketCommandAdapter
       }),
       signal,
     )
-    if (result.status === 409 && this.isJsonObject(result.data) && this.isJsonObject(result.data.error) &&
-      result.data.error.code === 'collaboration_save_fence_lost') {
+    if (
+      result.status === 409 &&
+      this.isJsonObject(result.data) &&
+      this.isJsonObject(result.data.error) &&
+      result.data.error.code === 'collaboration_save_fence_lost'
+    ) {
       throw new SyncCommandBackendRefusalError()
     }
     if (result.status < 200 || result.status >= 300 || !this.isJsonObject(result.data)) {
@@ -505,15 +515,23 @@ export class SyncWebSocketCommandAdapter
         signal,
       )
     } catch (error) {
-      // Transport failure or an aborted command: no verdict at all. `kind` stays
-      // 'revoked' so `authorize` reports the same collapsed NOT_AUTHORIZED a raw
-      // throw always produced here, while the session verdict is the stale an
-      // unknown answer must always be.
+      // Transport failure or an aborted command gives no session verdict.
       throw new SessionValidationError(
         error instanceof Error ? error.message : 'Sync session validation failed.',
-        'revoked',
+        'unavailable',
         'stale',
       )
+    }
+    if (authResponse.status >= 500) {
+      throw new SessionValidationError('Sync session authority is unavailable.', 'unavailable', 'stale')
+    }
+    if (
+      authResponse.status === 401 &&
+      this.isJsonObject(authResponse.data) &&
+      this.isJsonObject(authResponse.data.error) &&
+      authResponse.data.error.tag === 'revoked-session'
+    ) {
+      throw new SessionValidationError('Sync session was revoked.', 'revoked', 'revoked')
     }
     if (authResponse.status !== 200 || !this.isJsonObject(authResponse.data)) {
       // Auth answered and refused the bearer captured at ticket time: the
@@ -538,7 +556,7 @@ export class SyncWebSocketCommandAdapter
     if (typeof authToken !== 'string') {
       throw new SessionValidationError(
         'Sync session validation returned no token.',
-        'revoked',
+        'unavailable',
         this.credentialVerdict({ reached: true, status: 200 }),
       )
     }
@@ -546,12 +564,11 @@ export class SyncWebSocketCommandAdapter
     try {
       token = verify(authToken, this.authJwtSecret, { algorithms: ['HS256'] }) as CrossServiceTokenData
     } catch (error) {
-      // An unreadable answer, not a refusal (a rolling deploy with a rotated
-      // AUTH_JWT_SECRET lands here). `kind` is 'revoked', which is exactly what
-      // `authorize` reported when this threw raw, so the sync lane is unchanged.
+      // An unreadable answer is not a revocation verdict; a rolling secret
+      // change can make the authority's response temporarily unverifiable.
       throw new SessionValidationError(
         error instanceof Error ? error.message : 'Sync session token is unverifiable.',
-        'revoked',
+        'unavailable',
         this.credentialVerdict({ reached: true, status: 200 }),
       )
     }
