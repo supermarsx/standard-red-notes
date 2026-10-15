@@ -1,3 +1,4 @@
+import Dropdown from '@/Components/Dropdown/Dropdown'
 import { Component, lazy, ReactNode, Suspense, useEffect, useState, useSyncExternalStore } from 'react'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
 import { $getRoot, $getNodeByKey, $isElementNode, LexicalNode } from 'lexical'
@@ -194,26 +195,28 @@ export function CommentsSidebar({ note }: { note: SNNote }) {
             {navigationStatus}
           </p>
         )}
-        <label className="mb-3 block text-xs">
-          Comments for
-          <select
-            aria-label="Comment target"
-            className="border-border bg-default mt-1 w-full rounded border p-1"
+        <div className="mb-3 text-xs">
+          <Dropdown
+            portal
+            label="Comment target"
+            showLabel
+            fullWidth
+            popoverPlacement="bottom-start"
+            classNameOverride={{ button: '!min-w-0' }}
             value={layout.commentTarget ?? (layout.commentAnchor ? 'selection' : 'note')}
-            onChange={(event) =>
-              controls.setCommentTarget(event.target.value === 'note' ? undefined : event.target.value)
-            }
-          >
-            <option value="note">Whole note</option>
-            {layout.commentAnchor?.kind === 'super' && <option value="selection">Selected text</option>}
-            {layout.commentTarget && !task && <option value={layout.commentTarget}>Removed task</option>}
-            {tasks.map((row) => (
-              <option key={row.todoId} value={row.todoId}>
-                {row.text}
-              </option>
-            ))}
-          </select>
-        </label>
+            onChange={(value) => {
+              if (value !== 'selection') {
+                controls.setCommentTarget(value === 'note' ? undefined : value)
+              }
+            }}
+            items={[
+              { value: 'note', label: 'Whole note' },
+              ...(layout.commentAnchor?.kind === 'super' ? [{ value: 'selection', label: 'Selected text' }] : []),
+              ...(layout.commentTarget && !task ? [{ value: layout.commentTarget, label: 'Removed task' }] : []),
+              ...tasks.map((row) => ({ value: row.todoId, label: row.text })),
+            ]}
+          />
+        </div>
         {layout.commentTarget && !task ? (
           <p className="text-sm">This task is no longer in the note.</p>
         ) : (

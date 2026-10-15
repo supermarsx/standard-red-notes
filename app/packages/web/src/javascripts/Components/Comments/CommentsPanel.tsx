@@ -1,3 +1,4 @@
+import Dropdown from '@/Components/Dropdown/Dropdown'
 import { FunctionComponent, useMemo, useState } from 'react'
 import { SNNote } from '@standardnotes/snjs'
 import Icon from '@/Components/Icon/Icon'
@@ -218,17 +219,22 @@ const CommentsPanelContent: FunctionComponent<ScopedProps & { api: CommentsApi; 
           </button>
         )}
       </div>
-      <label className="mb-2 flex items-center gap-2 text-xs">
-        Visibility
-        <select
-          aria-label="Comment visibility"
+      <div className="mb-2">
+        <Dropdown
+          portal
+          label="Comment visibility"
+          showLabel
           value={scope}
-          onChange={(event) => setScope(event.target.value as CommentScope)}
-        >
-          <option value="private">Private — only you</option>
-          <option value="collaborative">Collaborative — note members</option>
-        </select>
-      </label>
+          onChange={(value) => setScope(value as CommentScope)}
+          fullWidth
+          popoverPlacement="bottom-start"
+          classNameOverride={{ button: '!min-w-0', wrapper: 'text-xs' }}
+          items={[
+            { value: 'private', label: 'Private — only you' },
+            { value: 'collaborative', label: 'Collaborative — note members' },
+          ]}
+        />
+      </div>
       <p className="text-passive-1 mb-2 text-xs">
         {scope === 'private'
           ? 'Encrypted in your account. Never shared with note members.'

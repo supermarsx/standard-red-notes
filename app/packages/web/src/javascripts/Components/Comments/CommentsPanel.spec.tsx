@@ -43,17 +43,18 @@ it('defaults to private without preparing shared room access, explicitly opts in
   const note = { uuid: 'note-a' } as never
   await act(async () => root.render(<CommentsPanel note={note} />))
   expect(useNoteComments).not.toHaveBeenCalled()
-  expect((container.querySelector('select') as HTMLSelectElement).value).toBe('private')
+  expect(container.querySelector('[role="combobox"]')?.textContent).toContain('Private — only you')
   await act(async () =>
     [...container.querySelectorAll('button')].find((button) => button.textContent === 'Submit test comment')!.click(),
   )
   expect(personal.addComment).toHaveBeenCalledWith({ text: 'Test comment', parentId: undefined, anchor: undefined })
   expect(shared.addComment).not.toHaveBeenCalled()
-  await act(async () => {
-    const select = container.querySelector('select')!
-    select.value = 'collaborative'
-    select.dispatchEvent(new Event('change', { bubbles: true }))
-  })
+  await act(async () => (container.querySelector('[role="combobox"]') as HTMLButtonElement).click())
+  await act(async () =>
+    [...document.querySelectorAll<HTMLElement>('[role="option"]')]
+      .find((option) => option.textContent === 'Collaborative — note members')!
+      .click(),
+  )
   expect(useNoteComments).toHaveBeenCalled()
   await act(async () =>
     [...container.querySelectorAll('button')].find((button) => button.textContent === 'Submit test comment')!.click(),
@@ -63,7 +64,7 @@ it('defaults to private without preparing shared room access, explicitly opts in
   // A legacy task ID may equal the whole-note sentinel; its scope must still reset.
   const anchor = { kind: 'checklist' as const, todoId: 'note', snippet: 'Task' }
   await act(async () => root.render(<CommentsPanel note={note} anchor={anchor} />))
-  expect((container.querySelector('select') as HTMLSelectElement).value).toBe('private')
+  expect(container.querySelector('[role="combobox"]')?.textContent).toContain('Private — only you')
   expect(useNoteComments).not.toHaveBeenCalled()
   await act(async () =>
     [...container.querySelectorAll('button')].find((button) => button.textContent === 'Submit test comment')!.click(),

@@ -18,6 +18,7 @@ type DropdownProps = {
   fullWidth?: boolean
   popoverPlacement?: SelectStoreProps['placement']
   showLabel?: boolean
+  portal?: boolean
 }
 
 const Dropdown = ({
@@ -30,6 +31,7 @@ const Dropdown = ({
   classNameOverride = {},
   popoverPlacement,
   showLabel,
+  portal = false,
 }: DropdownProps) => {
   const select = useSelectStore({
     value,
@@ -80,7 +82,7 @@ const Dropdown = ({
           'z-dropdown-menu border-passive-3 bg-default max-h-[var(--popover-available-height)] w-[var(--popover-anchor-width)] overflow-y-auto rounded border py-1 [backdrop-filter:var(--popover-backdrop-filter)]',
           classNameOverride.popover,
         )}
-        portal={false}
+        portal={portal}
       >
         {items.map((item) => (
           <SelectItem
