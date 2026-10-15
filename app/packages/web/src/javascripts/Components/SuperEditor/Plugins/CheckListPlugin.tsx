@@ -1,3 +1,4 @@
+import { syncChecklistItemIndicators } from '../Checklist/ChecklistItemIndicators'
 import {
   $insertList,
   $isListItemNode,
@@ -72,6 +73,7 @@ import {
 import {
   $activateChecklistRecurringSchedule,
   $ensureChecklistTodoId,
+  $getChecklistFlags,
   $getChecklistDueAt,
   $getChecklistRecurrence,
   $getChecklistTodoId,
@@ -487,12 +489,17 @@ export function CheckListPlugin({
               element.removeAttribute('title')
             }
           }
-          syncChecklistDueShell(
+          const shell = syncChecklistDueShell(
             element,
             $getChecklistDueAt(item),
             checked,
             editor.isEditable(),
             $getChecklistRecurrence(item),
+          )
+          syncChecklistItemIndicators(
+            shell,
+            $getChecklistFlags(item),
+            perPerson ? $getChecklistPersonalTicks(item).length : null,
           )
         }
       })

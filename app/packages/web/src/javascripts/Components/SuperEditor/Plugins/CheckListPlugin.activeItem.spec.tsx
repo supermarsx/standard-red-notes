@@ -20,6 +20,7 @@ import { $createParagraphNode, $createTextNode, $getRoot, $getSelection, type Le
 import { act, createElement, useEffect } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { CheckListPlugin } from './CheckListPlugin'
+import { $setChecklistFlags } from '../Lexical/Nodes/ChecklistItemNode'
 import { CHECKLIST_ACTIVE_ITEM_ATTR, CHECKLIST_DUE_REVEAL_ATTR } from '../Checklist/ChecklistDueControls'
 import {
   $getChecklistPersonalTicks,
@@ -143,6 +144,43 @@ describe('the schedule affordance follows the caret through the real plugin', ()
       .map(taskText)
 
   const revealedCount = () => container.querySelectorAll(`[${CHECKLIST_DUE_REVEAL_ATTR}='active']`).length
+
+  it('keeps priority, pin and multi-tick indicators visible on their own item and updates them without editing task text', () => {
+    act(() =>
+      editor!.update(
+        () => {
+          const list = $getRoot().getFirstChild<ListNode>()!
+          const first = list.getFirstChild<ListItemNode>()!
+          const second = list.getChildren()[1] as ListItemNode
+          $setChecklistFlags(first, { priority: 'high', pinned: true })
+          $setChecklistFlags(second, { priority: 'low' })
+          $setChecklistPerPerson(first, true)
+          $setChecklistPersonalTick(first, 'bob', true)
+        },
+        { discrete: true },
+      ),
+    )
+    expect(rows()[0].querySelector('[data-checklist-indicators]')?.textContent).toBe('Pinned⚑ High☑ 1')
+    expect(rows()[1].querySelector('[data-checklist-indicators]')?.textContent).toBe('⚑ Low')
+    expect(rows()[2].querySelector('[data-checklist-indicators]')).toBeNull()
+    placeCaretInParagraph()
+    act(() => editor!.setEditable(false))
+    expect(rows()[0].querySelector('[data-checklist-indicators]')?.getAttribute('aria-label')).toContain(
+      'Per-person completion: 1 ticked',
+    )
+    act(() =>
+      editor!.update(
+        () => {
+          const first = $getRoot().getFirstChild<ListNode>()!.getFirstChild<ListItemNode>()!
+          $setChecklistFlags(first, { priority: 'normal', pinned: false })
+          $setChecklistPerPerson(first, false)
+          expect(first.getTextContent()).toBe('first task')
+        },
+        { discrete: true },
+      ),
+    )
+    expect(rows()[0].querySelector('[data-checklist-indicators]')).toBeNull()
+  })
 
   it('projects and toggles your own multi-tick checkbox without clearing another person or changing shared completion', async () => {
     act(() =>

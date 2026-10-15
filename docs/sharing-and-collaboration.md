@@ -290,18 +290,20 @@ collaborative comment stream.
 
 The **Checklist** ribbon tab appears when the note contains a checklist and
 provides completion controls, recurrence settings, pins and high, normal or low priority flags.
+Place the cursor in an item to configure it using the compact **Item settings**
+ribbon group; the ribbon does not duplicate the checklist as a task list.
 Tasks use **Single tick** by default: one shared completion checkbox. To make an
 item multi-tick, change its completion mode in the **Checklist** ribbon to
 **Per person (multi-tick)**. Its checkbox now completes the item for you only;
 each collaborator has their own tick. **Ticked by** lists the people who have
-ticked it, including people currently offline, and the ribbon completion count
-reflects your own progress. Unticking removes only your tick. Personal ticks are
+ticked it, including people currently offline. Each multi-tick item also shows
+a small tick-count badge beside its text, even when the ribbon is closed. Unticking removes only your tick. Personal ticks are
 saved in the encrypted note and synchronize between collaborators and your own
 devices. They do not advance a shared recurring schedule. Switching back to
 Single tick restores shared completion; personal ticks are retained if you later
 switch the item back to Per person.
-Its display sorts pinned and higher-priority tasks first without rearranging the
-note. Flags remain attached to the task through saving and reopening; portable
+Pinned items and high- or low-priority items show compact labels beside their
+text. Changing these settings does not rearrange the note. Flags remain attached to the task through saving and reopening; portable
 text and document exports include labels for pins and non-default priorities.
 
 Mention candidates are derived from shared-vault users, and display names are

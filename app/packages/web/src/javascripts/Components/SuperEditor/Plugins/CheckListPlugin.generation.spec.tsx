@@ -41,7 +41,7 @@ const fakeApplication = {
     registerExternalKeyboardShortcutHelpItem: () => () => undefined,
   },
   items: { findItem: () => note },
-  sessions: { isCurrentSessionReadOnly: () => false },
+  sessions: { getUser: () => undefined, isCurrentSessionReadOnly: () => false },
   vaults: { getItemVault: () => undefined },
   vaultUsers: { isCurrentUserReadonlyVaultMember: () => false },
   features: { getFeatureStatus: () => FeatureStatus.Entitled },
