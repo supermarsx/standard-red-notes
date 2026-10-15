@@ -962,6 +962,12 @@ check **Custom Locations** and **Advanced** for an override and either correct
 its port or remove it so the main forwarding destination handles both paths.
 Redact socket tokens and cookies before sharing logs.
 
+An HTTP **502 Bad Gateway** in diagnostics can mean the app or its backend is
+down, restarting, or unreachable from the proxy. It can also mean the proxy
+targets the wrong host or port. Check container status and startup logs, then
+the proxy's upstream error, before changing socket settings. A 502 is a proxy
+response, not proof that the database is down or a request timed out.
+
 Validate the configuration before reloading the outer proxy:
 
 ```sh

@@ -255,7 +255,7 @@ export function buildHealthReport(input: HealthReportInput): string {
 }
 
 /** Closed set of reasons the status read can fail, so no server text is echoed. */
-const ERROR_KINDS = ['unauthorized', 'forbidden', 'not-found', 'unreachable', 'other'] as const
+const ERROR_KINDS = ['unauthorized', 'forbidden', 'not-found', 'bad-gateway', 'unreachable', 'other'] as const
 
 /**
  * Maps a load-error message to a closed code. The message itself is built by this
@@ -263,6 +263,9 @@ const ERROR_KINDS = ['unauthorized', 'forbidden', 'not-found', 'unreachable', 'o
  * one free-form string in the report an exception to the rule.
  */
 export function errorKind(message: string): (typeof ERROR_KINDS)[number] {
+  if (/\b502\b|bad gateway/i.test(message)) {
+    return 'bad-gateway'
+  }
   if (message.includes('401')) {
     return 'unauthorized'
   }

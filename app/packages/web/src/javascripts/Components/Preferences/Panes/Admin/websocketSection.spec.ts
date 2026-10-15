@@ -1412,19 +1412,16 @@ describe('gateway admission and traffic', () => {
     expect(findingOf(omitted, 'SOCKET_ORIGIN_NOT_ADMITTED')?.remedy?.summary).toContain('not among them')
   })
 
-  it('names the ticket-secret disagreement only when both counters are non-zero', () => {
+  it('keeps cumulative rejected handshakes informational without claiming a ticket-secret disagreement', () => {
     const both = build({ counters: counters({ ticketsIssued: 40, handshakeRejected: 40 }) })
     const finding = findingOf(both, 'SOCKET_HANDSHAKE_REJECTED')
 
-    expect(finding?.claimed).toBe('undetermined')
-    expect(finding?.verdict).toBe('undetermined')
-    // The UNCAPPED correlated sentence, which is the one this pane printed the
-    // necessary-condition wording over until the relation became a closed set.
-    // "Its failure is conclusive" is false of two counters moving together, and
-    // this assertion is what stops it being printed here.
-    expect(finding?.caveat).toContain('travels with')
-    expect(finding?.caveat).toContain('no verdict is claimed from it')
-    expect(finding?.caveat).not.toContain('Its failure is conclusive')
+    expect(finding?.claimed).toBe('informational')
+    expect(finding?.verdict).toBe('informational')
+    expect(finding?.remedy?.summary).toContain('no configuration change is indicated')
+    expect(finding?.remedy?.effort).toBe('none')
+    const historical = build({ counters: counters({ ticketsIssued: 15, handshakeRejected: 1 }) })
+    expect(rowOf(historical, 'Handshakes rejected since attach').verdict).toBe('informational')
     expect(finding?.remedy?.steps.join(' ')).toContain('WEB_SOCKET_CONNECTION_TOKEN_SECRET')
 
     expect(codesOf(build({ counters: counters({ ticketsIssued: 40, handshakeRejected: 0 }) }))).not.toContain(

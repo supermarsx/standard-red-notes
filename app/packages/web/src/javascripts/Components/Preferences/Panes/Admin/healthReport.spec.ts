@@ -178,6 +178,10 @@ describe('buildHealthReport', () => {
   })
 
   describe('errorKind', () => {
+    it('classifies an explicit proxy 502 without exposing its response body', () => {
+      expect(errorKind('The server answered 502 for the diagnostics endpoint.')).toBe('bad-gateway')
+      expect(errorKind('Bad Gateway')).toBe('bad-gateway')
+    })
     it('maps a status-bearing message to a closed code', () => {
       expect(errorKind('The server answered 401 for the diagnostics endpoint.')).toBe('unauthorized')
       expect(errorKind('The server answered 403.')).toBe('forbidden')

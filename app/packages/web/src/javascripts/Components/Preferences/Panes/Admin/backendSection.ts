@@ -274,7 +274,14 @@ import { errorKind } from './healthReport'
  * compile instead of arriving as "other (unrecognised)" on a row whose whole job
  * is to name the cause.
  */
-export const BACKEND_READ_FAILURES = ['unauthorized', 'forbidden', 'not-found', 'unreachable', 'other'] as const
+export const BACKEND_READ_FAILURES = [
+  'unauthorized',
+  'forbidden',
+  'not-found',
+  'bad-gateway',
+  'unreachable',
+  'other',
+] as const
 
 export type BackendReadFailure = (typeof BACKEND_READ_FAILURES)[number]
 
@@ -977,6 +984,7 @@ function remedyForPendingMigrations(pending: number | undefined): Remedy {
  * role. A code added to the classifier fails compilation instead.
  */
 const READ_FAILURE_EFFORT: Record<BackendReadFailure, RemedyEffort> = {
+  'bad-gateway': REPAIR_ANOTHER_SERVICE,
   unauthorized: 'none',
   forbidden: 'none',
   'not-found': 'rebuild',
@@ -985,6 +993,8 @@ const READ_FAILURE_EFFORT: Record<BackendReadFailure, RemedyEffort> = {
 }
 
 const READ_FAILURE_SUMMARY: Record<BackendReadFailure, string> = {
+  'bad-gateway':
+    'The proxy answered HTTP 502 (Bad Gateway). The app or backend may be down, restarting, or unreachable from the reverse proxy. A wrong upstream host or port can cause the same response; this does not establish that the database is down.',
   unauthorized:
     'The status endpoint answered 401. This session is not authenticated to it, so this whole section has no data — which is NOT a report that the services are down.',
   forbidden:
@@ -998,6 +1008,11 @@ const READ_FAILURE_SUMMARY: Record<BackendReadFailure, string> = {
 }
 
 const READ_FAILURE_STEPS: Record<BackendReadFailure, string[]> = {
+  'bad-gateway': [
+    'Check whether the app and server containers are running or restarting, then read their startup logs.',
+    'Check the reverse proxy error log and confirm its upstream host and port point to the running deployment. Connection refused means that upstream listener was unavailable.',
+    'Refresh diagnostics after the upstream answers again. HTTP 502 is a proxy response, not a request timeout.',
+  ],
   unauthorized: [],
   forbidden: [],
   'not-found': [
@@ -1108,7 +1123,9 @@ function buildReadBlock(
           ? safeConstant('answered with 401; status data unavailable')
           : failure === 'forbidden'
             ? safeConstant('answered with 403; status data unavailable')
-            : safeState(answered, 'answered', 'did not answer'),
+            : failure === 'bad-gateway'
+              ? safeConstant('proxy answered HTTP 502; app or backend may be down')
+              : safeState(answered, 'answered', 'did not answer'),
       ...absentOr(answered, answered === true ? 'healthy' : 'broken'),
       note: 'Whether the payload every other row in this section reads actually arrived. It is the first row on purpose: a section full of "not reported" means one of two completely different things, and this is the row that says which. No read at all is reported as undetermined, never as a failure.',
     }),

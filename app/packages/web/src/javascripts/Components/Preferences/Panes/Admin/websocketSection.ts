@@ -657,30 +657,25 @@ function remedyForRefusedOrigin(allowedOriginCount: number | undefined): Remedy 
 }
 
 /**
- * Tickets mint and the handshake is then refused.
- *
- * The signature of two processes that disagree about
- * `WEB_SOCKET_CONNECTION_TOKEN_SECRET`: the HTTP leg that mints a ticket and the
- * socket leg that redeems it are different processes on a multi-replica
- * deployment, and a ticket signed by one is unreadable to the other. From every
- * other panel this looks like a healthy gateway, because it is one.
+ * Lifetime totals cannot establish a current failure, its cause, or whether
+ * the tickets minted and handshakes rejected were from the same client.
  */
 function remedyForRejectedHandshakes(): Remedy {
   return {
     code: 'SOCKET_HANDSHAKE_REJECTED',
     summary:
-      'Tickets are being issued and the handshakes that present them are being refused. The usual cause is two processes that do not share the ticket secret. Restart only — no rebuild.',
+      'The gateway has recorded rejected handshakes since startup. This historical count does not establish an ongoing fault. If the socket and round-trip checks pass, no configuration change is indicated.',
     steps: [
-      'Set WEB_SOCKET_CONNECTION_TOKEN_SECRET to the SAME value on every process in the stack. A ticket minted by one replica and redeemed on another must verify against one key.',
-      'Check the clock on each process as well. A ticket is short-lived, so a replica whose clock is minutes out rejects tickets that are genuinely current — the Browser section reports this client’s own offset from the server.',
-      'A ticket is single-use. Refusals that match the number of reconnects rather than the number of mints are a client retrying a redeemed ticket, which is expected and not this fault.',
-      'Restart every process after changing the secret, then re-run the checks on this page.',
+      'Run the live socket and sync round-trip checks. Refresh diagnostics later to see whether the rejected-handshake count is still increasing.',
+      'If new refusals coincide with connection failures, inspect gateway logs for the actual rejection reason. Expired or replayed single-use tickets can be refused during reconnects without a deployment fault.',
+      'Only if logs indicate invalid ticket signatures, check that WEB_SOCKET_CONNECTION_TOKEN_SECRET agrees across the processes minting and redeeming tickets. Check their clocks for expiry failures.',
+      'Restart affected processes only after correcting a confirmed configuration problem.',
     ],
-    effort: CONFIG_AND_RESTART,
+    effort: 'none',
     basis: 'verified',
     because: [
-      'The gateway reports tickets issued AND handshakes rejected. Either number alone is ordinary; together they mean clients are reaching the socket with a credential it will not accept.',
-      'No secret, length or value is read to establish this — only two counters.',
+      'These are cumulative gateway-wide totals since startup, not a recent failure rate or a diagnosis of this tab.',
+      'The counters carry neither the rejected ticket reason nor evidence that the rejected handshakes used the tickets counted here.',
     ],
   }
 }
@@ -2333,8 +2328,8 @@ function buildAdmissionBlock(
     diagnosticRow({
       label: safeConstant('Handshakes rejected since attach'),
       value: safeCount(rejected),
-      ...absentOr(rejected, rejected !== undefined && rejected > 0 ? 'degraded' : 'informational'),
-      note: 'Sockets that presented a ticket and were refused at the handshake. MONOTONIC SINCE THIS GATEWAY ATTACHED. This is the counter that separates "nobody asks" from "asks and is refused" from "tickets mint and the socket will not take them" — the last being the signature of two replicas that do not share the ticket secret.',
+      ...absentOr(rejected, 'informational'),
+      note: 'MONOTONIC SINCE THIS GATEWAY ATTACHED. Cumulative gateway-wide rejected handshakes since startup. Historical refusals can include expired or replayed tickets and other clients. This total does not establish an ongoing failure or a ticket-secret mismatch; use the live checks and rejection logs.',
     }),
   ]
 
@@ -2370,18 +2365,11 @@ function buildAdmissionBlock(
     findings.push(
       diagnosticFinding({
         code: safeConstant('SOCKET_HANDSHAKE_REJECTED'),
-        title: 'Tickets are minting and the handshakes presenting them are refused',
+        title: 'The gateway recorded rejected handshakes since startup',
         detail:
-          'Both counters are non-zero, which means clients are getting a credential over HTTP and the socket will not accept it. Either number alone is ordinary — a refused mint is a refused request, a rejected handshake is a replayed ticket — and together they are the signature of two processes that do not agree on the ticket secret.',
-        // CLAIMED `undetermined`, deliberately, so the correlated caveat prints
-        // in full rather than being swallowed by a cap. Two counters moving
-        // together are a hypothesis worth a remedy and not a verdict: a
-        // single-use ticket replayed on a reconnect produces the same pair.
-        verdict: 'undetermined',
-        evidence: correlatedProxy(
-          'that tickets are being issued and handshakes are being rejected at the same time',
-          'that the two processes disagree about the ticket secret',
-        ),
+          'The lifetime totals show tickets issued and handshakes rejected somewhere on this gateway. They do not show whether refusals are current, which client encountered them, or why. Passing live checks remain passing.',
+        verdict: 'informational',
+        evidence: EVIDENCE_DIRECT,
         remedy: remedyForRejectedHandshakes(),
       }),
     )

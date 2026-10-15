@@ -1660,6 +1660,7 @@ describe('why the status read failed', () => {
     ['Could not load: 401', 'unauthorized'],
     ['Could not load: 403', 'forbidden'],
     ['Could not load: 404', 'not-found'],
+    ['Could not load: 502', 'bad-gateway'],
     ['could not reach the server', 'unreachable'],
     ['something else entirely', 'other'],
   ])('classifies %p as %p, exactly as the health report does', (message, expected) => {
@@ -1691,6 +1692,13 @@ describe('why the status read failed', () => {
     const model = buildBackendSection({ statusError: 'Could not load: 404' })
 
     expect(findingOf(model, 'BACKEND_STATUS_UNREADABLE')?.remedy?.effort).toBe('rebuild')
+  })
+  it('explains that a proxy 502 can mean the app is down or its upstream is unreachable', () => {
+    const model = buildBackendSection({ statusError: 'The server answered 502.' })
+    const remedy = findingOf(model, 'BACKEND_STATUS_UNREADABLE')?.remedy
+    expect(remedy?.summary).toContain('app or backend may be down')
+    expect(remedy?.summary).toContain('upstream host or port')
+    expect(remedy?.effort).toBe('peer-service')
   })
 
   it('treats an empty or null error as no error at all', () => {
