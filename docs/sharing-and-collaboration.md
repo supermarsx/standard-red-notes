@@ -131,6 +131,16 @@ preparation. None of these retries bypass the canonical-state or saving-lease
 checks. Saver election coalesces presence changes for 200 milliseconds before
 claiming its server lease and pulling the current revision.
 
+An eligible peer that never announces an active saving proof gets a 3-second
+preparation grace period; after that another candidate may try the server
+lease. Repeated presence updates do not restart that wait. An already active,
+healthy saver keeps its role. Transient saver failures retry after 500
+milliseconds, doubling up to 5 seconds; the one-second watchdog schedules
+those retries. A rejected claim never enables editing. In-flight initialization
+still has its 15-second deadline, and a crashed owner's server lease can take
+up to 20 seconds to expire. These safety waits are distinct from an ordinary
+connected handoff, which does not deliberately wait for lease expiry.
+
 When a tab closes normally, the shared socket releases only the saving lease
 issued to that tab. The server checks the current session and the exact lease
 proof; a stale release cannot remove a successor's lease. A crashed process or

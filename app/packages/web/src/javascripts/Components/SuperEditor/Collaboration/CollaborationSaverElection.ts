@@ -147,6 +147,9 @@ export const CollaborationSaverRegistry = new CollaborationSaverRegistryImpl()
 export const SAVER_HANDOFF_SETTLE_MS = 200
 export const SAVER_DURABILITY_TIMEOUT_MS = 15_000
 export const SAVER_INITIALIZATION_TIMEOUT_MS = 15_000
+export const SAVER_PEER_PREPARATION_GRACE_MS = 3_000
+const SAVER_RETRY_INITIAL_MS = 500
+const SAVER_RETRY_MAX_MS = 5_000
 const pendingFenceReleasesByApplication = new WeakMap<WebApplication, Map<string, Promise<void>>>()
 
 /** Installs once per provider lifetime; no account-wide body saves are emitted by non-savers. */
@@ -167,6 +170,8 @@ export function installCollaborationSaver(
   let saveRequest = 0
   let stalled = false
   let quarantineUntil = 0
+  let retryDelay = SAVER_RETRY_INITIAL_MS
+  const preparingPeers = new Map<string, number>()
   let awaiting: { state: CollaborativeDocumentState; since: number; epoch: string } | undefined
   const registryOwner = {}
   const initialNote = application.items.findItem<SNNote>(room)
@@ -251,6 +256,7 @@ export function installCollaborationSaver(
   }
   const elect = () => {
     const participants: SaverParticipant[] = []
+    const present = new Set<string>()
     awareness.getStates().forEach((state) => {
       const candidate = (state as { saver?: SaverParticipant }).saver
       if (
@@ -258,9 +264,32 @@ export function installCollaborationSaver(
         typeof candidate.canSaveOverSocket === 'boolean' &&
         typeof candidate.canonicalReady === 'boolean'
       ) {
+        present.add(candidate.leaseId)
+        if (
+          candidate.leaseId !== leaseId &&
+          candidate.canSaveOverSocket &&
+          candidate.canonicalReady &&
+          candidate.saving !== true
+        ) {
+          const since = preparingPeers.get(candidate.leaseId) ?? Date.now()
+          preparingPeers.set(candidate.leaseId, since)
+          // A peer's eligibility is an offer, not a promise that it will ever
+          // claim. Older or stuck clients must not hold the whole room hostage.
+          // Let another candidate try; SQL still arbitrates every actual claim.
+          if (Date.now() - since >= SAVER_PEER_PREPARATION_GRACE_MS) {
+            return
+          }
+        } else {
+          preparingPeers.delete(candidate.leaseId)
+        }
         participants.push(candidate)
       }
     })
+    for (const peer of preparingPeers.keys()) {
+      if (!present.has(peer)) {
+        preparingPeers.delete(peer)
+      }
+    }
     const chosen = electCollaborationSaver(participants)
     const next = chosen?.leaseId
     if (next === electedLease) {
@@ -310,7 +339,8 @@ export function installCollaborationSaver(
           renewing = false
           initializationTimer = undefined
           releaseFence()
-          quarantineUntil = Date.now() + 5_000
+          quarantineUntil = Date.now() + retryDelay
+          retryDelay = Math.min(SAVER_RETRY_MAX_MS, retryDelay * 2)
           advertise()
         }, SAVER_INITIALIZATION_TIMEOUT_MS)
         void (async () => {
@@ -374,6 +404,7 @@ export function installCollaborationSaver(
           if (next === leaseId) {
             awaiting = undefined
             stalled = false
+            retryDelay = SAVER_RETRY_INITIAL_MS
           }
           settledLease = next === leaseId || chosen?.saving === true ? next : undefined
           saveRequest += 1
@@ -386,7 +417,8 @@ export function installCollaborationSaver(
             clearTimeout(initializationTimer)
             initializationTimer = undefined
             releaseFence()
-            quarantineUntil = Date.now() + 5_000
+            quarantineUntil = Date.now() + retryDelay
+            retryDelay = Math.min(SAVER_RETRY_MAX_MS, retryDelay * 2)
             advertise()
           })
           .finally(() => {
@@ -417,7 +449,8 @@ export function installCollaborationSaver(
             return
           }
           releaseFence()
-          quarantineUntil = Date.now() + 5_000
+          quarantineUntil = Date.now() + retryDelay
+          retryDelay = Math.min(SAVER_RETRY_MAX_MS, retryDelay * 2)
           advertise()
         })
         .finally(() => {
@@ -428,7 +461,8 @@ export function installCollaborationSaver(
     }
     if (saveFence && saveFence.expiresAt <= Date.now()) {
       releaseFence()
-      quarantineUntil = Date.now() + 5_000
+      quarantineUntil = Date.now() + retryDelay
+      retryDelay = Math.min(SAVER_RETRY_MAX_MS, retryDelay * 2)
       advertise()
     }
   }
@@ -468,6 +502,8 @@ export function installCollaborationSaver(
     renewing = false
     stalled = false
     quarantineUntil = 0
+    retryDelay = SAVER_RETRY_INITIAL_MS
+    preparingPeers.clear()
     activeIdentityValid = valid
     if (valid && active) {
       leaseId = active.leaseId
@@ -541,6 +577,9 @@ export function installCollaborationSaver(
       return
     }
     maintainFence()
+    if (preparingPeers.size > 0) {
+      elect()
+    }
     if (quarantineUntil && Date.now() >= quarantineUntil) {
       quarantineUntil = 0
       stalled = false
@@ -574,7 +613,8 @@ export function installCollaborationSaver(
       // server has not acknowledged even the state seen at the start of this wait.
       stalled = true
       if (settledLease === leaseId) {
-        quarantineUntil = Date.now() + 30_000
+        quarantineUntil = Date.now() + retryDelay
+        retryDelay = Math.min(SAVER_RETRY_MAX_MS, retryDelay * 2)
         advertise()
       }
       publishRegistry()

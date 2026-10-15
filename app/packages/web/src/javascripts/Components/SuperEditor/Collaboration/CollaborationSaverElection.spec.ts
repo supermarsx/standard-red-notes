@@ -25,6 +25,7 @@ import {
   electCollaborationSaver,
   installCollaborationSaver,
   SAVER_INITIALIZATION_TIMEOUT_MS,
+  SAVER_PEER_PREPARATION_GRACE_MS,
 } from './CollaborationSaverElection'
 
 const participant = (userUuid: string, leaseId: string, canSaveOverSocket = true) => ({
@@ -141,6 +142,34 @@ describe('collaboration saver election', () => {
       expect(application.sync.sync).toHaveBeenCalled()
       expect(CollaborationSaverRegistry.get('room')).toMatchObject({ isSaver: true, paused: false })
     })
+    it('retries a transient claim failure promptly without waiting five seconds', async () => {
+      jest.mocked(claimCollaborationSaveFence).mockRejectedValueOnce(new Error('temporary outage'))
+      await jest.advanceTimersByTimeAsync(500)
+      expect(CollaborationSaverRegistry.get('room')).toMatchObject({ paused: true, isSaver: false })
+      await jest.advanceTimersByTimeAsync(1_000)
+      expect(claimCollaborationSaveFence).toHaveBeenCalledTimes(2)
+      expect(CollaborationSaverRegistry.get('room')).toMatchObject({ paused: false, isSaver: true })
+    })
+    it('does not wait forever for an eligible peer which never obtains a save proof', async () => {
+      awareness.getStates().set(999, { saver: participant('0', 'stuck-peer') })
+      awareness.emit('change', [])
+      await jest.advanceTimersByTimeAsync(SAVER_PEER_PREPARATION_GRACE_MS - 100)
+      expect(claimCollaborationSaveFence).not.toHaveBeenCalled()
+      // Awareness refreshes from an old client do not restart the grace period.
+      awareness.emit('change', [])
+      await jest.advanceTimersByTimeAsync(500)
+      expect(claimCollaborationSaveFence).toHaveBeenCalledTimes(1)
+      expect(CollaborationSaverRegistry.get('room')).toMatchObject({ paused: false, isSaver: true })
+    })
+    it('keeps editing disabled when a replacement candidate is refused by the server lock', async () => {
+      awareness.getStates().set(999, { saver: participant('0', 'stuck-peer') })
+      awareness.emit('change', [])
+      jest.mocked(claimCollaborationSaveFence).mockRejectedValue(new Error('another editor holds the proof'))
+      await jest.advanceTimersByTimeAsync(7_000)
+      expect(claimCollaborationSaveFence).toHaveBeenCalled()
+      expect(CollaborationSaverRegistry.get('room')).toMatchObject({ paused: true, isSaver: false })
+      expect(application.sync.sync).not.toHaveBeenCalled()
+    })
     it('a lost save lane immediately stops the sole saver, then recovers', async () => {
       await jest.advanceTimersByTimeAsync(2_000)
       lane = { usable: false }
@@ -152,15 +181,26 @@ describe('collaboration saver election', () => {
       expect(CollaborationSaverRegistry.get('room')?.isSaver).toBe(true)
     })
     it('withdraws a saver whose server durability never advances', async () => {
-      await jest.advanceTimersByTimeAsync(17_000)
+      await jest.advanceTimersByTimeAsync(16_000)
       expect(CollaborationSaverRegistry.get('room')).toMatchObject({ isSaver: false, paused: true })
       expect(awareness.getLocalState()?.saver.canSaveOverSocket).toBe(false)
     })
     it('reclaims a proof promptly when the lane recovers instead of waiting out the old quarantine', async () => {
-      const stamp = createCollaborationRevisionStamp('epoch', documentStateOf(doc), '', Date.now())!
-      content = { text: '', appData: { 'org.standardnotes.sn': { collaborationRevision: stamp } } }
+      doc.getText('text').insert(0, 'saved')
+      const stamp = createCollaborationRevisionStamp('epoch', documentStateOf(doc), 'saved', Date.now())!
+      content = {
+        text: 'saved',
+        appData: {
+          'org.standardnotes.sn': {
+            collaborationRevision: stamp,
+            client_updated_at: new Date(stamp.at).toISOString(),
+          },
+        },
+      }
       jest.mocked(renewCollaborationSaveFence).mockRejectedValueOnce(new Error('temporary outage'))
-      await jest.advanceTimersByTimeAsync(23_000)
+      for (let tick = 0; tick < 30 && !jest.mocked(renewCollaborationSaveFence).mock.calls.length; tick++) {
+        await jest.advanceTimersByTimeAsync(1_000)
+      }
       expect(CollaborationSaverRegistry.get('room')).toMatchObject({ paused: true, isSaver: false })
       lane = { usable: false }
       changeLane()
@@ -233,7 +273,7 @@ describe('collaboration saver election', () => {
         },
       }
       jest.mocked(renewCollaborationSaveFence).mockRejectedValueOnce(new Error('lease lost'))
-      await jest.advanceTimersByTimeAsync(24_000)
+      await jest.advanceTimersByTimeAsync(21_000)
       expect(renewCollaborationSaveFence).toHaveBeenCalled()
       expect(CollaborationSaverRegistry.get('room')).toMatchObject({ isSaver: false, paused: true })
       expect(awareness.getLocalState()?.saver.saving).toBe(false)
