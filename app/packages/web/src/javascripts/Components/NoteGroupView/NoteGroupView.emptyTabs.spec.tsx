@@ -17,7 +17,7 @@
  * passed tests and never appeared.
  */
 
-import { act, createElement, ReactElement } from 'react'
+import { act, createElement, createRef, ReactElement } from 'react'
 import { createRoot, Root } from 'react-dom/client'
 import { WebApplication } from '@/Application/WebApplication'
 
@@ -58,6 +58,7 @@ const makeApplication = (controllers: FakeController[], isInMobileView = false) 
     isLaunched: () => false,
     addEventObserver: () => noop,
     itemControllerGroup: {
+      isRetainedForCollaboration: jest.fn().mockReturnValue(false),
       itemControllers: controllers,
       activeItemViewController: controllers[0],
       // The real group notifies on registration-relevant changes; fire once
@@ -145,6 +146,23 @@ const splitButton = () =>
   container.querySelector('button[aria-label="Split: show notes side by side"]') as HTMLButtonElement | null
 
 describe('editor tab bar with no tabs open', () => {
+  it('retains the exact hidden editor node while opening a successor, without turning retention into a split view', () => {
+    const first = { runtimeId: 'first', item: { uuid: 'first-note', title: 'First' } }
+    const second = { runtimeId: 'second', item: { uuid: 'second-note', title: 'Second' } }
+    const { application } = makeApplication([first])
+    const view = createRef<NoteGroupView>()
+    mount(createElement(NoteGroupView, { application, ref: view }), application)
+    const oldEditor = container.querySelector('[data-testid="file-view"]')!
+    jest
+      .mocked(application.itemControllerGroup.isRetainedForCollaboration)
+      .mockImplementation((controller) => controller.runtimeId === 'first')
+    act(() => view.current!.setState({ controllers: [first, second] as never, activeControllerRuntimeId: 'second' }))
+    expect(container.querySelectorAll('[data-testid="file-view"]')).toHaveLength(2)
+    expect(container.querySelector('[data-testid="file-view"]')).toBe(oldEditor)
+    expect(oldEditor.parentElement?.parentElement?.hidden).toBe(true)
+    expect(container.textContent).toContain('Pending sync')
+    expect(container.querySelector('[data-testid="tiles-toolbar"]')).toBeNull()
+  })
   it('still renders the tab bar', () => {
     const { application } = makeApplication([])
     mount(createElement(NoteGroupView, { application }), application)

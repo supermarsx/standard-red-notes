@@ -51,6 +51,10 @@ jest.mock('@/Components/NoteView/Controller/NoteViewController', () => {
     })
     syncOnlyIfLargeNote = jest.fn()
     flushAndAwaitPendingSave = jest.fn().mockResolvedValue(undefined)
+    prepareForRetainedNavigation = jest.fn(async () => {
+      await this.flushAndAwaitPendingSave()
+      return false
+    })
     flushAndAwaitPendingSaveStrict = jest.fn().mockResolvedValue(undefined)
 
     constructor(item?: { uuid: string }) {

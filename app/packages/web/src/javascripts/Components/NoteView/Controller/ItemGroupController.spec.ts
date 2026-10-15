@@ -22,6 +22,7 @@ import {
 import { IsNativeMobileWeb } from '@standardnotes/ui-services'
 import { ChecklistEditorOpeningCanceledError, ItemGroupController } from './ItemGroupController'
 import { NoteViewController } from './NoteViewController'
+import { CollaborationSaverRegistry } from '@/Components/SuperEditor/Collaboration/CollaborationSaverElection'
 
 /**
  * Replace the real NoteViewController/FileViewController with lightweight stubs so the
@@ -37,6 +38,10 @@ jest.mock('./NoteViewController', () => {
     deinitImmediatelyForSecurity = jest.fn()
     syncOnlyIfLargeNote = jest.fn()
     flushAndAwaitPendingSave = jest.fn().mockResolvedValue(undefined)
+    prepareForRetainedNavigation = jest.fn(async () => {
+      await this.flushAndAwaitPendingSave()
+      return false
+    })
     flushAndAwaitPendingSaveStrict = jest.fn().mockResolvedValue(undefined)
 
     constructor(item?: { uuid: string }) {
@@ -91,6 +96,33 @@ describe('ItemGroupController tabs/tiles', () => {
 
   const addTab = () => group.createItemController({ templateOptions: {}, openInNewTile: true })
   const superNote = (uuid: string) => ({ uuid, noteType: NoteType.Super }) as never
+
+  it('opens the next note immediately while retaining the pending editor, and closes it only after server coverage', async () => {
+    const outgoing = (await addTab()) as NoteViewController
+    const room = outgoing.item!.uuid
+    const state = { active: true as const, isSaver: false, paused: true, leaseId: 'retained-test', saveRequest: 0 }
+    let pending = true
+    CollaborationSaverRegistry.set(room, state)
+    CollaborationSaverRegistry.setPendingReader(room, () => pending)
+    jest.mocked(outgoing.prepareForRetainedNavigation).mockResolvedValue(true)
+    jest.mocked(outgoing.flushAndAwaitPendingSaveStrict).mockRejectedValue(new Error('peer not acknowledged'))
+    try {
+      const incoming = await group.createItemController({ templateOptions: {} })
+      expect(group.activeItemViewController).toBe(incoming)
+      expect(group.itemControllers).toContain(outgoing)
+      expect(group.isRetainedForCollaboration(outgoing)).toBe(true)
+      expect(outgoing.deinit).not.toHaveBeenCalled()
+      CollaborationSaverRegistry.set(room, state)
+      expect(group.itemControllers).toContain(outgoing)
+      pending = false
+      CollaborationSaverRegistry.set(room, state)
+      expect(group.itemControllers).not.toContain(outgoing)
+      expect(outgoing.deinit).toHaveBeenCalledTimes(1)
+      expect(group.activeItemViewController).toBe(incoming)
+    } finally {
+      CollaborationSaverRegistry.clear(room, state.leaseId)
+    }
+  })
 
   it('adding a tab grows the controller set and makes the new one active', async () => {
     const first = await addTab()

@@ -22,6 +22,7 @@ export type TabTarget = { kind: 'view'; id: string } | { kind: 'controller'; run
 
 type Props = {
   controllers: Controller[]
+  pendingControllerRuntimeIds?: ReadonlySet<string>
   activeControllerRuntimeId?: string
   onSelect: (controller: Controller) => void
   onClose: (controller: Controller) => void
@@ -125,6 +126,7 @@ const targetsEqual = (a: TabTarget, b: TabTarget): boolean => {
 const NoteTabBar: FunctionComponent<Props> = ({
   controllers,
   activeControllerRuntimeId,
+  pendingControllerRuntimeIds,
   onSelect,
   onClose,
   onAddTab,
@@ -368,6 +370,14 @@ const NoteTabBar: FunctionComponent<Props> = ({
               />
             ) : (
               <span className="max-w-[8rem] truncate md:max-w-[10rem]">{title}</span>
+            )}
+            {pendingControllerRuntimeIds?.has(controller.runtimeId) && (
+              <span
+                className="text-passive-1 text-[10px] whitespace-nowrap"
+                title="This editor is retained until the server acknowledges its collaboration changes."
+              >
+                Pending sync
+              </span>
             )}
             {canToggleLock && (
               <button

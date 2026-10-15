@@ -410,6 +410,41 @@ describe('note view controller', () => {
     },
   )
 
+  it('allows immediate navigation only when the caller retains the exact pending editor, without claiming remote durability', async () => {
+    const note = { uuid: 'retained-navigation-note', text: '' } as jest.Mocked<SNNote>
+    application.items.findItem = jest.fn().mockReturnValue(note)
+    const controller = new NoteViewController(
+      note,
+      application.items,
+      application.mutator,
+      application.sync,
+      application.sessions,
+      application.preferences,
+      application.componentManager,
+      application.alerts,
+      application.isNativeMobileWebUseCase,
+    )
+    await controller.initialize()
+    const remote = jest.fn().mockRejectedValue(new Error('still waiting for the server'))
+    controller.registerEditorDurabilityFlush(remote)
+    CollaborationSaverRegistry.set(note.uuid, {
+      active: true,
+      leaseId: 'pending',
+      isSaver: false,
+      paused: true,
+      saveRequest: 0,
+    })
+    CollaborationSaverRegistry.setPendingReader(note.uuid, () => true)
+    try {
+      await expect(controller.prepareForRetainedNavigation()).resolves.toBe(true)
+      expect(remote).not.toHaveBeenCalled()
+      expect(controller.dealloced).toBe(false)
+      expect(CollaborationSaverRegistry.isDurabilityConfirmed(note.uuid)).toBe(false)
+    } finally {
+      CollaborationSaverRegistry.clear(note.uuid, 'pending')
+    }
+  })
+
   /**
    * The relay flush may only be waived once the LOCAL copy is proved durable. When
    * local persistence also failed there is genuine unsaved content, so the teardown

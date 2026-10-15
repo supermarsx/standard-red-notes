@@ -22,6 +22,7 @@ import {
   checklistSessionPrincipalMatches,
 } from '../../SuperEditor/Checklist/checklistSessionPrincipal'
 import { readLockedTabUuids, takeoverTabIndex, writeLockedTabUuids } from '@/Tabs/lockedTabs'
+import { CollaborationSaverRegistry } from '@/Components/SuperEditor/Collaboration/CollaborationSaverElection'
 
 type ItemControllerGroupChangeCallback = (activeController: NoteViewController | FileViewController | undefined) => void
 
@@ -78,6 +79,11 @@ export type CreateItemControllerContext = {
 
 export class ItemGroupController {
   public itemControllers: (NoteViewController | FileViewController)[] = []
+  private readonly retainedNavigationControllers = new Map<NoteViewController, () => void>()
+
+  public isRetainedForCollaboration(controller: NoteViewController | FileViewController): boolean {
+    return controller instanceof NoteViewController && this.retainedNavigationControllers.has(controller)
+  }
   private readonly detachedNoteControllers = new Set<NoteViewController>()
   private readonly detachedControllerClosedCallbacks = new Map<NoteViewController, () => void>()
   private readonly visibleChecklistReservations = new Map<string, Set<VisibleChecklistReservation>>()
@@ -331,6 +337,7 @@ export class ItemGroupController {
      * at until React re-renders.
      */
     const outgoing = context.openInNewTile ? undefined : this.takeoverControllerForIncomingItem()
+    let retainOutgoing = false
 
     if (outgoing) {
       /**
@@ -344,11 +351,18 @@ export class ItemGroupController {
        * failure path safer: if the incoming controller cannot initialize, the outgoing one
        * is still open and the user keeps the note they were on.
        */
-      await this.flushOutgoingItemControllerForHandover(
-        outgoing,
-        () =>
-          (!reservation || this.visibleChecklistReservationIsCurrent(reservation)) && (context.canCommit?.() ?? true),
-      )
+      if (outgoing instanceof NoteViewController) {
+        try {
+          retainOutgoing = await outgoing.prepareForRetainedNavigation()
+        } catch (error) {
+          if (!(error instanceof ChecklistEditorOpeningCanceledError)) {
+            console.error(error)
+          }
+          throw error
+        }
+      } else {
+        await this.flushOutgoingItemControllerForHandover(outgoing)
+      }
       assertCanCommit()
       if (reservation) {
         this.assertVisibleChecklistReservationCurrent(reservation)
@@ -437,7 +451,11 @@ export class ItemGroupController {
     const outgoingIndex = outgoing ? this.itemControllers.indexOf(outgoing) : -1
 
     if (outgoing && this.itemControllers.includes(outgoing)) {
-      this.closeItemController(outgoing, { notify: false })
+      if (retainOutgoing && outgoing instanceof NoteViewController) {
+        this.retainNavigationController(outgoing)
+      } else {
+        this.closeItemController(outgoing, { notify: false })
+      }
     }
 
     const requestedIndex = context.insertAtIndex ?? (outgoingIndex >= 0 ? outgoingIndex : undefined)
@@ -761,6 +779,33 @@ export class ItemGroupController {
     callback?.()
   }
 
+  private retainNavigationController(controller: NoteViewController): void {
+    const room = controller.item?.uuid
+    if (!room || this.retainedNavigationControllers.has(controller)) {
+      return
+    }
+    const releaseWhenAcknowledged = () => {
+      if (
+        !this.itemControllers.includes(controller) ||
+        this.activeControllerRef === controller ||
+        !CollaborationSaverRegistry.isDurabilityConfirmed(room)
+      ) {
+        return
+      }
+      this.closeItemController(controller)
+    }
+    this.retainedNavigationControllers.set(
+      controller,
+      CollaborationSaverRegistry.subscribe(room, releaseWhenAcknowledged),
+    )
+    // A failed remote drain is deferred work, not permission to destroy the
+    // editor. The room observer closes it only after exact server coverage.
+    void controller
+      .flushAndAwaitPendingSaveStrict()
+      .then(releaseWhenAcknowledged)
+      .catch(() => undefined)
+  }
+
   /**
    * Standard Red Notes (last-edit-loss fix — note-switch): flush the outgoing note
    * editor's pending debounced serialize and AWAIT local propagation before deiniting,
@@ -801,6 +846,10 @@ export class ItemGroupController {
     controller: NoteViewController | FileViewController,
     { notify = true, securitySensitive = false }: { notify?: boolean; securitySensitive?: boolean } = {},
   ): void {
+    if (controller instanceof NoteViewController) {
+      this.retainedNavigationControllers.get(controller)?.()
+      this.retainedNavigationControllers.delete(controller)
+    }
     const controllerNoteUuid = controller instanceof NoteViewController ? controller.item?.uuid : undefined
     if (controller instanceof NoteViewController) {
       if (securitySensitive) {

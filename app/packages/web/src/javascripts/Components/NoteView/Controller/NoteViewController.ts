@@ -557,6 +557,28 @@ export class NoteViewController implements ItemViewControllerInterface {
     }
   }
 
+  /** Navigation may retain the mounted editor instead of waiting for a remote
+   * saver. Returning true never means synced: the caller MUST keep this exact
+   * controller and its Y.Doc alive until server durability is confirmed. */
+  public async prepareForRetainedNavigation(): Promise<boolean> {
+    const noteUuid = this.item?.uuid
+    if (!noteUuid || !CollaborationSaverRegistry.get(noteUuid)) {
+      await this.flushAndAwaitPendingSave()
+      return false
+    }
+    this.flushEditorSerialize()
+    await this.inFlightSavePromise
+    if (this.dealloced) {
+      return false
+    }
+    await this.syncController.awaitCurrentLocalPropagationStrict()
+    if (CollaborationSaverRegistry.hasUndurableState(noteUuid)) {
+      return true
+    }
+    await this.flushAndAwaitPendingSave()
+    return false
+  }
+
   /**
    * Confirm the outgoing note is locally durable after a collaboration durability
    * flush failed. Rejects (blocking the close) when the local copy is NOT durable —
