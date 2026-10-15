@@ -135,6 +135,7 @@ const CommentsPanelContent: FunctionComponent<ScopedProps & { api: CommentsApi; 
 }) => {
   const application = useApplication()
   const { quarantinedCount, addComment, removeComment, setResolved, selfUuid } = api
+  const draftKey = `${scope}:${note.uuid}:${anchor?.kind === 'checklist' ? `checklist:${anchor.todoId}` : 'note'}`
   const comments = api.comments.filter((comment) => {
     return anchor?.kind === 'checklist'
       ? comment.anchor?.kind === 'checklist' && comment.anchor.todoId === anchor.todoId
@@ -251,6 +252,7 @@ const CommentsPanelContent: FunctionComponent<ScopedProps & { api: CommentsApi; 
               {replyingTo === comment.id && (
                 <div className="ml-6">
                   <CommentComposer
+                    draftKey={`${draftKey}:reply:${comment.id}`}
                     candidates={candidates}
                     autoFocus
                     submitLabel="Reply"
@@ -269,7 +271,7 @@ const CommentsPanelContent: FunctionComponent<ScopedProps & { api: CommentsApi; 
       </div>
 
       {canWrite ? (
-        <CommentComposer candidates={candidates} onSubmit={(text) => perform(submit(text))} />
+        <CommentComposer draftKey={draftKey} candidates={candidates} onSubmit={(text) => perform(submit(text))} />
       ) : (
         <p className="text-passive-1 text-xs">Comments are read-only for this account or note.</p>
       )}
@@ -291,7 +293,7 @@ const CollaborativeCommentsPanel: FunctionComponent<ScopedProps> = (props) => {
 /** Private is the default and never mounts the shared-key/room-access hook. */
 export const CommentsPanel: FunctionComponent<Props> = ({ note, anchor }) => {
   const application = useApplication()
-  const scopeKey = `${application.sessions.getUser()?.uuid ?? 'offline'}:${note.uuid}:${anchor?.kind === 'checklist' ? anchor.todoId : 'note'}`
+  const scopeKey = `${application.sessions.getUser()?.uuid ?? 'offline'}:${note.uuid}:${anchor?.kind === 'checklist' ? `checklist:${anchor.todoId}` : 'note'}`
   const [state, setState] = useState<{ key: string; scope: CommentScope }>({ key: scopeKey, scope: 'private' })
   const scope = state.key === scopeKey ? state.scope : 'private'
   const props = { note, anchor, scope, setScope: (value: CommentScope) => setState({ key: scopeKey, scope: value }) }

@@ -24,6 +24,8 @@
  * enum member would be visible immediately.
  */
 import { act } from 'react'
+import { $createListItemNode, $createListNode } from '@lexical/list'
+import { $createTextNode, $getRoot } from 'lexical'
 import { createRoot, Root } from 'react-dom/client'
 import { LocalPrefDefaults, PrefDefaults, PrefKey } from '@standardnotes/snjs'
 import { BlocksEditorComposer } from '../../BlocksEditorComposer'
@@ -153,13 +155,25 @@ const mount = async () => {
     root.render(
       <ApplicationProvider application={fakeApp}>
         <AndroidBackHandlerProvider application={fakeApp}>
-          <BlocksEditorComposer initialValue={undefined}>
+          <BlocksEditorComposer
+            initialValue={() => {
+              $getRoot().append(
+                $createListNode('check').append($createListItemNode(false).append($createTextNode('Task'))),
+              )
+            }}
+          >
             <ToolbarPlugin />
           </BlocksEditorComposer>
         </AndroidBackHandlerProvider>
       </ApplicationProvider>,
     )
     await Promise.resolve()
+  })
+  await act(async () => {
+    const tab = [...container.querySelectorAll('[role="tab"]')].find(
+      (item) => item.textContent === 'Checklist',
+    ) as HTMLButtonElement
+    tab.click()
   })
 }
 

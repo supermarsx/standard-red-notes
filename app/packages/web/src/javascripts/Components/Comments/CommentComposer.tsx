@@ -1,5 +1,6 @@
 import { FunctionComponent, KeyboardEvent, useCallback, useMemo, useRef, useState } from 'react'
 import Icon from '@/Components/Icon/Icon'
+import { useEditorControlsState } from '@/Components/SuperEditor/EditorControlsContext'
 import { buildMentionToken, detectMentionQuery, filterMentionCandidates, MentionCandidate } from '@/Comments/mentions'
 
 type Props = {
@@ -9,6 +10,7 @@ type Props = {
   submitLabel?: string
   onSubmit: (text: string) => void
   onCancel?: () => void
+  draftKey?: string
 }
 
 /**
@@ -27,9 +29,24 @@ export const CommentComposer: FunctionComponent<Props> = ({
   submitLabel = 'Comment',
   onSubmit,
   onCancel,
+  draftKey,
 }) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const [value, setValue] = useState('')
+  const controls = useEditorControlsState()
+  const [value, setLocalValue] = useState(() => (draftKey ? (controls.drafts.get(draftKey) ?? '') : ''))
+  const setValue = useCallback(
+    (next: string) => {
+      setLocalValue(next)
+      if (draftKey) {
+        if (next) {
+          controls.drafts.set(draftKey, next)
+        } else {
+          controls.drafts.delete(draftKey)
+        }
+      }
+    },
+    [controls, draftKey],
+  )
   const [query, setQuery] = useState<{ query: string; replaceStart: number; replaceEnd: number } | null>(null)
   const [highlighted, setHighlighted] = useState(0)
 
@@ -61,7 +78,7 @@ export const CommentComposer: FunctionComponent<Props> = ({
       setValue(nextValue)
       recomputeQuery(nextValue, event.target.selectionStart ?? nextValue.length)
     },
-    [recomputeQuery],
+    [recomputeQuery, setValue],
   )
 
   const insertMention = useCallback(
@@ -86,7 +103,7 @@ export const CommentComposer: FunctionComponent<Props> = ({
         }
       })
     },
-    [query, value],
+    [query, value, setValue],
   )
 
   const submit = useCallback(() => {
@@ -97,7 +114,7 @@ export const CommentComposer: FunctionComponent<Props> = ({
     onSubmit(trimmed)
     setValue('')
     setQuery(null)
-  }, [value, onSubmit])
+  }, [value, onSubmit, setValue])
 
   const handleKeyDown = useCallback(
     (event: KeyboardEvent<HTMLTextAreaElement>) => {

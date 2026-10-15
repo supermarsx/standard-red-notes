@@ -31,6 +31,7 @@ import {
   BaseSelection,
   RangeSelection,
   $isNodeSelection,
+  $nodesOfType,
 } from 'lexical'
 import {
   mergeRegister,
@@ -70,7 +71,7 @@ import { IndentBlock, OutdentBlock } from '../Blocks/IndentOutdent'
 import { ParagraphBlock } from '../Blocks/Paragraph'
 import { QuoteBlock } from '../Blocks/Quote'
 import { MutuallyExclusiveMediaQueryBreakpoints, useMediaQuery } from '@/Hooks/useMediaQuery'
-import { LocalPrefKey, PrefKey, SuperToolbarIconSize, classNames } from '@standardnotes/snjs'
+import { LocalPrefKey, PrefKey, SNNote, SuperToolbarIconSize, classNames } from '@standardnotes/snjs'
 import { SUPER_TOGGLE_TOOLBAR } from '@standardnotes/ui-services'
 import {
   OPEN_SUPER_SEARCH_COMMAND,
@@ -153,6 +154,8 @@ import { findFontByCss, filterFonts, groupFontsByCategory } from '../../fonts/fo
 import CustomizeToolbarDialog from './CustomizeToolbarDialog'
 import { NavigationLayoutSubsection, applyNavigationPatch } from './NavigationLayoutSubsection'
 import { ChecklistSubsection } from './ChecklistSubsection'
+import { ChecklistPanel } from '../../Checklist/ChecklistPanel'
+import { useEditorControlsState } from '../../EditorControlsContext'
 import { resolveChecklistBackfillSettings } from '../../Checklist/checklistBackfill'
 import {
   $generateMissedChecklistOccurrences,
@@ -656,7 +659,15 @@ const MERMAID_INLINE_SEGMENT_KEYS = [
   'customise',
 ] as const
 
-const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
+const ToolbarPlugin = ({
+  noteUuid,
+  note,
+  flushChanges,
+}: {
+  noteUuid?: string
+  note?: SNNote
+  flushChanges?: () => void
+}) => {
   const { t } = useTranslation('editor')
   const application = useApplication()
   const isMobile = useMediaQuery(MutuallyExclusiveMediaQueryBreakpoints.sm)
@@ -666,6 +677,15 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
   const [editor] = useLexicalComposerContext()
   const [activeEditor, setActiveEditor] = useState(editor)
   const [isEditable, setIsEditable] = useState(() => editor.isEditable())
+  const [hasChecklist, setHasChecklist] = useState(false)
+  useEffect(() => {
+    const refresh = () =>
+      editor.getEditorState().read(() => {
+        setHasChecklist($nodesOfType(ListNode).some((node) => node.getListType() === 'check'))
+      })
+    refresh()
+    return editor.registerUpdateListener(refresh)
+  }, [editor])
 
   const [blockType, setBlockType] = useState<keyof typeof blockTypeToBlockName>('paragraph')
   // The anchor block's stamped inline style string, so the block-style gallery can
@@ -1935,8 +1955,8 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
 
   const [isFocusInEditor, setIsFocusInEditor] = useState(false)
   const [isFocusInToolbar, setIsFocusInToolbar] = useState(false)
-  const canShowToolbarOnMobile = isFocusInEditor || isFocusInToolbar
-  const canShowAllItems = isMobile || isToolbarFixedToTop
+  const canShowToolbarOnMobile = isFocusInEditor || isFocusInToolbar || (!isEditable && Boolean(note))
+  const canShowAllItems = isMobile || isToolbarFixedToTop || (!isEditable && Boolean(note))
 
   useEffect(() => {
     const container = containerRef.current
@@ -3056,8 +3076,10 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
   // Office-ribbon "super group" tabs: partition the resolved groups into top-level
   // tabs (Home / Insert / AI / Tools) and render only the active tab's groups, so
   // the bar fits without horizontal scroll unless a single tab is itself too tight.
-  const superGroupTabs = groupsBySuperGroup(resolvedGroups)
-  const [activeTabId, setActiveTabId] = useState<string | null>(null)
+  const superGroupTabs = groupsBySuperGroup(resolvedGroups).filter((tab) => tab.id !== 'checklistTab' || hasChecklist)
+  const controlsState = useEditorControlsState()
+  const { tabId: activeTabId } = useSyncExternalStore(controlsState.subscribe, controlsState.getSnapshot)
+  const setActiveTabId = controlsState.setTab
 
   /**
    * Standard Red Notes (t120) — bookkeeping for the Mermaid contextual tab's
@@ -3087,12 +3109,15 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
    * the same yank in the other direction. Clicking the contextual tab itself is
    * not a move away, so it keeps the restore intact.
    */
-  const selectRibbonTab = useCallback((tabId: string) => {
-    if (tabId !== CONTEXTUAL_TAB_ID) {
-      mermaidTabRestoreRef.current = null
-    }
-    setActiveTabId(tabId)
-  }, [])
+  const selectRibbonTab = useCallback(
+    (tabId: string) => {
+      if (tabId !== CONTEXTUAL_TAB_ID) {
+        mermaidTabRestoreRef.current = null
+      }
+      setActiveTabId(tabId)
+    },
+    [setActiveTabId],
+  )
 
   // Layout: by DEFAULT the toolbar keeps every group on a single horizontal line
   // (each group packs its buttons into up to 3 rows below), scrolling
@@ -3486,15 +3511,20 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
   // only for the non-ribbon floating selection toolbar, further below.)
   const hasContextualTab = canShowAllItems && !!effectiveContextualWidget && contextualButtons.length > 0
   const ribbonTabs = [
-    ...superGroupTabs.map((tab) => ({ id: tab.id as string, label: tab.label })),
-    ...(hasContextualTab ? [{ id: CONTEXTUAL_TAB_ID, label: effectiveContextualWidget!.label }] : []),
+    ...superGroupTabs
+      .filter((tab) => isEditable || tab.id === 'checklistTab')
+      .map((tab) => ({ id: tab.id as string, label: tab.label })),
+    ...(note ? [{ id: 'review', label: 'Review' }] : []),
+    ...(hasContextualTab && isEditable ? [{ id: CONTEXTUAL_TAB_ID, label: effectiveContextualWidget!.label }] : []),
   ]
   const effectiveTabId =
     activeTabId && ribbonTabs.some((tab) => tab.id === activeTabId) ? activeTabId : (ribbonTabs[0]?.id ?? null)
   const isContextualActive = effectiveTabId === CONTEXTUAL_TAB_ID
-  const activeGroups = isContextualActive
-    ? []
-    : (superGroupTabs.find((tab) => tab.id === effectiveTabId)?.groups ?? resolvedGroups)
+  const isReviewActive = effectiveTabId === 'review'
+  const activeGroups =
+    isContextualActive || isReviewActive
+      ? []
+      : (superGroupTabs.find((tab) => tab.id === effectiveTabId)?.groups ?? resolvedGroups)
   const activeRibbonGroups = activeGroups.filter((group) => !TOOLBAR_UTILITY_GROUP_IDS.has(group.id))
 
   /**
@@ -3555,7 +3585,7 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
     if (!hasContextualTab) {
       setActiveTabId((prev) => (prev === CONTEXTUAL_TAB_ID ? null : prev))
     }
-  }, [shouldAutoActivateContextualTab, hasContextualTab, activeTabId])
+  }, [shouldAutoActivateContextualTab, hasContextualTab, activeTabId, setActiveTabId])
 
   // Standard Red Notes — Word-like floating selection mini-toolbar.
   //
@@ -3726,11 +3756,11 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
       <div
         className={classNames(
           'bg-contrast',
-          !isEditable ? 'hidden opacity-0' : '',
+          !isEditable && !note ? 'hidden opacity-0' : '',
           isMobile && !canShowToolbarOnMobile ? 'hidden' : '',
           !isMobile && 'border-border bg-default border-b',
           !isMobile
-            ? !isToolbarFixedToTop
+            ? !isToolbarFixedToTop && isEditable
               ? 'z-tooltip translucent-ui:border-(--popover-border-color) translucent-ui:bg-(--popover-background-color) translucent-ui:[backdrop-filter:var(--popover-backdrop-filter)] fixed top-0 left-0 hidden translate-x-(--translate-x) translate-y-(--translate-y) rounded border py-0.5'
               : 'w-full px-1 py-1'
             : '',
@@ -3836,6 +3866,8 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
                 className="super-toolbar flex min-w-0 flex-1 flex-nowrap items-center gap-0.5 overflow-x-auto"
                 store={utilityToolbarStore}
                 aria-label="Clipboard and history tools"
+                inert={!isEditable}
+                style={!isEditable ? { visibility: 'hidden' } : undefined}
               >
                 {TOOLBAR_UTILITY_BUTTON_IDS.map((buttonId, index) => {
                   if (buttonId === ToolbarButtonId.Divider) {
@@ -3857,7 +3889,7 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
                 })}
                 <AssistantChangesToolbar noteUuid={noteUuid} editor={activeEditor} />
               </Toolbar>
-              {ribbonTabs.length > 1 && (
+              {(ribbonTabs.length > 1 || Boolean(note)) && (
                 <>
                   <div
                     // flex-shrink-0 so the tabs keep their width and it is the
@@ -3919,7 +3951,7 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
           <div
             ref={commandPanelRef}
             className={classNames(
-              'flex w-full',
+              'flex w-full flex-wrap',
               // Collapsed, this panel is taken out of the flow and drawn under
               // the tab row, OVER the note, so the text being read does not move
               // when it comes and goes. It keeps the bar's own side padding, so
@@ -3947,7 +3979,7 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
                 'data-[super-toolbar-autohide=revealed]:pointer-events-auto data-[super-toolbar-autohide=revealed]:visible data-[super-toolbar-autohide=revealed]:opacity-100 data-[super-toolbar-autohide=revealed]:transition-opacity motion-reduce:data-[super-toolbar-autohide=revealed]:transition-none',
             )}
           >
-            {isContextualActive ? (
+            {isReviewActive || !isEditable ? null : isContextualActive ? (
               <Toolbar
                 // Mirror the normal super-group layout: spaced, captioned segment
                 // blocks instead of one flat run of buttons.
@@ -4219,6 +4251,15 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
                   </button>
                 </StyledTooltip>
               </div>
+            )}
+            {note && canShowAllItems && (
+              <ChecklistPanel
+                key={note.uuid}
+                note={note}
+                activeSection={isReviewActive ? 'review' : effectiveTabId === 'checklistTab' ? 'checklist' : null}
+                onOpenReview={() => selectRibbonTab('review')}
+                flushChanges={flushChanges}
+              />
             )}
           </div>
         </div>

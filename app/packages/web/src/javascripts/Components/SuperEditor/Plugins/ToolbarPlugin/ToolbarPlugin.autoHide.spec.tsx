@@ -104,7 +104,9 @@ const DOCKED_CLASS_BEFORE_THE_FEATURE = 'bg-contrast   border-border bg-default 
 const LOCKED_CLASS_BEFORE_THE_FEATURE =
   'bg-contrast hidden opacity-0  border-border bg-default border-b w-full px-1 py-1'
 /** The command panel's class attribute before this feature existed. */
-const PANEL_CLASS_BEFORE_THE_FEATURE = 'flex w-full'
+// Checklist/Review sections occupy a full-width row within the ribbon panel.
+// Auto-hide must preserve this baseline when expanded.
+const PANEL_CLASS_BEFORE_THE_FEATURE = 'flex w-full flex-wrap'
 
 const AUTO_HIDE_KEY = SUPER_TOOLBAR_AUTO_HIDE_PREF_KEY as unknown as string
 

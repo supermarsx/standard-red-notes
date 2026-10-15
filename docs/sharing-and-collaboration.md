@@ -251,8 +251,12 @@ If collaborators see stale content:
 
 ## Comments and mentions
 
-The Super editor's **Checklist & comments** section lets you comment on the
-whole note or an individual checklist item. Comments start in **Private** mode:
+The Super editor's **Review** ribbon tab lets you comment on the whole note or
+an individual checklist item. Choose a task with **Comments for**, or click its
+**Comments** action in the **Checklist** tab to open Review with that task selected.
+Switching ribbon tabs or reconnecting the editor keeps an unfinished comment
+in place while this note remains open. Closing the note or changing accounts
+clears unfinished drafts. Comments start in **Private** mode:
 they are stored in your personal encrypted account preferences, including when
 the note belongs to a shared vault. Choose **Collaborative** explicitly to use
 the note's signed, encrypted comment stream. Changing the note or comment target
@@ -266,7 +270,8 @@ produces an error instead of discarding existing comments. Concurrent edits from
 different devices use ordinary preference synchronization, rather than the live
 collaborative comment stream.
 
-The checklist section also provides pins and high, normal or low priority flags.
+The **Checklist** ribbon tab appears when the note contains a checklist and
+provides completion controls, recurrence settings, pins and high, normal or low priority flags.
 Its display sorts pinned and higher-priority tasks first without rearranging the
 note. Flags remain attached to the task through saving and reopening; portable
 text and document exports include labels for pins and non-default priorities.

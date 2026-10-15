@@ -27,6 +27,7 @@ import {
 } from 'react'
 import { BlocksEditor } from './BlocksEditor'
 import { BlocksEditorComposer } from './BlocksEditorComposer'
+import { EditorControlsProvider } from './EditorControlsContext'
 import { ItemSelectionPlugin } from './Plugins/ItemSelectionPlugin/ItemSelectionPlugin'
 import FilePlugin from './Plugins/EncryptedFilePlugin/FilePlugin'
 import { ErrorBoundary } from '@/Utils/ErrorBoundary'
@@ -1178,60 +1179,62 @@ export const SuperEditor: FunctionComponent<Props> = ({
       <ErrorBoundary>
         <LinkingControllerProvider controller={linkingController}>
           <FilesControllerProvider controller={filesController}>
-            {!authorizedEditorNote ? (
-              <div className="text-passive-1 flex h-full items-center justify-center text-sm">
-                Editor unavailable while encrypted note access is changing…
-              </div>
-            ) : (
-              <BlocksEditorComposer
-                key={retrievedEditorComposerLifetimeKey({
-                  noteUuid: authorizedEditorNote.uuid,
-                  generation: plannedEditorSurface.generation,
-                  ...(collaborationAccess.status === 'ready' && editorLease
-                    ? { leaseRequestId: editorLease.requestId }
-                    : {}),
-                })}
-                readonly={isEditorReadonly}
-                initialValue={authorizedEditorNote.text}
-                collaborating={Boolean(collaboration)}
-              >
-                <BlocksEditor
-                  noteUuid={authorizedEditorNote.uuid}
-                  commentNote={authorizedEditorNote}
-                  onChange={handleChange}
-                  className="blocks-editor h-full resize-none"
-                  previewLength={SuperNotePreviewCharLimit}
-                  spellcheck={spellcheck}
+            <EditorControlsProvider identity={retrievedLifetime}>
+              {!authorizedEditorNote ? (
+                <div className="text-passive-1 flex h-full items-center justify-center text-sm">
+                  Editor unavailable while encrypted note access is changing…
+                </div>
+              ) : (
+                <BlocksEditorComposer
+                  key={retrievedEditorComposerLifetimeKey({
+                    noteUuid: authorizedEditorNote.uuid,
+                    generation: plannedEditorSurface.generation,
+                    ...(collaborationAccess.status === 'ready' && editorLease
+                      ? { leaseRequestId: editorLease.requestId }
+                      : {}),
+                  })}
                   readonly={isEditorReadonly}
-                  onFocus={handleFocus}
-                  onBlur={onBlur}
-                  application={application}
-                  collaboration={collaboration}
-                  registerDebounceControl={registerDebounceControl}
-                  checklistOwnerLeaseId={effectiveChecklistOwnerLeaseId}
-                  persistChanges={() => controller.flushAndAwaitPendingSaveStrict()}
-                  backgroundOwner={backgroundOwner}
-                  isChecklistOwnerActive={isChecklistOwnerActive}
-                  onChecklistOwnerReady={handleChecklistOwnerReady}
+                  initialValue={authorizedEditorNote.text}
+                  collaborating={Boolean(collaboration)}
                 >
-                  {interactiveOwner && <ItemSelectionPlugin currentNote={authorizedEditorNote} />}
-                  {interactiveOwner && <FilePlugin currentNote={authorizedEditorNote} />}
-                  {interactiveOwner && <ItemBubblePlugin />}
-                  {interactiveOwner && <GetMarkdownPlugin ref={getMarkdownPlugin} />}
-                  <ChangeContentCallbackPlugin providerCallback={registerChangeEditorFunction} />
-                  {interactiveOwner && <NodeObserverPlugin onChange={handleEditorReferenceChanges} />}
-                  {readonly === undefined && (
-                    <ReadonlyPlugin
-                      note={authorizedEditorNote}
-                      forceReadonly={featureStatus !== FeatureStatus.Entitled}
-                    />
-                  )}
-                  {interactiveOwner && <AutoFocusPlugin isEnabled={controller.isTemplateNote} />}
-                  {interactiveOwner && <BlockPickerMenuPlugin />}
-                  {interactiveOwner && <NoteFromSelectionPlugin currentNote={authorizedEditorNote} />}
-                </BlocksEditor>
-              </BlocksEditorComposer>
-            )}
+                  <BlocksEditor
+                    noteUuid={authorizedEditorNote.uuid}
+                    commentNote={authorizedEditorNote}
+                    onChange={handleChange}
+                    className="blocks-editor h-full resize-none"
+                    previewLength={SuperNotePreviewCharLimit}
+                    spellcheck={spellcheck}
+                    readonly={isEditorReadonly}
+                    onFocus={handleFocus}
+                    onBlur={onBlur}
+                    application={application}
+                    collaboration={collaboration}
+                    registerDebounceControl={registerDebounceControl}
+                    checklistOwnerLeaseId={effectiveChecklistOwnerLeaseId}
+                    persistChanges={() => controller.flushAndAwaitPendingSaveStrict()}
+                    backgroundOwner={backgroundOwner}
+                    isChecklistOwnerActive={isChecklistOwnerActive}
+                    onChecklistOwnerReady={handleChecklistOwnerReady}
+                  >
+                    {interactiveOwner && <ItemSelectionPlugin currentNote={authorizedEditorNote} />}
+                    {interactiveOwner && <FilePlugin currentNote={authorizedEditorNote} />}
+                    {interactiveOwner && <ItemBubblePlugin />}
+                    {interactiveOwner && <GetMarkdownPlugin ref={getMarkdownPlugin} />}
+                    <ChangeContentCallbackPlugin providerCallback={registerChangeEditorFunction} />
+                    {interactiveOwner && <NodeObserverPlugin onChange={handleEditorReferenceChanges} />}
+                    {readonly === undefined && (
+                      <ReadonlyPlugin
+                        note={authorizedEditorNote}
+                        forceReadonly={featureStatus !== FeatureStatus.Entitled}
+                      />
+                    )}
+                    {interactiveOwner && <AutoFocusPlugin isEnabled={controller.isTemplateNote} />}
+                    {interactiveOwner && <BlockPickerMenuPlugin />}
+                    {interactiveOwner && <NoteFromSelectionPlugin currentNote={authorizedEditorNote} />}
+                  </BlocksEditor>
+                </BlocksEditorComposer>
+              )}
+            </EditorControlsProvider>
           </FilesControllerProvider>
         </LinkingControllerProvider>
         {authorizedEditorNote && (

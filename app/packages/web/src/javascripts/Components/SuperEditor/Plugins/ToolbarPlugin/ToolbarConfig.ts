@@ -506,6 +506,7 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
 export enum ToolbarSuperGroupId {
   Home = 'home',
   Insert = 'insert',
+  Checklist = 'checklistTab',
   Layout = 'layout',
   AI = 'aiTab',
   Tools = 'tools',
@@ -532,11 +533,11 @@ export const DEFAULT_SUPER_GROUPS: ToolbarSuperGroupDescriptor[] = [
       ToolbarGroupId.BlockStyle,
       ToolbarGroupId.ColorFont,
       ToolbarGroupId.ParagraphList,
-      ToolbarGroupId.Checklist,
       ToolbarGroupId.Diagram,
     ],
   },
   { id: ToolbarSuperGroupId.Insert, label: 'Insert', groups: [ToolbarGroupId.Insert] },
+  { id: ToolbarSuperGroupId.Checklist, label: 'Checklist', groups: [ToolbarGroupId.Checklist] },
   { id: ToolbarSuperGroupId.Layout, label: 'Layout', groups: [ToolbarGroupId.Page] },
   { id: ToolbarSuperGroupId.AI, label: 'AI', groups: [ToolbarGroupId.AI] },
   {

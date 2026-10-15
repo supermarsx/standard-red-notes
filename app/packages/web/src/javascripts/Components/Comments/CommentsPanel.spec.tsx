@@ -21,13 +21,11 @@ jest.mock('./CommentComposer', () => ({
 
 it('defaults to private without preparing shared room access, explicitly opts into collaboration, and resets targets to private', async () => {
   const user = { uuid: 'user-a' }
-  jest
-    .mocked(useApplication)
-    .mockReturnValue({
-      sessions: { getUser: () => user, isCurrentSessionReadOnly: () => false },
-      isAuthorizedToRenderItem: () => true,
-      vaults: { getItemVault: () => undefined },
-    } as never)
+  jest.mocked(useApplication).mockReturnValue({
+    sessions: { getUser: () => user, isCurrentSessionReadOnly: () => false },
+    isAuthorizedToRenderItem: () => true,
+    vaults: { getItemVault: () => undefined },
+  } as never)
   const personal = {
     comments: [],
     quarantinedCount: 0,
@@ -62,7 +60,8 @@ it('defaults to private without preparing shared room access, explicitly opts in
   )
   expect(shared.addComment).toHaveBeenCalled()
   jest.mocked(useNoteComments).mockClear()
-  const anchor = { kind: 'checklist' as const, todoId: 'todo-target', snippet: 'Task' }
+  // A legacy task ID may equal the whole-note sentinel; its scope must still reset.
+  const anchor = { kind: 'checklist' as const, todoId: 'note', snippet: 'Task' }
   await act(async () => root.render(<CommentsPanel note={note} anchor={anchor} />))
   expect((container.querySelector('select') as HTMLSelectElement).value).toBe('private')
   expect(useNoteComments).not.toHaveBeenCalled()

@@ -16,13 +16,32 @@
  * (a button missing from a group's `layout` array renders nowhere, even though
  * it is listed in `buttons`).
  */
-import { act } from 'react'
+import { act, useEffect } from 'react'
+import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
+import { $createListItemNode, $createListNode } from '@lexical/list'
+import { $createTextNode, $getRoot, $createParagraphNode, LexicalEditor } from 'lexical'
 import { createRoot, Root } from 'react-dom/client'
 import { LocalPrefDefaults, PrefDefaults, PrefKey } from '@standardnotes/snjs'
 import { BlocksEditorComposer } from '../../BlocksEditorComposer'
 import ToolbarPlugin from './ToolbarPlugin'
 import ApplicationProvider from '@/Components/ApplicationProvider'
 import AndroidBackHandlerProvider from '@/NativeMobileWeb/useAndroidBackHandler'
+
+jest.mock('@/Components/Comments/CommentsPanel', () => ({
+  __esModule: true,
+  default: ({ anchor }: { anchor?: { todoId: string } }) => (
+    <input aria-label="Comment draft" data-comment-target={anchor?.todoId ?? 'note'} />
+  ),
+}))
+
+let editor: LexicalEditor
+function CaptureEditor() {
+  const [current] = useLexicalComposerContext()
+  useEffect(() => {
+    editor = current
+  }, [current])
+  return null
+}
 
 // Desktop layout; `alwaysShowToolbar` (below) then docks the full ribbon, which
 // is the surface the three buttons live on.
@@ -87,19 +106,33 @@ afterEach(async () => {
   container.remove()
 })
 
-const mount = async () => {
+const mount = async (withChecklist = true) => {
   await act(async () => {
     root.render(
       <ApplicationProvider application={fakeApp}>
         <AndroidBackHandlerProvider application={fakeApp}>
-          <BlocksEditorComposer initialValue={undefined}>
-            <ToolbarPlugin />
+          <BlocksEditorComposer
+            initialValue={() => {
+              if (withChecklist) {
+                $getRoot().append(
+                  $createListNode('check').append($createListItemNode(false).append($createTextNode('Task'))),
+                )
+              } else {
+                $getRoot().append($createParagraphNode())
+              }
+            }}
+          >
+            <ToolbarPlugin noteUuid="note-1" note={{ uuid: 'note-1' } as never} />
+            <CaptureEditor />
           </BlocksEditorComposer>
         </AndroidBackHandlerProvider>
       </ApplicationProvider>,
     )
     await Promise.resolve()
   })
+  if (withChecklist) {
+    await clickTab('Checklist')
+  }
 }
 
 const checklistGroup = () => container.querySelector('[role="group"][aria-label="Checklist"]')
@@ -151,4 +184,63 @@ describe('checklist bulk-completion toolbar group renders', () => {
   // group alone. Scoping it to one group is exactly why the same bug went
   // unnoticed in the Paragraph group (`changeCase`). It now lives in
   // ToolbarConfig.spec.ts's "group layout coverage", which holds for every group.
+})
+
+const findTab = (name: string) =>
+  [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((tab) => tab.textContent === name)
+const clickTab = async (name: string) => {
+  await act(async () => {
+    findTab(name)!.click()
+  })
+}
+
+it('offers Review for every note, Checklist only for task documents, and routes task comments without losing a draft across tabs', async () => {
+  await mount(false)
+  expect(findTab('Review')).toBeDefined()
+  expect(findTab('Checklist')).toBeUndefined()
+  await act(async () => {
+    editor.update(
+      () => {
+        $getRoot().append(
+          $createListNode('check').append($createListItemNode(false).append($createTextNode('Review this task'))),
+        )
+      },
+      { discrete: true },
+    )
+  })
+  await clickTab('Checklist')
+  const tasks = container.querySelector<HTMLElement>('[aria-label="Checklist tasks"]')!
+  expect(tasks.hidden).toBe(false)
+  expect(container.textContent).not.toContain('Checklist & comments')
+  await act(async () => {
+    ;[...tasks.querySelectorAll('button')].find((button) => button.textContent === 'Comments')!.click()
+  })
+  expect(findTab('Review')?.getAttribute('aria-selected')).toBe('true')
+  const review = container.querySelector<HTMLElement>('[aria-label="Review comments"]')!
+  expect(review.hidden).toBe(false)
+  const draft = review.querySelector<HTMLInputElement>('[aria-label="Comment draft"]')!
+  expect(draft.dataset.commentTarget).not.toBe('note')
+  draft.value = 'Unfinished comment'
+  await clickTab('Home')
+  expect(review.hidden).toBe(true)
+  await clickTab('Review')
+  expect(review.querySelector<HTMLInputElement>('input')?.value).toBe('Unfinished comment')
+  await act(async () => {
+    editor.setEditable(false)
+  })
+  expect(findTab('Review')?.getAttribute('aria-selected')).toBe('true')
+  expect(findTab('Home')).toBeUndefined()
+  expect(container.querySelector('[aria-label="Clipboard and history tools"]')?.hasAttribute('inert')).toBe(true)
+  expect(review.querySelector<HTMLInputElement>('input')?.value).toBe('Unfinished comment')
+  await act(async () => {
+    editor.update(
+      () => {
+        $getRoot().clear().append($createParagraphNode())
+      },
+      { discrete: true },
+    )
+  })
+  expect(findTab('Checklist')).toBeUndefined()
+  expect(findTab('Review')).toBeDefined()
+  expect(review.textContent).toContain('This task is no longer in the note.')
 })

@@ -12,7 +12,6 @@ import { LinkPlugin } from '@lexical/react/LexicalLinkPlugin'
 import { ListPlugin } from '@lexical/react/LexicalListPlugin'
 import { EditorState, LexicalEditor } from 'lexical'
 import { SNNote } from '@standardnotes/snjs'
-import { ChecklistPanel } from './Checklist/ChecklistPanel'
 import { CommentsPlugin } from './Plugins/CommentsPlugin/CommentsPlugin'
 import HorizontalRulePlugin from './Plugins/HorizontalRulePlugin'
 import CollapsiblePlugin from './Plugins/CollapsiblePlugin'
@@ -329,8 +328,7 @@ export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
       )}
       {noteUuid && <AssistantStructuralBridgePlugin noteUuid={noteUuid} />}
       {noteUuid && <AssistantChangeDecorationsPlugin noteUuid={noteUuid} />}
-      {!isMobile && <ToolbarPlugin noteUuid={noteUuid} />}
-      {commentNote && <ChecklistPanel note={commentNote} />}
+      {!isMobile && <ToolbarPlugin noteUuid={noteUuid} note={commentNote} flushChanges={flushWithBypass} />}
       <CommentsPlugin />
       {/*
         Standard Red Notes: dock the on-screen navigation sidebar (Word-style
@@ -370,7 +368,7 @@ export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
           />
         </div>
       </div>
-      {isMobile && <ToolbarPlugin noteUuid={noteUuid} />}
+      {isMobile && <ToolbarPlugin noteUuid={noteUuid} note={commentNote} flushChanges={flushWithBypass} />}
       <ListPlugin />
       <ListStylePlugin />
       <MarkdownShortcutPlugin transformers={MarkdownTransformers} />
