@@ -234,7 +234,7 @@ test("trusted proxy transport is opt-in, exact-value only, and HSTS is HTTPS-onl
     /add_header Strict-Transport-Security "max-age=31536000" always;/,
   );
   const documentedSocketProxy = selfHostingGuide.match(
-    /location \/sockets \{([\s\S]*?)\n    \}/,
+    /location (?:\^~ )?\/sockets \{([\s\S]*?)\n    \}/,
   )?.[1];
   assert.ok(
     documentedSocketProxy,
@@ -1629,9 +1629,8 @@ test("the shell cache name is stamped from the build, never a hand-bumped consta
 test("a new worker takes over promptly instead of waiting behind the old one", () => {
   // skipWaiting on install + claim on activate is deliberate here: the previous
   // worker can serve a shell from a DIFFERENT release (or a poisoned one), and
-  // that shell fails the per-deploy inline-script hash pin. The asset swap risk
-  // is covered because registerServiceWorker reloads the page once on
-  // controllerchange rather than leaving it running against swapped assets.
+  // that shell fails the per-deploy inline-script hash pin. Hashed chunks and
+  // the stale-build notice protect the running page; refresh stays a user action.
   assert.match(serviceWorker, /self\.skipWaiting\(\)/);
   assert.match(serviceWorker, /self\.clients\.claim\(\)/);
   assert.match(serviceWorker, /'SKIP_WAITING'/);
@@ -1643,9 +1642,10 @@ test("a new worker takes over promptly instead of waiting behind the old one", (
   assert.match(registration, /window\.location\.reload\(\)/);
   assert.match(
     registration,
-    /hasReloaded \|\| !hadControllerAtLoad/,
-    "the first-visit claim must not be mistaken for an update reload",
+    /if \(!hadControllerAtLoad\)/,
+    "the first-visit claim must not be mistaken for an update notice",
   );
+  assert.match(registration, /showAppUpdateToast\(\(\) => window\.location\.reload\(\)\)/);
 });
 
 test("the settings cache reset touches shell caches only, never user-data storage", () => {

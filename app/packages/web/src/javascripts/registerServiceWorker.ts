@@ -1,4 +1,4 @@
-import { addToast, ToastType } from '@standardnotes/toast'
+import { showAppUpdateToast, watchServedBuild } from './Services/UpdateCheck/ServedBuildWatcher'
 
 /**
  * Registers the app-shell service worker (see /service-worker.js) so the app
@@ -7,11 +7,11 @@ import { addToast, ToastType } from '@standardnotes/toast'
  *
  * Update flow: when a new SW finishes installing while an old one controls the
  * page, we surface a non-blocking "new version available" toast. Reloading
- * tells the waiting SW to take over (skipWaiting), and a single controller
- * change triggers one reload onto the fresh shell. This avoids trapping users
- * on a stale cached version after a deploy.
+ * fetches the fresh shell. A controller change also announces an update, but
+ * never reloads an editor without the user choosing Refresh app.
  */
 export function registerServiceWorker(): void {
+  watchServedBuild()
   if (!('serviceWorker' in navigator)) {
     return
   }
@@ -56,32 +56,21 @@ export function registerServiceWorker(): void {
         console.error('Service worker registration failed:', error)
       })
 
-    // When the controlling SW changes after an update (skipWaiting), reload
-    // exactly once so the page runs against the new shell. Skip this on the
-    // first-visit claim, which is not an update.
-    let hasReloaded = false
+    // Activation may happen automatically to evict an outdated shell cache.
+    // Keep the running editor intact until the user chooses to refresh.
     navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (hasReloaded || !hadControllerAtLoad) {
+      if (!hadControllerAtLoad) {
         return
       }
-      hasReloaded = true
-      window.location.reload()
+      showAppUpdateToast(() => window.location.reload())
     })
   })
 }
 
 function showUpdateToast(waitingWorker: ServiceWorker): void {
-  addToast({
-    type: ToastType.Regular,
-    message: 'A new version of Standard Red Notes is available.',
-    actions: [
-      {
-        label: 'Reload',
-        handler: () => {
-          waitingWorker.postMessage('SKIP_WAITING')
-        },
-      },
-    ],
-    autoClose: false,
+  showAppUpdateToast(() => {
+    // The navigation fetches the network-first shell even if activation lags.
+    waitingWorker.postMessage('SKIP_WAITING')
+    window.location.reload()
   })
 }

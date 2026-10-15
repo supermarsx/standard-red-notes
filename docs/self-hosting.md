@@ -968,6 +968,14 @@ targets the wrong host or port. Check container status and startup logs, then
 the proxy's upstream error, before changing socket settings. A 502 is a proxy
 response, not proof that the database is down or a request timed out.
 
+Stamped web builds automatically check `/.well-known/srn-deployment.json` on
+startup, every minute while visible, and when returning online or to the tab.
+When the server serves a different revision, a persistent toast offers
+**Refresh app**. No diagnostic run is required. Service-worker updates offer
+the same action; they do not reload a running editor automatically. Refresh
+uses the existing unsaved-changes guard. Unstamped development builds skip
+the revision comparison, and failed/offline checks do not announce an update.
+
 Validate the configuration before reloading the outer proxy:
 
 ```sh

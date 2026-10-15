@@ -57,7 +57,7 @@ self.addEventListener('install', (event) => {
       // perfectly valid shell mismatches it too, with a different hash each
       // release). Activating immediately runs the purge below, which is the only
       // thing that evicts an already-poisoned or simply outdated cache.
-      // `activate` then claims clients and registerServiceWorker.ts reloads once.
+      // `activate` then claims clients; the page offers a Refresh app action.
       .then(() => self.skipWaiting()),
   )
 })
