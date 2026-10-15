@@ -1,6 +1,32 @@
 import { safeErrorLogMetadata } from './SafeErrorLogMetadata'
 
 describe('safeErrorLogMetadata', () => {
+  it.each([
+    ['ER_LOCK_DEADLOCK', 1213],
+    ['ER_LOCK_WAIT_TIMEOUT', 1205],
+  ])('classifies only the known database lock code %s without SQL or driver details', (code, errno) => {
+    const error = {
+      name: 'QueryFailedError',
+      query: 'secret SQL',
+      driverError: { code, errno, message: 'secret SQL', stack: 'secret stack' },
+    }
+    expect(safeErrorLogMetadata(error)).toEqual({ errorType: 'QueryFailedError', errorCode: code, status: undefined })
+    expect(safeErrorLogMetadata({ name: 'QueryFailedError', driverError: { errno } }).errorCode).toBe(errno)
+    expect(safeErrorLogMetadata({ name: 'QueryFailedError', code: errno }).errorCode).toBe(errno)
+    expect(safeErrorLogMetadata({ name: 'QueryFailedError', driverError: { code: errno } }).errorCode).toBe(errno)
+    expect(JSON.stringify(safeErrorLogMetadata(error))).not.toContain('secret')
+  })
+
+  it('excludes other database errors and does not invoke nested driver accessors', () => {
+    const getter = jest.fn(() => 'ER_LOCK_DEADLOCK')
+    const driver = Object.defineProperty({}, 'code', { get: getter })
+    expect(safeErrorLogMetadata({ name: 'QueryFailedError', driverError: driver }).errorCode).toBeUndefined()
+    expect(getter).not.toHaveBeenCalled()
+    expect(
+      safeErrorLogMetadata({ name: 'QueryFailedError', driverError: { code: 'ER_DUP_ENTRY', errno: 1062 } }).errorCode,
+    ).toBeUndefined()
+    expect(safeErrorLogMetadata({ name: 'QueryFailedError', code: 1214 }).errorCode).toBeUndefined()
+  })
   it('keeps only stable error classification and status', () => {
     const error = Object.assign(new TypeError('credential-sentinel'), {
       code: 'ECONNREFUSED',

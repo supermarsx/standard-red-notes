@@ -1,4 +1,5 @@
 import { promises as fs } from 'fs'
+import { safeErrorLogMetadata } from './Domain/Logging/SafeErrorLogMetadata'
 
 export interface ServerLogEntry {
   timestamp: string | null
@@ -191,7 +192,10 @@ export function parseServerLogLine(line: string, serviceFromFile: string): Serve
           timestamp: normalizeLogTimestamp(record.timestamp ?? record.time ?? record['@timestamp']) ?? timestamp,
           service: typeof record.service === 'string' ? record.service : service,
           level: normalizeLogLevel(record.level) ?? level,
-          message: appendSafeSyncProgress(typeof value === 'string' ? value : JSON.stringify(value), record),
+          message: appendSafeLogClassification(
+            appendSafeSyncProgress(typeof value === 'string' ? value : JSON.stringify(value), record),
+            record,
+          ),
         }
       }
     } catch {
@@ -303,6 +307,88 @@ function appendSafeSyncProgress(message: string, record: Record<string, unknown>
   }
   if (typeof record.elapsedMs === 'number' && Number.isFinite(record.elapsedMs) && record.elapsedMs >= 0) {
     fields.push(`elapsedMs=${record.elapsedMs}`)
+  }
+  return fields.length ? `${message} ${fields.join(' ')}` : message
+}
+
+const KnownLogActions = new Set([
+  'session.validate',
+  'service-proxy.request',
+  'service-proxy.retry-exhausted',
+  'service-proxy.grpc-fallback',
+  'service-proxy.grpc-fallback-refused',
+  'service-proxy.grpc-fallback-failed',
+])
+const KnownFailureClasses = new Set([
+  'channel-unavailable',
+  'deadline-exceeded',
+  'method-unimplemented',
+  'transport-internal',
+  'message-limit',
+  'cancelled',
+  'server-fault',
+  'never-dispatched',
+  'application',
+])
+const KnownRouteCategories = new Set(['session-validation', 'authentication', 'items-sync'])
+
+/** Only fixed categories are returned; origins, paths and query values never enter the rendered log. */
+function safeLogRoute(record: Record<string, unknown>): string | undefined {
+  if (typeof record.routeCategory === 'string' && KnownRouteCategories.has(record.routeCategory)) {
+    return record.routeCategory
+  }
+  if (record.action === 'session.validate') {
+    return 'session-validation'
+  }
+  if (typeof record.endpoint !== 'string' || record.endpoint.length > 2048) {
+    return undefined
+  }
+  try {
+    const path = new URL(record.endpoint, 'http://log.invalid').pathname
+    if (path === '/sessions/validate' || path === '/v1/sessions/validate') {
+      return 'session-validation'
+    }
+    if (path === '/items/sync' || path === '/v1/items/sync') {
+      return 'items-sync'
+    }
+    if (path === '/auth/sign_in' || path === '/v1/auth/sign_in') {
+      return 'authentication'
+    }
+  } catch {
+    return undefined
+  }
+  return undefined
+}
+
+/** Appending metadata uses a closed vocabulary, never serialization of arbitrary logger fields. */
+function appendSafeLogClassification(message: string, record: Record<string, unknown>): string {
+  const fields: string[] = []
+  const error = safeErrorLogMetadata({ name: record.errorType, code: record.errorCode })
+  if (typeof record.errorType === 'string' && error.errorType === record.errorType) {
+    fields.push(`errorType=${error.errorType}`)
+  }
+  if (error.errorCode !== undefined) {
+    fields.push(`errorCode=${error.errorCode}`)
+  }
+  if (
+    typeof record.status === 'number' &&
+    Number.isSafeInteger(record.status) &&
+    ((record.status >= 100 && record.status <= 599) || (record.status >= 0 && record.status <= 16))
+  ) {
+    fields.push(`status=${record.status}`)
+  }
+  if (typeof record.action === 'string' && KnownLogActions.has(record.action)) {
+    fields.push(`action=${record.action}`)
+  }
+  if (typeof record.failureClass === 'string' && KnownFailureClasses.has(record.failureClass)) {
+    fields.push(`failureClass=${record.failureClass}`)
+  }
+  if (record.lane === 'session-validation' || record.lane === 'items-sync') {
+    fields.push(`lane=${record.lane}`)
+  }
+  const route = safeLogRoute(record)
+  if (route) {
+    fields.push(`route=${route}`)
   }
   return fields.length ? `${message} ${fields.join(' ')}` : message
 }

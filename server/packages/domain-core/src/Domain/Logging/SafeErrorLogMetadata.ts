@@ -11,6 +11,7 @@ const KnownErrorTypes = new Set([
   'Error',
   'EvalError',
   'RangeError',
+  'QueryFailedError',
   'ReferenceError',
   // domain-events-infra SNSDomainEventPublisher's bounded publish (2 s on the
   // syncing-server request path). A stable class name, never a value; without
@@ -40,6 +41,8 @@ const KnownErrorCodes = new Set([
   'ERR_BAD_RESPONSE',
   'ERR_CANCELED',
   'ERR_NETWORK',
+  'ER_LOCK_DEADLOCK',
+  'ER_LOCK_WAIT_TIMEOUT',
   // Realtime composition mistakes (websocket-gateway InviteEventConfigurationError).
   // Stable constants that name a misconfiguration, never a value; without them a
   // host that logs only this metadata reports a boot refusal as `errorCode: undefined`.
@@ -74,6 +77,9 @@ function safeErrorType(value: unknown): string {
 }
 
 function safeErrorCode(value: unknown): string | number | undefined {
+  if (value === 1213 || value === 1205) {
+    return value
+  }
   if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 && value <= 999) {
     return value
   }
@@ -87,8 +93,9 @@ function safeErrorCode(value: unknown): string | number | undefined {
  * Returns a deliberately tiny error classification for operational logs.
  *
  * The implementation reads data properties only and never exposes exception
- * messages, stacks, errno values, URLs, SQL text, request/response objects, or
- * provider bodies. Callers may add independently derived booleans, counts, and
+ * messages, stacks, arbitrary errno values, URLs, SQL text, request/response
+ * objects, or provider bodies. Only the two known database lock errno values
+ * are classified. Callers may add independently derived booleans, counts, and
  * stable identifiers when those fields are safe for their context.
  */
 export function safeErrorLogMetadata(error: unknown): SafeErrorLogMetadata {
@@ -102,9 +109,21 @@ export function safeErrorLogMetadata(error: unknown): SafeErrorLogMetadata {
       ? statusCandidate
       : undefined
 
+  const driverError = safeDataProperty(error, 'driverError')
+  const driverCode = safeDataProperty(driverError, 'code')
+  const driverErrno = safeDataProperty(driverError, 'errno')
+  const databaseCode =
+    driverCode === 'ER_LOCK_DEADLOCK' ||
+    driverCode === 'ER_LOCK_WAIT_TIMEOUT' ||
+    driverCode === 1213 ||
+    driverCode === 1205
+      ? driverCode
+      : driverErrno === 1213 || driverErrno === 1205
+        ? driverErrno
+        : undefined
   return {
     errorType: safeErrorType(safeDataProperty(error, 'name')),
-    errorCode: safeErrorCode(safeDataProperty(error, 'code')),
+    errorCode: safeErrorCode(safeDataProperty(error, 'code')) ?? databaseCode,
     status,
   }
 }

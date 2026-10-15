@@ -2,6 +2,7 @@ import { promises as fs } from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import { normalizeLogTimestamp, parseServerLogLine, tailServerLogs, readServerLogTail } from './ServerLogs'
+import { safeErrorLogMetadata } from './Domain/Logging/SafeErrorLogMetadata'
 
 const fixture = (files: Record<string, string>) => ({
   readdir: async () => Object.keys(files),
@@ -9,6 +10,149 @@ const fixture = (files: Record<string, string>) => ({
   joinPath: (...parts: string[]) => path.join(...parts),
 })
 describe('shared bounded server log view', () => {
+  it('keeps legacy untimestamped events after dated events in either display order and breaks timestamp ties deterministically', async () => {
+    const files = fixture({
+      'auth.log': [JSON.stringify({ timestamp: '2026-10-15T12:00:00Z', message: 'auth event' }), 'legacy auth'].join(
+        '\n',
+      ),
+      'gateway.log': JSON.stringify({ timestamp: '2026-10-15T12:00:00Z', message: 'gateway event' }),
+    })
+    const newest = await tailServerLogs(files, '/logs', { limit: 10 })
+    expect(newest.entries.map((entry) => entry.message)).toEqual(['gateway event', 'auth event', 'legacy auth'])
+    const oldest = await tailServerLogs(files, '/logs', { limit: 10, order: 'asc' })
+    expect(oldest.entries.map((entry) => entry.message)).toEqual(['auth event', 'gateway event', 'legacy auth'])
+    const authOnly = await tailServerLogs(files, '/logs', { limit: 10, service: 'AUTH' })
+    expect(authOnly.entries.map((entry) => entry.message)).toEqual(['auth event', 'legacy auth'])
+  })
+
+  it('treats infinite numeric event times as unknown', () => {
+    expect(normalizeLogTimestamp(Infinity)).toBeNull()
+    expect(normalizeLogTimestamp(-Infinity)).toBeNull()
+  })
+  it.each(['session-validation', 'authentication', 'items-sync'])(
+    'renders a fixed route category %s without accepting other metadata',
+    (routeCategory) => {
+      expect(
+        parseServerLogLine(JSON.stringify({ message: 'safe', routeCategory, userId: 'secret' }), 'auth').message,
+      ).toBe(`safe route=${routeCategory}`)
+    },
+  )
+  it.each([
+    '/sessions/validate',
+    '/v1/sessions/validate',
+    '/items/sync',
+    '/v1/items/sync',
+    '/auth/sign_in',
+    '/v1/auth/sign_in',
+  ])('categorizes only the known endpoint %s without copying the URL', (endpoint) => {
+    const category = endpoint.includes('sessions')
+      ? 'session-validation'
+      : endpoint.includes('items')
+        ? 'items-sync'
+        : 'authentication'
+    expect(
+      parseServerLogLine(
+        JSON.stringify({ message: 'safe', endpoint: `https://user:secret@internal.example${endpoint}?token=secret` }),
+        'auth',
+      ).message,
+    ).toBe(`safe route=${category}`)
+  })
+  it.each(['http://[', 'x'.repeat(2049), null, {}, '/users/private-id'])(
+    'excludes malformed or unknown endpoint metadata %s',
+    (endpoint) => {
+      expect(parseServerLogLine(JSON.stringify({ message: 'safe', endpoint }), 'auth').message).toBe('safe')
+    },
+  )
+  it('retains actual auth error classification and gateway validation metadata without sensitive fields', () => {
+    const authMessage = '[authenticate-request] Error occurred during authentication of a user.'
+    const auth = parseServerLogLine(
+      JSON.stringify({
+        timestamp: '2026-10-15T12:00:00Z',
+        level: 'error',
+        message: authMessage,
+        ...safeErrorLogMetadata({
+          name: 'QueryFailedError',
+          driverError: { code: 'ER_LOCK_DEADLOCK', errno: 1213, message: 'secret SQL' },
+        }),
+        token: 'secret token',
+        cookie: 'secret cookie',
+        userUuid: 'secret identifier',
+        stack: 'secret stack',
+        query: 'secret SQL',
+      }),
+      'auth',
+    )
+    expect(auth.message).toBe(`${authMessage} errorType=QueryFailedError errorCode=ER_LOCK_DEADLOCK`)
+    expect(auth.message).not.toContain('secret')
+    const gatewayMessage = 'Could not validate session on underlying service.'
+    const gateway = parseServerLogLine(
+      JSON.stringify({
+        message: gatewayMessage,
+        errorType: 'AxiosError',
+        errorCode: 'ECONNRESET',
+        status: 503,
+        action: 'session.validate',
+        endpoint: 'https://internal.example/sessions/validate?token=secret',
+        userId: 'secret identifier',
+        method: 'SECRET',
+        request: { body: 'secret payload' },
+      }),
+      'api-gateway',
+    )
+    expect(gateway.message).toBe(
+      `${gatewayMessage} errorType=AxiosError errorCode=ECONNRESET status=503 action=session.validate route=session-validation`,
+    )
+    expect(gateway.message).not.toContain('secret')
+    expect(gateway.message).not.toContain('internal.example')
+  })
+
+  it('retains only closed gRPC failure/action/route categories and finite status values', () => {
+    const parsed = parseServerLogLine(
+      JSON.stringify({
+        message: 'gRPC request refused',
+        errorType: 'Error',
+        errorCode: 14,
+        status: 14,
+        action: 'service-proxy.grpc-fallback-refused',
+        failureClass: 'channel-unavailable',
+        lane: 'session-validation',
+        endpoint: '/v1/items/sync',
+        routeCategory: 'secret category',
+        extra: 'secret unknown field',
+      }),
+      'gateway',
+    )
+    expect(parsed.message).toBe(
+      'gRPC request refused errorType=Error errorCode=14 status=14 action=service-proxy.grpc-fallback-refused failureClass=channel-unavailable lane=session-validation route=items-sync',
+    )
+    const invalid = {
+      message: 'safe message',
+      errorType: 'secret type',
+      errorCode: 'secret code',
+      status: 42,
+      action: 'secret action',
+      failureClass: 'secret class',
+      lane: 'secret lane',
+      routeCategory: 'secret category',
+      endpoint: 'https://internal.example/users/secret-id',
+      payload: 'secret payload',
+    }
+    expect(parseServerLogLine(JSON.stringify(invalid), 'auth').message).toBe('safe message')
+    for (const status of [-1, 17, 99, 600, 503.5, Infinity, NaN, '503']) {
+      expect(parseServerLogLine(JSON.stringify({ message: 'safe message', status }), 'auth').message).toBe(
+        'safe message',
+      )
+    }
+  })
+
+  it('makes safe classifications searchable through the same admin and CLI tail parser', async () => {
+    const files = fixture({
+      'auth.log': JSON.stringify({ message: 'Authentication failed', errorType: 'QueryFailedError', errorCode: 1213 }),
+    })
+    const result = await tailServerLogs(files, '/logs', { limit: 10, search: 'errorCode=1213' })
+    expect(result.entries).toHaveLength(1)
+    expect(result.entries[0].message).toBe('Authentication failed errorType=QueryFailedError errorCode=1213')
+  })
   it('shows only validated closed sync progress metadata and excludes payloads or arbitrary labels', () => {
     const message = '[ws-sync] operation did not complete'
     expect(
