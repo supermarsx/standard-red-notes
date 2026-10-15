@@ -571,6 +571,16 @@
               url: /self-hosting.html#manual-verification
         - title: Start, stop, and upgrade
           url: /self-hosting.html#start-stop-and-upgrade
+          items:
+            - title: Deploy script arguments
+              url: /self-hosting.html#deploy-script-arguments
+              items:
+                - title: Topology and saved settings
+                  url: /self-hosting.html#topology-and-saved-settings
+                - title: Reverse proxy and host ports
+                  url: /self-hosting.html#reverse-proxy-and-host-ports
+                - title: Update, backup and verification controls
+                  url: /self-hosting.html#update-backup-and-verification-controls
         - title: Verified GHCR image pair
           url: /self-hosting.html#deploy-a-verified-ghcr-image-pair
         - title: Data locations

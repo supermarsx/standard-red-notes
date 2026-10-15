@@ -29,6 +29,7 @@ Standard Notes. See the [license](../license.md) file for details.
 - [Choosing a domain and ports](#choosing-a-domain-and-ports)
 - [Running behind a reverse proxy](#running-behind-a-reverse-proxy)
 - [Start, stop, and upgrade](#start-stop-and-upgrade)
+- [Deploy script arguments](#deploy-script-arguments)
 - [Deploy a verified GHCR image pair](#deploy-a-verified-ghcr-image-pair)
 - [Where your data lives](#where-your-data-lives)
 - [Backup and restore](#backup-and-restore)
@@ -1135,7 +1136,7 @@ docker compose pull            # refresh mariadb / redis / floci images
 docker compose up -d --build   # rebuild app/server/gateway and restart
 ```
 
-`./deploy.sh` does that upgrade sequence as one command, and checks the
+`./deploy.sh` handles the source-build update as one command, and checks the
 result: it fast-forwards the checkout (`--ff-only`, so a diverged branch fails
 loudly instead of producing a merge commit), takes a logical database backup
 and refuses to continue if the dump is truncated, rebuilds with the images
@@ -1154,6 +1155,186 @@ This source-build path remains the default. `./scripts/setup.sh --up` and
 `./scripts/setup.ps1 -Up` still build the checked-out `app` and `server`
 Dockerfiles and verify that clean checkout's deployment identity; they do not
 silently select registry images.
+
+### Deploy script arguments
+
+Run the Bash script from the checkout for the examples below. It selects the
+multi-container stack by default, or reuses the deployment recorded in
+`.deploy-state`. The full flow checks configuration, pulls Git with
+`--ff-only`, runs first-install setup when needed, backs up running data,
+confirms the rebuild, saves deployment settings, builds and starts Compose,
+then checks health, readiness and deployment identity. Git pull, requested
+network creation, setup and backup can already have happened when the final
+rebuild confirmation appears.
+
+```bash
+./deploy.sh --help
+./deploy.sh --dry-run       # inspect the plan without changing the deployment
+./deploy.sh                 # normal install or update, with prompts
+./deploy.sh --update --yes  # configured deployment, no prompts
+```
+
+Arguments that take a value use a separate word, such as `--timeout 900`.
+Only `--proxy-network=NAME` and `--proxy-alias=NAME` also accept the equals
+form. Quote paths containing spaces. Unknown options and missing values are
+errors; there is no passthrough for arbitrary Compose arguments.
+
+#### Topology and saved settings
+
+| Argument | Behavior | Saved for later runs? |
+| --- | --- | --- |
+| `--single` | Select `docker-compose.single.yml`: one app container with SQLite, uploads and generated secrets in `single-data`. It does not require multi-container `.env` setup. | Yes |
+| `-f PATH`, `--file PATH` | Select one custom Compose file compatible with the Standard Red Notes multi-container service layout. Use `--single` for the all-in-one topology: a custom filename does not select its setup or backup rules. | Yes |
+| `-p NAME`, `--project NAME` | Set the Compose project name. Names contain lowercase letters, digits, `_` or `-`, start with a letter or digit, and have at most 128 characters. | Yes; an exported `COMPOSE_PROJECT_NAME` is remembered too |
+| `--state-file PATH` | Read and write deployment identity and proxy choices in this file instead of the checkout's `.deploy-state`. Use a separate file for each deployment. | The selected path must be supplied again; the file stores the choices below |
+| `--setup` | Force first-install setup. Refuse an existing `.env`, or missing `.env` with this project's existing containers or volumes. Not applicable to `--single`. | No |
+| `--update` | Force the update path. Multi-container mode requires an existing valid `.env`; `--single` does not. | No |
+
+With neither forced mode, a missing `.env` selects setup, a valid one selects
+update, and an incomplete existing one stops with instructions to recover its
+original values. The deploy script delegates fresh `.env` generation to
+`scripts/setup.sh`; it never overwrites an existing environment. In single
+mode, the container creates and retains its secrets on first boot.
+
+Omitted topology and project arguments reuse saved settings. A supplied
+`--single`, `--file` or project name that identifies a different deployment is
+refused, rather than carrying the old proxy settings into a second stack.
+An explicit project argument takes precedence over exported
+`COMPOSE_PROJECT_NAME`; without either, the saved project is used. If no project
+was saved, Compose's normal `.env`, top-level `name:` and directory-name
+resolution applies. See [What the deploy script remembers](#what-the-deploy-script-remembers)
+for adoption of older running stacks and the generated Compose override.
+
+The default environment, Compose files and state file are located relative to
+the script's checkout. Explicit relative `--file`, `--state-file` and
+`--backup-dir` paths are relative to the caller's working directory. A custom
+Compose file inside the checkout is stored relative to that checkout; an
+outside file is stored as an absolute path.
+
+```bash
+# All-in-one first install; later ./deploy.sh keeps this topology
+./deploy.sh --single --yes
+
+# A compatible custom stack with its own identity; repeat --state-file later
+./deploy.sh --file ./docker-compose.custom.yml --project notes-staging \
+  --state-file ./.deploy-state.staging --yes
+./deploy.sh --state-file ./.deploy-state.staging --yes
+```
+
+A second stack also needs distinct ports, storage and proxy aliases. A state
+file separates the script's remembered identity; it does not rewrite the
+Compose file or provide a separate `.env`.
+
+#### Reverse proxy and host ports
+
+| Argument | Behavior | Saved for later runs? |
+| --- | --- | --- |
+| `--proxy-network`, `--proxy-network NAME`, `--proxy-network=NAME` | Enable proxy mode. With no name, reuse the saved network, or use `proxy` if none was saved. Apply the multi-container or single-container proxy overlay, attach only `app` to the external network, and remove its normal host-port publication. | Yes |
+| `--proxy-alias NAME`, `--proxy-alias=NAME` | Give the app a distinct network alias; default `standard-red-notes-app`. | Yes |
+| `--create-network` | Create the selected proxy network if missing. The proxy container must also join it; creating the network does not attach the proxy. | No |
+| `--publish-ports` | In proxy mode, additionally publish `APP_PORT` on `127.0.0.1` for local access. | Yes |
+| `--no-publish-ports` | Remove that additional loopback publication while retaining proxy mode. | Yes |
+| `--no-proxy` | Explicitly leave proxy mode and restore normal host publication on `APP_BIND_ADDRESS` and `APP_PORT`. | Yes |
+
+Network and alias names start with a letter or digit, continue with letters,
+digits, `_`, `.` or `-`, and have at most 128 characters. Select the network
+your proxy actually uses, such as `npm_default`. Point it to
+`http://standard-red-notes-app:8080`, or your chosen alias on **port 8080**,
+and enable WebSocket forwarding for both socket paths.
+
+Proxy mode is selected by a flag, saved state, adoption of an older running
+proxy deployment, or the interactive first-install question. That question is
+skipped with `--yes`, `--dry-run` or without a terminal; supply the network
+explicitly for unattended first installs. `SRN_PROXY_NETWORK` supplies the
+network when using the Compose overlay directly; exporting it alone does not
+select proxy mode in `deploy.sh`.
+
+Alias precedence is: command-line argument, exported `SRN_PROXY_ALIAS`,
+`SRN_PROXY_ALIAS` in `.env`, saved alias, default alias. Publication flags
+override saved publication settings. A missing saved network stops deployment
+unless `--create-network` is supplied; it never silently exits proxy mode.
+Use `--no-proxy` to leave deliberately, rather than deleting state.
+
+```bash
+# First install behind an existing Nginx Proxy Manager network
+./deploy.sh --proxy-network npm_default --url https://notes.example.com --yes
+
+# Distinct alias and optional loopback access; these proxy choices persist
+./deploy.sh --proxy-network npm_default --proxy-alias notes-main \
+  --publish-ports --yes
+./deploy.sh --no-publish-ports --yes
+
+# Create a shared network only when you intend to attach the proxy to it
+./deploy.sh --proxy-network notes-proxy --create-network --yes
+
+# Restore the base Compose host-port publication
+./deploy.sh --no-proxy --yes
+```
+
+`--single` uses `docker-compose.single.proxy.yml`; other topologies use
+`docker-compose.proxy.yml`. Loopback publication adds
+`docker-compose.proxy-publish.yml` after the proxy overlay. The script passes
+these files explicitly. For the default multi-container deployment and default
+state file, it also manages its own generated `docker-compose.override.yml`
+so bare Compose commands retain the saved project and proxy settings. It
+does not replace an override you authored. Custom files, single mode and
+alternate state files need the deploy script or their complete Compose command;
+see [Starting and restarting by hand](#starting-and-restarting-by-hand).
+
+#### Update, backup and verification controls
+
+These arguments affect only the current run; none is stored in deployment
+state.
+
+| Argument | Behavior and default |
+| --- | --- |
+| `--no-pull` | Skip `git pull --ff-only` and build the checked-out revision. It does not disable builds or mean “do not pull Docker images.” The script does not perform the separate `docker compose pull` from the manual upgrade example. |
+| `--no-backup` | Skip the pre-build snapshot. Default: back up the running data service before rebuilding. |
+| `--backup-dir DIR` | Write snapshots here. Default: `<checkout>/backups`. Create the directory if needed. |
+| `--allow-dirty` | Permit staged or unstaged tracked content changes. If such changes exist, build **unstamped** images and skip deployment-identity verification; a clean checkout still receives its commit stamp. Untracked files and line-ending-only differences are not treated as tracked content changes. |
+| `--timeout SECONDS` | Container health-wait budget after Compose starts. Default `600`; positive integer. It is not an overall build, readiness or socket timeout. |
+| `--log-lines N` | Tail this many lines from a failing service. Default `200`; positive integer. |
+| `--url BASE` | Override the readiness and deployment-identity probe origin, for example `https://notes.example.com`. The readiness path is appended automatically; omit it from the argument. |
+| `-y`, `--yes` | Accept confirmation without prompts; also pass `--yes` to first-install setup. It does not bypass configuration, dirty-checkout, backup, state or identity checks. |
+| `-n`, `--dry-run` | Print planned mutations and saved settings without pulling, setup, snapshots, builds, restart or state writes. Read-only Git, Docker, network and Compose queries still run and can refuse an invalid plan. |
+| `-h`, `--help` | Print the argument reference and exit before deployment checks. |
+
+The multi-container snapshot is a MariaDB SQL dump, including routines and
+events; it is not a full backup of uploads, Redis or `.env`. Single mode
+archives `/data`, including SQLite, uploads and generated secrets, while the
+container is running; this is not a stopped-volume recovery drill. If the
+relevant `db` or `app` service is not running, the script reports that there is
+no live data to dump and continues. A failed snapshot stops deployment. SQL
+dumps must be at least 1 KiB and end with a completion trailer; single-mode
+archives have a 10 KiB size floor, which does not prove archive consistency.
+See [Backup and restore](#backup-and-restore) for complete recovery
+requirements.
+
+By default, the HTTP probe uses the host endpoint returned by
+`compose port app 8080`, with `.env` values as a fallback if no publication is
+reported. In proxy mode without a published port, it checks the proxy network
+and skips a host-origin probe unless `--url` is supplied. An explicit URL
+tests the proxy's public path. Deployment identity also needs the local Node
+verifier for a host-origin check; a skipped check is reported, not treated as
+proof that the expected commit is running.
+
+```bash
+# Check the plan, then deploy exactly the checked-out revision without Git pull
+./deploy.sh --no-pull --dry-run
+./deploy.sh --no-pull --yes --timeout 900 --log-lines 300 \
+  --backup-dir /srv/notes-backups --url https://notes.example.com
+
+# Development-only modified-source build: no commit identity claim when dirty
+./deploy.sh --allow-dirty --no-pull --yes
+```
+
+`--single` and `--file` conflict. So do `--proxy-network` with `--no-proxy`,
+and `--publish-ports` with `--no-publish-ports`. Proxy alias, network creation
+and publication arguments require proxy mode; `--no-proxy` cannot be combined
+with `--create-network`, `--publish-ports` or `--proxy-alias`. Choose one forced
+mode: if both `--setup` and `--update` are supplied, the parser uses the last
+one. Repeating a value-taking option likewise uses its last value, subject to
+the saved-identity checks above.
 
 ### Deploy a verified GHCR image pair
 
