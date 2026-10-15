@@ -1,7 +1,13 @@
 import { Request, Response } from 'express'
 import { inject, optional } from 'inversify'
 import { BaseHttpController, controller, httpDelete, httpGet, httpPost, httpPut } from 'inversify-express-utils'
-import { EMAIL_DELIVERY_LIMITS, RoleName, Uuid, validateEmailRecipient } from '@standardnotes/domain-core'
+import {
+  EMAIL_DELIVERY_LIMITS,
+  RoleName,
+  Uuid,
+  validateEmailRecipient,
+  validRevisionPolicy,
+} from '@standardnotes/domain-core'
 import { Role } from '@standardnotes/security'
 import { TYPES } from '../../Bootstrap/Types'
 import { ServiceProxyInterface } from '../../Service/Proxy/ServiceProxyInterface'
@@ -2423,6 +2429,16 @@ export class AdminController extends BaseHttpController {
     // `logging.level`; one shared reader/applier contract updates every deployed
     // server/worker logger. Must be a Winston level, or null to clear (fall back
     // to that process's LOG_LEVEL env, then 'info').
+    if (root.revisions !== undefined) {
+      if (!validRevisionPolicy(root.revisions, true)) {
+        return {
+          error:
+            'revisions must contain valid non-negative integer limits and UUID-keyed user overrides, or null to clear a limit.',
+        }
+      }
+      patch.revisions = root.revisions as NonNullable<ServerSettingsPatch['revisions']>
+      changedSettings.push('revisions')
+    }
     if (root.logging !== undefined) {
       if (!root.logging || typeof root.logging !== 'object' || Array.isArray(root.logging)) {
         return { error: 'logging must be an object.' }

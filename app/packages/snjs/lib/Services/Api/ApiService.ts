@@ -1414,6 +1414,25 @@ export class LegacyApiService
    * env. Returns the same view as adminGetServerSettings.
    */
   async adminSetServerSettings(partial: {
+    revisions?: {
+      retentionDays?: number | null
+      maxCountPerItem?: number | null
+      maxCountPerUser?: number | null
+      maxBytesPerUser?: number | null
+      maxCountTotal?: number | null
+      maxBytesTotal?: number | null
+      debounceSeconds?: number | null
+      checkpointSeconds?: number | null
+      users?: Record<
+        string,
+        {
+          retentionDays?: number | null
+          maxCountPerItem?: number | null
+          maxCount?: number | null
+          maxBytes?: number | null
+        } | null
+      >
+    }
     ai?: {
       anthropicApiKey?: string | null
       openaiApiKey?: string | null

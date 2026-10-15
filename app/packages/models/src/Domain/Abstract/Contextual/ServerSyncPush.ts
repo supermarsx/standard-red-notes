@@ -2,6 +2,8 @@ import { DeletedPayloadInterface, EncryptedPayloadInterface } from '../Payload'
 import { ContextPayload } from './ContextPayload'
 
 export interface ServerSyncPushContextualPayload extends ContextPayload {
+  /** Advisory only; server retention and storage caps remain authoritative. */
+  revision_creation?: 'automatic' | 'metadata'
   auth_hash?: string
   content: string | undefined
   created_at_timestamp: number

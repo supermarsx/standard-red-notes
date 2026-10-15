@@ -19,6 +19,7 @@ import {
   subtractFromArray,
 } from '@standardnotes/utils'
 import { ItemManager } from '@Lib/Services/Items/ItemManager'
+import { RevisionChangeTracker } from './RevisionChangeTracker'
 import { OfflineSyncOperation } from '@Lib/Services/Sync/Offline/Operation'
 import { PayloadManager } from '../Payloads/PayloadManager'
 import { LegacyApiService } from '../Api/ApiService'
@@ -227,6 +228,7 @@ export class SyncService
   private readonly localPersistenceFailures = new WeakSet<object>()
   private _simulate_latency?: { latency: number; enabled: boolean }
   private dealloced = false
+  private readonly revisionChanges = new RevisionChangeTracker()
 
   public lastSyncInvokationPromise?: Promise<unknown>
   public currentSyncRequestPromise?: Promise<void>
@@ -480,6 +482,7 @@ export class SyncService
   }
 
   public override deinit(): void {
+    this.revisionChanges.clear()
     this.dealloced = true
     if (this.autoSyncInterval) {
       clearInterval(this.autoSyncInterval)
@@ -1551,6 +1554,17 @@ export class SyncService
       ...payloadSplit.deleted.map(CreateDeletedServerSyncPushPayload),
     ]
 
+    const originals = new Map(payloads.map((payload) => [payload.uuid, payload]))
+    for (const upload of contextPayloads) {
+      const original = originals.get(upload.uuid)
+      if (!original) {
+        continue
+      }
+      const hint = this.revisionChanges.prepare(original, upload)
+      if (hint) {
+        ;(upload as ServerSyncPushContextualPayload).revision_creation = hint
+      }
+    }
     return contextPayloads
   }
 
@@ -2503,6 +2517,7 @@ export class SyncService
     await this.emitDeltasAndPersist(emits, {
       accountKeysMayStillBeDownloaded: this.accountKeysMayStillBeDownloaded(true),
     })
+    this.revisionChanges.acknowledge(operation.payloads, response.savedPayloads)
 
     if (!operation.options.sharedVaultUuids) {
       await this.setSyncTokens(response.lastSyncToken as string, response.paginationToken as string | undefined)
@@ -2603,6 +2618,11 @@ export class SyncService
       extendArray(results, decryptionResults)
     }
 
+    for (const result of results) {
+      if (isDecryptedPayload(result) || result.deleted) {
+        this.revisionChanges.observe(result)
+      }
+    }
     return results
   }
 

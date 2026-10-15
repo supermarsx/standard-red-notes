@@ -38,6 +38,7 @@ export class SQLRevisionMetadataPersistenceMapper implements MapperInterface<Rev
     const revisionMetadataOrError = RevisionMetadata.create(
       {
         contentType,
+        coalescedChanges: projection.coalescedChanges ?? 1,
         dates,
         sharedVaultUuid,
         editedByUuid: projection.editedByUuid ?? null,

@@ -8,6 +8,9 @@ export class ItemHash extends ValueObject<ItemHashProps> {
   }
 
   static create(props: ItemHashProps): Result<ItemHash> {
+    if (props.revision_creation !== undefined && !['automatic', 'metadata'].includes(props.revision_creation)) {
+      return Result.fail<ItemHash>('Invalid revision creation hint.')
+    }
     if (props.shared_vault_uuid) {
       const sharedVaultUuidOrError = Uuid.create(props.shared_vault_uuid)
       if (sharedVaultUuidOrError.isFailed()) {

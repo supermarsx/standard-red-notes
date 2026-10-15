@@ -60,6 +60,20 @@ describe('ServerSettingsStore + ServerSettingsResolver', () => {
     })
 
   describe('store', () => {
+    it('keeps revision env defaults, persists overrides, and clears individual account fields', async () => {
+      const user = '00000000-0000-4000-8000-000000000001'
+      const store = new ServerSettingsStore(filePath)
+      const resolver = makeResolver()
+      expect((await resolver.view()).settings.revisions).toMatchObject({ retentionDays: 900, maxCountPerItem: 200 })
+      await store.update({ revisions: { maxCountPerItem: 40, users: { [user]: { maxCount: 50, maxBytes: 1000 } } } })
+      await store.update({ revisions: { maxCountPerItem: null, users: { [user]: { maxBytes: null } } } })
+      expect((await resolver.view()).settings.revisions).toMatchObject({
+        maxCountPerItem: 200,
+        users: { [user]: { maxCount: 50 } },
+      })
+      await store.update({ revisions: { users: { [user]: null } } })
+      expect((await store.read()).revisions).toBeUndefined()
+    })
     it('reads an empty document when the file does not exist yet', async () => {
       expect(await new ServerSettingsStore(filePath).read()).toEqual({})
     })

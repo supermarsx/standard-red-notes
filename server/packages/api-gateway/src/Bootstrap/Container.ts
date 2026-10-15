@@ -24,6 +24,7 @@ import {
 } from '../Service/Diagnostics/DeploymentDiagnostics'
 import { createSafeLogFormat } from '../Service/Logging/SafeLog'
 import {
+  revisionPolicyBaseline,
   CacheEntryRepositoryInterface,
   MapperInterface,
   EmailDeliveryConfig,
@@ -328,6 +329,7 @@ export class ContainerConfigLoader {
           : undefined,
     }
     const serverSettingsResolver = new ServerSettingsResolver(serverSettingsStore, {
+      revisions: revisionPolicyBaseline((name) => env.get(name, true)),
       assistant: envAssistantProviderConfig,
       assistantDailyRequestLimit: env.get('ASSISTANT_DAILY_REQUEST_LIMIT', true)
         ? +env.get('ASSISTANT_DAILY_REQUEST_LIMIT', true)

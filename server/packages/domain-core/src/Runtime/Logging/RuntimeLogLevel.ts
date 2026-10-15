@@ -17,7 +17,7 @@ export interface RuntimeLogLevelResolver {
 
 type ReadTextFile = (filePath: string) => Promise<string>
 
-async function readBoundedServerSettingsFile(filePath: string): Promise<string> {
+export async function readBoundedServerSettingsFile(filePath: string): Promise<string> {
   const pathStats = await fs.lstat(filePath)
   if (!pathStats.isFile() || pathStats.isSymbolicLink() || pathStats.size > MAX_SERVER_SETTINGS_BYTES) {
     throw new Error('Runtime server settings must be a bounded regular file.')

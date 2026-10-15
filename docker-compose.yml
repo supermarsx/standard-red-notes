@@ -107,13 +107,18 @@ x-server-env: &server-env
   MAX_CHUNK_BYTES: ${MAX_CHUNK_BYTES:-100000000}
   FILE_DOWNLOAD_DEADLINE_MS: ${FILE_DOWNLOAD_DEADLINE_MS:-30000}
   MAX_ATTACHMENT_BYTE_SIZE: ${MAX_ATTACHMENT_BYTE_SIZE:-5368709120}
-  # Revision history retention. Both default to 0 = unlimited (no pruning),
-  # preserving the upstream behavior. When set, the revisions service prunes a
-  # note/file's history on each new revision: REVISIONS_RETENTION_DAYS deletes
-  # revisions older than the window; REVISIONS_MAX_COUNT_PER_ITEM keeps only the
-  # N most-recent revisions per item.
-  REVISIONS_RETENTION_DAYS: ${REVISIONS_RETENTION_DAYS:-0}
-  REVISIONS_MAX_COUNT_PER_ITEM: ${REVISIONS_MAX_COUNT_PER_ITEM:-0}
+  # Both retention limits apply: newest 200 revisions per item, at most 900 days.
+  # Additional account/server count and byte caps default to unlimited (0).
+  # Admissions prune atomically; maintenance also cleans inactive histories.
+  # Admin revision settings override these environment defaults at runtime.
+  REVISIONS_RETENTION_DAYS: ${REVISIONS_RETENTION_DAYS:-900}
+  REVISIONS_MAX_COUNT_PER_ITEM: ${REVISIONS_MAX_COUNT_PER_ITEM:-200}
+  REVISIONS_MAX_COUNT_PER_USER: ${REVISIONS_MAX_COUNT_PER_USER:-0}
+  REVISIONS_MAX_BYTES_PER_USER: ${REVISIONS_MAX_BYTES_PER_USER:-0}
+  REVISIONS_MAX_COUNT_TOTAL: ${REVISIONS_MAX_COUNT_TOTAL:-0}
+  REVISIONS_MAX_BYTES_TOTAL: ${REVISIONS_MAX_BYTES_TOTAL:-0}
+  REVISIONS_DEBOUNCE_SECONDS: ${REVISIONS_DEBOUNCE_SECONDS:-30}
+  REVISIONS_CHECKPOINT_SECONDS: ${REVISIONS_CHECKPOINT_SECONDS:-300}
   # Public base URL clients use to reach the files service (chunk uploads /
   # downloads with valet tokens). The api-gateway advertises it to clients in
   # every response's meta.server.filesServerUrl — it is NEVER called

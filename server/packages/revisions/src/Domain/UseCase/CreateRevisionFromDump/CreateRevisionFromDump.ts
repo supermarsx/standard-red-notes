@@ -1,5 +1,4 @@
-import { Result, UseCaseInterface, Uuid, Validator } from '@standardnotes/domain-core'
-import { TimerInterface } from '@standardnotes/time'
+import { Result, UseCaseInterface, Validator } from '@standardnotes/domain-core'
 
 import { DumpRepositoryInterface } from '../../Dump/DumpRepositoryInterface'
 import { CreateRevisionFromDumpDTO } from './CreateRevisionFromDumpDTO'
@@ -9,9 +8,6 @@ export class CreateRevisionFromDump implements UseCaseInterface<void> {
   constructor(
     private dumpRepository: DumpRepositoryInterface,
     private revisionRepository: RevisionRepositoryInterface,
-    private timer: TimerInterface,
-    private retentionDays: number,
-    private maxCountPerItem: number,
   ) {}
 
   async execute(dto: CreateRevisionFromDumpDTO): Promise<Result<void>> {
@@ -35,22 +31,8 @@ export class CreateRevisionFromDump implements UseCaseInterface<void> {
       return Result.fail(`Could not insert revision from dump: ${revision.id.toString()}`)
     }
 
-    await this.pruneRevisions(revision.props.itemUuid)
-
     await this.dumpRepository.removeDump(dto.filePath)
 
     return Result.ok()
-  }
-
-  private async pruneRevisions(itemUuid: Uuid): Promise<void> {
-    if (this.retentionDays > 0) {
-      const nowInMilliseconds = this.timer.getTimestampInMicroseconds() / 1000
-      const cutoffDate = new Date(nowInMilliseconds - this.retentionDays * 24 * 60 * 60 * 1000)
-      await this.revisionRepository.removeByItemUuidOlderThan(itemUuid, cutoffDate)
-    }
-
-    if (this.maxCountPerItem > 0) {
-      await this.revisionRepository.removeByItemUuidBeyondCount(itemUuid, this.maxCountPerItem)
-    }
   }
 }

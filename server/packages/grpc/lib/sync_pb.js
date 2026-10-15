@@ -3998,7 +3998,8 @@ proto.sync.ItemHash.toObject = function(includeInstance, msg) {
     createdAt: jspb.Message.getFieldWithDefault(msg, 11, ""),
     createdAtTimestamp: jspb.Message.getFieldWithDefault(msg, 12, 0),
     updatedAt: jspb.Message.getFieldWithDefault(msg, 13, ""),
-    updatedAtTimestamp: jspb.Message.getFieldWithDefault(msg, 14, 0)
+    updatedAtTimestamp: jspb.Message.getFieldWithDefault(msg, 14, 0),
+    revisionCreation: jspb.Message.getFieldWithDefault(msg, 15, "")
   };
 
   if (includeInstance) {
@@ -4090,6 +4091,10 @@ proto.sync.ItemHash.deserializeBinaryFromReader = function(msg, reader) {
     case 14:
       var value = /** @type {number} */ (reader.readUint64());
       msg.setUpdatedAtTimestamp(value);
+      break;
+    case 15:
+      var value = /** @type {string} */ (reader.readString());
+      msg.setRevisionCreation(value);
       break;
     default:
       reader.skipField();
@@ -4215,6 +4220,13 @@ proto.sync.ItemHash.serializeBinaryToWriter = function(message, writer) {
   if (f != null) {
     writer.writeUint64(
       14,
+      f
+    );
+  }
+  f = /** @type {string} */ (jspb.Message.getField(message, 15));
+  if (f != null) {
+    writer.writeString(
+      15,
       f
     );
   }
@@ -4704,6 +4716,42 @@ proto.sync.ItemHash.prototype.clearUpdatedAtTimestamp = function() {
  */
 proto.sync.ItemHash.prototype.hasUpdatedAtTimestamp = function() {
   return jspb.Message.getField(this, 14) != null;
+};
+
+
+/**
+ * optional string revision_creation = 15;
+ * @return {string}
+ */
+proto.sync.ItemHash.prototype.getRevisionCreation = function() {
+  return /** @type {string} */ (jspb.Message.getFieldWithDefault(this, 15, ""));
+};
+
+
+/**
+ * @param {string} value
+ * @return {!proto.sync.ItemHash} returns this
+ */
+proto.sync.ItemHash.prototype.setRevisionCreation = function(value) {
+  return jspb.Message.setField(this, 15, value);
+};
+
+
+/**
+ * Clears the field making it undefined.
+ * @return {!proto.sync.ItemHash} returns this
+ */
+proto.sync.ItemHash.prototype.clearRevisionCreation = function() {
+  return jspb.Message.setField(this, 15, undefined);
+};
+
+
+/**
+ * Returns whether this field is set.
+ * @return {boolean}
+ */
+proto.sync.ItemHash.prototype.hasRevisionCreation = function() {
+  return jspb.Message.getField(this, 15) != null;
 };
 
 

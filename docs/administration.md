@@ -54,6 +54,11 @@ present.
 
 ## User operations
 
+Revision history limits are managed under **Server → Revision history** and in
+the selected user's collapsed **Storage → Revision history limits** section.
+See [revision retention and automatic checkpoints](sync-and-data-lifecycle.md#revision-retention-and-automatic-checkpoints)
+for the 200-revision/900-day defaults, coalescing, and total count/storage caps.
+
 Start with lookup and effective-state review:
 
 ```bash

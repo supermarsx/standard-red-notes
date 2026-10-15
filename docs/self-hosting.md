@@ -216,8 +216,10 @@ overlay (`SERVER_SETTINGS_PATH`, normally leave it inside the mounted
 `server-data` volume), cookie tuning
 (`COOKIE_SAME_SITE`, `COOKIE_PARTITIONED`), feature/entitlement mode
 (`STANDARD_RED_FEATURES_MODE`, `STANDARD_RED_ENTITLEMENT_MODE`, defaulting to
-fully-included), revision retention (`REVISIONS_RETENTION_DAYS`,
-`REVISIONS_MAX_COUNT_PER_ITEM`), the optional Assistant/LLM proxy
+fully-included), [revision retention and caps](sync-and-data-lifecycle.md#revision-retention-and-automatic-checkpoints)
+(`REVISIONS_RETENTION_DAYS`, `REVISIONS_MAX_COUNT_PER_ITEM`, default 900 days and
+200 per note; `REVISIONS_MAX_COUNT_PER_USER`, `REVISIONS_MAX_COUNT_TOTAL`,
+`REVISIONS_MAX_BYTES_PER_USER`, `REVISIONS_MAX_BYTES_TOTAL`), the optional Assistant/LLM proxy
 (`ASSISTANT_*`, except the setup-generated subscription encryption key), operation limits (`RATE_LIMIT_*`, `REGISTRATION_*`, upload and
 request caps), and the optional MCP bridge (`STANDARD_RED_NOTES_*`). See
 `.env.example` for the full list and [Operations hardening](operations-hardening.md)

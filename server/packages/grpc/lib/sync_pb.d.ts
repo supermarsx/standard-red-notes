@@ -529,6 +529,11 @@ export class ItemHash extends jspb.Message {
     getUpdatedAtTimestamp(): number | undefined;
     setUpdatedAtTimestamp(value: number): ItemHash;
 
+    hasRevisionCreation(): boolean;
+    clearRevisionCreation(): void;
+    getRevisionCreation(): string | undefined;
+    setRevisionCreation(value: string): ItemHash;
+
     serializeBinary(): Uint8Array;
     toObject(includeInstance?: boolean): ItemHash.AsObject;
     static toObject(includeInstance: boolean, msg: ItemHash): ItemHash.AsObject;
@@ -555,6 +560,7 @@ export namespace ItemHash {
         createdAtTimestamp?: number,
         updatedAt?: string,
         updatedAtTimestamp?: number,
+        revisionCreation?: string,
     }
 }
 

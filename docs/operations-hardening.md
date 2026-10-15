@@ -134,7 +134,10 @@ each protects a different failure mode.
 | AI daily request cap                        |                 off | `ASSISTANT_DAILY_REQUEST_LIMIT`                                            |
 | AI token windows                            |                 off | `ASSISTANT_5H_TOKEN_LIMIT`, `ASSISTANT_WEEKLY_TOKEN_LIMIT`                 |
 | Server-side OCR                             |                 off | `OCR_SERVER_ENABLED`, `OCR_SERVER_MAX_PAGES`, `OCR_SERVER_MAX_IMAGE_BYTES` |
-| Revision retention                          |           unlimited | `REVISIONS_RETENTION_DAYS`, `REVISIONS_MAX_COUNT_PER_ITEM`                 |
+| Revision retention                          | 200 per note / 900 days | `REVISIONS_RETENTION_DAYS`, `REVISIONS_MAX_COUNT_PER_ITEM`                 |
+| Total revision counts                       |           unlimited | `REVISIONS_MAX_COUNT_PER_USER`, `REVISIONS_MAX_COUNT_TOTAL`                |
+| Encrypted revision storage                  |           unlimited | `REVISIONS_MAX_BYTES_PER_USER`, `REVISIONS_MAX_BYTES_TOTAL`                |
+| Revision autosave coalescing                 | 30 seconds / 5 minutes | `REVISIONS_DEBOUNCE_SECONDS`, `REVISIONS_CHECKPOINT_SECONDS`               |
 
 Unauthenticated rate limits are Redis-backed and fail open if Redis is down, so a
 cache outage cannot lock legitimate users out of their notes. The tradeoff is

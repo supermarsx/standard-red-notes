@@ -55,6 +55,11 @@ const RemoteHistoryList: FunctionComponent<RemoteHistoryListProps> = ({
                   <div className="flex flex-grow items-center justify-between">
                     <div>
                       <div>{previewHistoryEntryTitle(entry)}</div>
+                      {entry.automatic_checkpoint && (
+                        <div className="text-passive-0 mt-0.5 text-xs">
+                          Automatic checkpoint · {entry.coalesced_changes ?? 1} combined saves
+                        </div>
+                      )}
                       {entry.edited_by_uuid && (
                         <div className="text-passive-0 mt-0.5 text-xs">
                           edited by {entry.edited_by_uuid.slice(0, 8)}

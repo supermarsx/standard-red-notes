@@ -2,6 +2,12 @@ import { Column, Entity, Index, PrimaryGeneratedColumn } from 'typeorm'
 
 @Entity({ name: 'revisions_revisions' })
 export class SQLRevision {
+  @Column({ name: 'source_updated_at', type: 'bigint', nullable: true })
+  declare sourceUpdatedAt: number | null
+
+  @Column({ name: 'coalesced_changes', type: 'int', default: 1 })
+  declare coalescedChanges: number
+
   @PrimaryGeneratedColumn('uuid')
   declare uuid: string
 

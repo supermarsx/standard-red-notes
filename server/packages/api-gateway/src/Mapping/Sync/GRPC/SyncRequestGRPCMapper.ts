@@ -100,6 +100,9 @@ export class SyncRequestGRPCMapper implements MapperInterface<Record<string, unk
     if (record.updated_at_timestamp) {
       itemHash.setUpdatedAtTimestamp(record.updated_at_timestamp as number)
     }
+    if (record.revision_creation) {
+      itemHash.setRevisionCreation(record.revision_creation as string)
+    }
 
     return itemHash
   }

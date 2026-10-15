@@ -211,7 +211,11 @@ export class UpdateExistingItem implements UseCaseInterface<Item> {
 
       const revisionsFrequency = dto.isFreeUser ? this.freeRevisionFrequency : this.premiumRevisionFrequency
 
-      if (secondsFromLastUpdate >= revisionsFrequency) {
+      if (
+        !wasMarkedAsDeleted &&
+        dto.itemHash.props.revision_creation !== 'metadata' &&
+        (dto.itemHash.props.revision_creation === 'automatic' || secondsFromLastUpdate >= revisionsFrequency)
+      ) {
         if (
           dto.existingItem.props.contentType.value !== null &&
           [ContentType.TYPES.Note, ContentType.TYPES.File].includes(dto.existingItem.props.contentType.value)

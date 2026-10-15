@@ -4,6 +4,8 @@ import { SharedVaultAssociation } from '../SharedVault/SharedVaultAssociation'
 import { KeySystemAssociation } from '../KeySystem/KeySystemAssociation'
 
 export interface RevisionProps {
+  sourceUpdatedAt?: number | null
+  coalescedChanges?: number
   itemUuid: Uuid
   userUuid: Uuid | null
   editedByUuid?: string | null

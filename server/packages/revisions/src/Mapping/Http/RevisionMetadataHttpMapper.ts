@@ -16,6 +16,12 @@ export class RevisionMetadataHttpMapper implements MapperInterface<
   toProjection(domain: RevisionMetadata): RevisionMetadataHttpRepresentation {
     return {
       uuid: domain.id.toString(),
+      ...((domain.props.coalescedChanges ?? 1) > 1
+        ? {
+            automatic_checkpoint: true,
+            coalesced_changes: domain.props.coalescedChanges,
+          }
+        : {}),
       item_uuid: domain.props.itemUuid.value,
       content_type: domain.props.contentType.value as string,
       created_at: domain.props.dates.createdAt.toISOString(),

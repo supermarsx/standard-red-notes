@@ -1,4 +1,6 @@
 export interface RevisionMetadataHttpRepresentation {
+  automatic_checkpoint?: boolean
+  coalesced_changes?: number
   uuid: string
   item_uuid: string
   content_type: string

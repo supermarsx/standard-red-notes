@@ -10,6 +10,10 @@ import {
   EMAIL_DELIVERY_TLS_MODES,
   EmailDeliveryTlsMode,
   RUNTIME_LOG_LEVELS,
+  RevisionPolicySettings,
+  RevisionPolicyPatch,
+  REVISION_POLICY_DEFAULTS,
+  validRevisionPolicy,
 } from '@standardnotes/domain-core'
 import {
   ASSIGNABLE_ROLE_NAMES,
@@ -340,6 +344,7 @@ export interface PersistedDavBridgeSettings {
 }
 
 export interface PersistedServerSettings {
+  revisions?: RevisionPolicySettings
   ai?: PersistedAiSettings
   updateCheck?: { url?: string }
   nextcloudBackups?: { enabled?: boolean }
@@ -802,6 +807,7 @@ function isPersistedServerSettings(value: unknown): value is PersistedServerSett
               SERVER_SETTINGS_BOUNDS.registrationMaximum.maximum,
             ),
         }),
+      revisions: (candidate) => validRevisionPolicy(candidate),
       logging: (candidate) =>
         matchesFields(candidate, {
           level: (entry) => (PERSISTED_LOG_LEVELS as readonly unknown[]).includes(entry),
@@ -883,6 +889,7 @@ function isPersistedServerSettings(value: unknown): value is PersistedServerSett
  * persisted value (fall back to env), anything else = persist the new value.
  */
 export interface ServerSettingsPatch {
+  revisions?: RevisionPolicyPatch
   ai?: {
     anthropicApiKey?: string | null
     openaiApiKey?: string | null
@@ -1142,6 +1149,34 @@ export class ServerSettingsStore {
         this.applyKey(data.registration, 'invitesPerUser', patch.registration.invitesPerUser)
         if (Object.keys(data.registration).length === 0) {
           delete data.registration
+        }
+      }
+      if (patch.revisions) {
+        data.revisions ??= {}
+        for (const key of Object.keys(REVISION_POLICY_DEFAULTS) as Array<keyof typeof REVISION_POLICY_DEFAULTS>) {
+          this.applyKey(data.revisions, key, patch.revisions[key])
+        }
+        for (const [id, limits] of Object.entries(patch.revisions.users ?? {})) {
+          data.revisions.users ??= {}
+          if (limits === null) {
+            delete data.revisions.users[id]
+          } else {
+            const target = data.revisions.users[id] ?? {}
+            for (const key of ['retentionDays', 'maxCountPerItem', 'maxCount', 'maxBytes'] as const) {
+              this.applyKey(target, key, limits[key])
+            }
+            if (Object.keys(target).length) {
+              data.revisions.users[id] = target
+            } else {
+              delete data.revisions.users[id]
+            }
+          }
+        }
+        if (data.revisions.users && !Object.keys(data.revisions.users).length) {
+          delete data.revisions.users
+        }
+        if (!Object.keys(data.revisions).length) {
+          delete data.revisions
         }
       }
       if (patch.logging) {

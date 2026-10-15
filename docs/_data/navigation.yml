@@ -396,6 +396,8 @@
           url: /sync-and-data-lifecycle.html#shared-vault-sync
         - title: Revisions, trash, and deletion
           url: /sync-and-data-lifecycle.html#revisions-trash-and-deletion
+        - title: Revision retention and automatic checkpoints
+          url: /sync-and-data-lifecycle.html#revision-retention-and-automatic-checkpoints
         - title: Files
           url: /sync-and-data-lifecycle.html#files
         - title: Sync health checks

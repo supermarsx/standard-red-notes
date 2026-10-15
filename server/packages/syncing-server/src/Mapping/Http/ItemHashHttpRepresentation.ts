@@ -1,4 +1,5 @@
 export interface ItemHashHttpRepresentation {
+  revision_creation?: 'automatic' | 'metadata'
   uuid: string
   user_uuid: string
   content?: string

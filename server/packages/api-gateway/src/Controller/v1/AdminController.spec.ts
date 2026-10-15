@@ -559,6 +559,57 @@ describe('AdminController server-status', () => {
     const settingsController = (adminEmailDeliveryService?: AdminEmailDeliveryService) =>
       makeController({ serverSettingsResolver: resolver, logger, workflowsService, adminEmailDeliveryService })
 
+    it('persists revision caps and scoped user overrides through the admin route', async () => {
+      const user = '00000000-0000-4000-8000-000000000001'
+      await settingsController().setServerSettings(
+        {
+          body: {
+            revisions: {
+              maxCountPerItem: 200,
+              retentionDays: 900,
+              maxCountPerUser: 5000,
+              maxCountTotal: 10000,
+              maxBytesPerUser: 1048576,
+              maxBytesTotal: 10485760,
+              users: { [user]: { maxCount: 50, maxBytes: 1024 } },
+            },
+          },
+        } as unknown as Request,
+        responseWith([{ name: RoleName.NAMES.AdminUser }]),
+      )
+      expect((await resolver.view()).settings.revisions).toMatchObject({
+        maxCountPerItem: 200,
+        retentionDays: 900,
+        maxCountPerUser: 5000,
+        maxBytesTotal: 10485760,
+        users: { [user]: { maxCount: 50, maxBytes: 1024 } },
+      })
+      await settingsController().setServerSettings(
+        { body: { revisions: { users: { [user]: null } } } } as unknown as Request,
+        responseWith([{ name: RoleName.NAMES.AdminUser }]),
+      )
+      expect((await resolver.view()).settings.revisions.users).toEqual({})
+    })
+
+    it.each([
+      { maxCountPerItem: -1 },
+      { retentionDays: 1.5 },
+      { maxBytesTotal: '100' },
+      { unknown: 20 },
+      { users: { invalid: { maxCount: 5 } } },
+    ])('rejects invalid revision caps %p', async (revisions) => {
+      await settingsController().setServerSettings(
+        { body: { revisions } } as unknown as Request,
+        responseWith([{ name: RoleName.NAMES.AdminUser }]),
+      )
+      expect(statusMock).toHaveBeenCalledWith(400)
+      expect((await resolver.view()).settings.revisions).toMatchObject({
+        maxCountPerItem: 200,
+        retentionDays: 900,
+        users: {},
+      })
+    })
+
     it('rejects a non-admin requestor with 403 on both GET and PUT', async () => {
       await settingsController().getServerSettings({} as Request, responseWith([{ name: RoleName.NAMES.CoreUser }]))
       expect(statusMock).toHaveBeenCalledWith(403)

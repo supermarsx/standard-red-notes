@@ -116,6 +116,7 @@ message ItemHash {
   optional uint64 created_at_timestamp = 12;
   optional string updated_at = 13;
   optional uint64 updated_at_timestamp = 14;
+  optional string revision_creation = 15;
 }
 
 message SyncCommandMetadata {

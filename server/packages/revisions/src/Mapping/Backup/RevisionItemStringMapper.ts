@@ -67,6 +67,7 @@ export class RevisionItemStringMapper implements MapperInterface<Revision, strin
           : null
 
     const revisionOrError = Revision.create({
+      sourceUpdatedAt: Number.isSafeInteger(item.updated_at_timestamp) ? item.updated_at_timestamp : null,
       itemUuid,
       userUuid,
       editedByUuid,

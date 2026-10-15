@@ -1,4 +1,4 @@
-import { MapperInterface, Uuid } from '@standardnotes/domain-core'
+import { MapperInterface, Uuid, RevisionPolicyResolver } from '@standardnotes/domain-core'
 import { Repository } from 'typeorm'
 import { Logger } from 'winston'
 
@@ -6,14 +6,19 @@ import { Revision } from '../../../Domain/Revision/Revision'
 import { RevisionMetadata } from '../../../Domain/Revision/RevisionMetadata'
 import { RevisionRepositoryInterface } from '../../../Domain/Revision/RevisionRepositoryInterface'
 import { SQLRevision } from './SQLRevision'
+import { RevisionRetention } from './RevisionRetention'
 
 export class SQLRevisionRepository implements RevisionRepositoryInterface {
+  readonly retention: RevisionRetention
   constructor(
     protected ormRepository: Repository<SQLRevision>,
     protected revisionMetadataMapper: MapperInterface<RevisionMetadata, SQLRevision>,
     protected revisionMapper: MapperInterface<Revision, SQLRevision>,
     protected logger: Logger,
-  ) {}
+    policy: RevisionPolicyResolver = new RevisionPolicyResolver(undefined),
+  ) {
+    this.retention = new RevisionRetention(ormRepository, policy)
+  }
 
   async removeByItemUuid(itemUuid: Uuid): Promise<void> {
     await this.ormRepository
@@ -106,6 +111,7 @@ export class SQLRevisionRepository implements RevisionRepositoryInterface {
       .addSelect('updated_at', 'updatedAt')
       .addSelect('shared_vault_uuid', 'sharedVaultUuid')
       .addSelect('edited_by_uuid', 'editedByUuid')
+      .addSelect('coalesced_changes', 'coalescedChanges')
       .addSelect('item_uuid', 'itemUuid')
       .orderBy('created_at', 'DESC')
 
@@ -179,14 +185,7 @@ export class SQLRevisionRepository implements RevisionRepositoryInterface {
   }
 
   async updateUserUuid(itemUuid: Uuid, userUuid: Uuid): Promise<void> {
-    await this.ormRepository
-      .createQueryBuilder()
-      .update()
-      .set({
-        userUuid: userUuid.value,
-      })
-      .where('item_uuid = :itemUuid', { itemUuid: itemUuid.value })
-      .execute()
+    await this.retention.reassign(itemUuid.value, userUuid.value)
   }
 
   async findByItemUuid(itemUuid: Uuid): Promise<Revision[]> {
@@ -206,7 +205,7 @@ export class SQLRevisionRepository implements RevisionRepositoryInterface {
   async insert(revision: Revision): Promise<boolean> {
     const projection = this.revisionMapper.toProjection(revision)
 
-    await this.ormRepository.insert(projection)
+    await this.retention.store([projection], true)
 
     return true
   }
@@ -218,15 +217,7 @@ export class SQLRevisionRepository implements RevisionRepositoryInterface {
 
     const projections = revisions.map((revision) => this.revisionMapper.toProjection(revision))
 
-    // All-or-nothing: a mid-copy failure rolls the whole batch back so no partial
-    // copy is left behind. Inserts are chunked to keep individual statements bounded.
-    const batchSize = 100
-    await this.ormRepository.manager.transaction(async (transactionalEntityManager) => {
-      for (let offset = 0; offset < projections.length; offset += batchSize) {
-        const batch = projections.slice(offset, offset + batchSize)
-        await transactionalEntityManager.insert(SQLRevision, batch)
-      }
-    })
+    await this.retention.store(projections, false)
 
     return true
   }
@@ -234,9 +225,7 @@ export class SQLRevisionRepository implements RevisionRepositoryInterface {
   async update(revision: Revision): Promise<boolean> {
     const projection = this.revisionMapper.toProjection(revision)
 
-    const { uuid, ...rest } = projection
-
-    await this.ormRepository.update({ uuid: uuid }, rest)
+    await this.retention.replace(projection)
 
     return true
   }

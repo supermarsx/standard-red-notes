@@ -92,6 +92,9 @@ export class SyncingServer {
       for (const itemHash of itemHashesRPC) {
         const itemHashOrError = ItemHash.create({
           uuid: itemHash.getUuid(),
+          revision_creation: itemHash.hasRevisionCreation()
+            ? (itemHash.getRevisionCreation() as 'automatic' | 'metadata')
+            : undefined,
           content: itemHash.hasContent() ? itemHash.getContent() : undefined,
           content_type: itemHash.hasContentType() ? (itemHash.getContentType() as string) : null,
           deleted: itemHash.hasDeleted() ? itemHash.getDeleted() : undefined,
@@ -410,6 +413,9 @@ export class SyncingServer {
       }
       if (item.hasUpdatedAtTimestamp()) {
         value.updated_at_timestamp = item.getUpdatedAtTimestamp()
+      }
+      if (item.hasRevisionCreation()) {
+        value.revision_creation = item.getRevisionCreation()
       }
       return value
     })

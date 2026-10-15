@@ -189,6 +189,31 @@ describe('UpdateExistingItem', () => {
         userUuid: '00000000-0000-0000-0000-000000000000',
       })
     })
+    it('does not create history for a metadata-only update even after the old frequency elapsed', async () => {
+      itemHash1 = ItemHash.create({ ...itemHash1.props, revision_creation: 'metadata' }).getValue()
+      const result = await createUseCase().execute({
+        existingItem: item1,
+        itemHash: itemHash1,
+        sessionUuid: '00000000-0000-0000-0000-000000000000',
+        performingUserUuid: '00000000-0000-0000-0000-000000000000',
+        isFreeUser: false,
+      })
+      expect(result.isFailed()).toBe(false)
+      expect(itemRepository.update).toHaveBeenCalled()
+      expect(domainEventFactory.createItemRevisionCreationRequested).not.toHaveBeenCalled()
+    })
+    it('captures an automatic content change without starving continuous free-user editing', async () => {
+      itemHash1 = ItemHash.create({ ...itemHash1.props, revision_creation: 'automatic' }).getValue()
+      const result = await createUseCase().execute({
+        existingItem: item1,
+        itemHash: itemHash1,
+        sessionUuid: '00000000-0000-0000-0000-000000000000',
+        performingUserUuid: '00000000-0000-0000-0000-000000000000',
+        isFreeUser: true,
+      })
+      expect(result.isFailed()).toBe(false)
+      expect(domainEventFactory.createItemRevisionCreationRequested).toHaveBeenCalled()
+    })
 
     it('should not request a revision for a free user until the much longer free frequency has elapsed', async () => {
       const result = await createUseCase().execute({

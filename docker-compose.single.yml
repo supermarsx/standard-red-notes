@@ -62,6 +62,14 @@ services:
       # Shared admin overlay for all named loggers in the home-server process.
       # A custom in-container path also needs a matching persistent mount.
       SERVER_SETTINGS_PATH: ${SERVER_SETTINGS_PATH:-/data/server-settings.json}
+      REVISIONS_RETENTION_DAYS: ${REVISIONS_RETENTION_DAYS:-900}
+      REVISIONS_MAX_COUNT_PER_ITEM: ${REVISIONS_MAX_COUNT_PER_ITEM:-200}
+      REVISIONS_MAX_COUNT_PER_USER: ${REVISIONS_MAX_COUNT_PER_USER:-0}
+      REVISIONS_MAX_BYTES_PER_USER: ${REVISIONS_MAX_BYTES_PER_USER:-0}
+      REVISIONS_MAX_COUNT_TOTAL: ${REVISIONS_MAX_COUNT_TOTAL:-0}
+      REVISIONS_MAX_BYTES_TOTAL: ${REVISIONS_MAX_BYTES_TOTAL:-0}
+      REVISIONS_DEBOUNCE_SECONDS: ${REVISIONS_DEBOUNCE_SECONDS:-30}
+      REVISIONS_CHECKPOINT_SECONDS: ${REVISIONS_CHECKPOINT_SECONDS:-300}
       # Read-only CalDAV feed, OFF unless the operator asks for it. When on,
       # the gateway serves a VTODO task collection plus (per user) a VEVENT
       # calendar of task DUE DATES, so deadlines land on a calendar grid.

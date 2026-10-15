@@ -1,4 +1,6 @@
 import {
+  RevisionPolicyResolver,
+  revisionPolicyBaseline,
   ControllerContainer,
   ControllerContainerInterface,
   MapperInterface,
@@ -132,11 +134,11 @@ export class ContainerConfigLoader {
 
     container
       .bind<number>(TYPES.Revisions_REVISIONS_RETENTION_DAYS)
-      .toConstantValue(env.get('REVISIONS_RETENTION_DAYS', true) ? +env.get('REVISIONS_RETENTION_DAYS', true) : 0)
+      .toConstantValue(env.get('REVISIONS_RETENTION_DAYS', true) ? +env.get('REVISIONS_RETENTION_DAYS', true) : 900)
     container
       .bind<number>(TYPES.Revisions_REVISIONS_MAX_COUNT_PER_ITEM)
       .toConstantValue(
-        env.get('REVISIONS_MAX_COUNT_PER_ITEM', true) ? +env.get('REVISIONS_MAX_COUNT_PER_ITEM', true) : 0,
+        env.get('REVISIONS_MAX_COUNT_PER_ITEM', true) ? +env.get('REVISIONS_MAX_COUNT_PER_ITEM', true) : 200,
       )
 
     if (!isConfiguredForHomeServer) {
@@ -202,18 +204,24 @@ export class ContainerConfigLoader {
       .toConstantValue(
         new RevisionStorageUsage(container.get(TYPES.Revisions_ORMRevisionRepository), env.get('AUTH_JWT_SECRET')),
       )
-    container
-      .bind<RevisionRepositoryInterface>(TYPES.Revisions_SQLRevisionRepository)
-      .toConstantValue(
-        new SQLRevisionRepository(
-          container.get<Repository<SQLRevision>>(TYPES.Revisions_ORMRevisionRepository),
-          container.get<MapperInterface<RevisionMetadata, SQLRevision>>(
-            TYPES.Revisions_SQLRevisionMetadataPersistenceMapper,
-          ),
-          container.get<MapperInterface<Revision, SQLRevision>>(TYPES.Revisions_SQLRevisionPersistenceMapper),
-          container.get<winston.Logger>(TYPES.Revisions_Logger),
+    container.bind<RevisionRepositoryInterface>(TYPES.Revisions_SQLRevisionRepository).toConstantValue(
+      new SQLRevisionRepository(
+        container.get<Repository<SQLRevision>>(TYPES.Revisions_ORMRevisionRepository),
+        container.get<MapperInterface<RevisionMetadata, SQLRevision>>(
+          TYPES.Revisions_SQLRevisionMetadataPersistenceMapper,
         ),
-      )
+        container.get<MapperInterface<Revision, SQLRevision>>(TYPES.Revisions_SQLRevisionPersistenceMapper),
+        container.get<winston.Logger>(TYPES.Revisions_Logger),
+        new RevisionPolicyResolver(
+          env.get('SERVER_SETTINGS_PATH', true) || undefined,
+          revisionPolicyBaseline((name) => env.get(name, true)),
+        ),
+      ),
+    )
+    if (this.mode === 'server') {
+      const revisions = container.get<SQLRevisionRepository>(TYPES.Revisions_SQLRevisionRepository)
+      revisions.retention.start(() => logger.warn('Revision retention sweep failed; it will retry.'))
+    }
 
     container
       .bind<GetRequiredRoleToViewRevision>(TYPES.Revisions_GetRequiredRoleToViewRevision)
@@ -287,9 +295,6 @@ export class ContainerConfigLoader {
         new CreateRevisionFromDump(
           container.get<DumpRepositoryInterface>(TYPES.Revisions_DumpRepository),
           container.get<RevisionRepositoryInterface>(TYPES.Revisions_SQLRevisionRepository),
-          container.get<TimerInterface>(TYPES.Revisions_Timer),
-          container.get<number>(TYPES.Revisions_REVISIONS_RETENTION_DAYS),
-          container.get<number>(TYPES.Revisions_REVISIONS_MAX_COUNT_PER_ITEM),
         ),
       )
 

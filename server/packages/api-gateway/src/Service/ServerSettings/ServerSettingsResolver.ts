@@ -7,6 +7,10 @@ import {
   emailDeliveryConfigurationError,
   isEmailDeliveryConfigured,
   resolveEmailDeliveryConfig as resolveSharedEmailDeliveryConfig,
+  RevisionPolicySettings,
+  RevisionPolicyLimits,
+  revisionPolicyBaseline,
+  effectiveRevisionPolicy,
 } from '@standardnotes/domain-core'
 import { openAiCompatibleConfigured } from '../Assistant/providers/openaiAuth'
 import {
@@ -71,6 +75,7 @@ const resolveWorkflowsPublicUrlCandidate = (
 }
 
 export interface EnvSettingsBaseline {
+  revisions?: RevisionPolicyLimits
   /** The env-derived assistant provider config (ASSISTANT_* vars). */
   assistant: AssistantProviderConfig
   /** ASSISTANT_DAILY_REQUEST_LIMIT; undefined when the env var is unset. */
@@ -514,6 +519,7 @@ export const normalizeRegistrationDomains = (list: string[]): string[] => {
 /** The masked admin view returned by GET/PUT /v1/admin/server-settings. */
 export interface ServerSettingsView {
   settings: {
+    revisions: RevisionPolicyLimits & { users: NonNullable<RevisionPolicySettings['users']> }
     ai: {
       anthropicConfigured: boolean
       openaiConfigured: boolean
@@ -1296,6 +1302,13 @@ export class ServerSettingsResolver {
           ...registrationConfig,
           assignableRoles: REGISTRATION_ASSIGNABLE_ROLES,
           gatingModes: EMAIL_CONFIRMATION_GATING_MODES,
+        },
+        revisions: {
+          ...effectiveRevisionPolicy(
+            persisted.revisions ?? {},
+            this.envBaseline.revisions ?? revisionPolicyBaseline((name) => process.env[name]),
+          ),
+          users: persisted.revisions?.users ?? {},
         },
         logging: { level: loggingLevel, levels: LOG_LEVELS },
         emailDelivery: {

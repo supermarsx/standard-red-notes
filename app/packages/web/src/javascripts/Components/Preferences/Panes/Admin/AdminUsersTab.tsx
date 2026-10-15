@@ -32,6 +32,7 @@ import AdminPagination from './AdminPagination'
 import AdminUserSessions from './AdminUserSessions'
 import AdminUserMfa from './AdminUserMfa'
 import StorageUsagePanel from '@/Components/StorageUsage/StorageUsagePanel'
+import { AdminUserRevisionPolicy } from './AdminRevisionPolicy'
 import {
   BulkItemResult,
   excludeSelfTarget,
@@ -2438,6 +2439,11 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
 
               <div className="border-border bg-default rounded-lg border p-4">
                 <Title>Storage</Title>
+                <AdminUserRevisionPolicy
+                  application={application}
+                  userUuid={user.uuid}
+                  noteIfForbidden={noteIfForbidden}
+                />
                 <div data-test-id="admin-space-readout">
                   <StorageUsagePanel
                     application={application}

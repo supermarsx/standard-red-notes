@@ -133,6 +133,56 @@ folders, exports, database dumps, email attachments, Nextcloud copies, recipient
 devices, or logs that intentionally contain metadata. Retention must be handled
 at every layer.
 
+### Revision retention and automatic checkpoints
+
+By default, each note keeps at most **200 revisions**, and revisions older than
+**900 days** are removed. Both bounds apply: the newest 200 are not kept forever,
+and a note cannot accumulate unlimited revisions within the 900-day window.
+
+In **Settings → Admin → Server → Revision history**, an administrator can change
+the count and age bounds, add total revision-count and encrypted-storage caps
+per user and for the whole server, and tune automatic checkpoint creation.
+An individual account's **Users → Manage → Storage → Revision history limits**
+section can impose tighter account bounds. A user override cannot bypass a
+server cap. Zero removes that additional limit; clearing an override restores
+the environment/default or inherited server value. Total count/storage caps
+default to unlimited; the per-note 200/900 defaults still bound each note.
+
+Updated clients mark title/body/comment changes separately from changes to
+preview text, timestamps and collaboration bookkeeping. Only an advisory
+`automatic` or `metadata` marker is sent; comparisons stay on the device, and
+no plaintext or content fingerprint is disclosed. Unknown or oversized content
+is conservatively treated as a content change. Older clients remain supported.
+
+Automatic saves within **30 seconds** of the previous save are combined into
+the latest checkpoint, up to **5 minutes** of continuous editing. A longer idle
+gap starts a new checkpoint. Author and encryption-context changes remain
+separate. Combined entries are labelled **Automatic checkpoint** with the
+number of saves combined. The latest checkpoint can continue updating during
+that window; previous checkpoints remain available. Duplicate or older dump
+deliveries do not replace newer content.
+
+Limits are enforced transactionally when history is written or copied, across
+all workers. Oldest revisions are removed first. A snapshot larger than its
+entire account or server byte cap is skipped, preserving smaller existing
+revisions. Storage counts UTF-8 bytes of
+encrypted content, encrypted item keys and authentication hashes, matching the
+revision-storage measurement; database/index overhead is excluded. These limits
+apply to revision history, not current notes or the separate file-upload quota.
+A rotating sweep also prunes inactive notes in batches of 100 each minute;
+existing history converges to changed limits without requiring another edit.
+Lowering limits permanently removes excess history.
+
+Environment baselines are `REVISIONS_MAX_COUNT_PER_ITEM=200`,
+`REVISIONS_RETENTION_DAYS=900`, `REVISIONS_MAX_COUNT_PER_USER=0`,
+`REVISIONS_MAX_BYTES_PER_USER=0`, `REVISIONS_MAX_COUNT_TOTAL=0`,
+`REVISIONS_MAX_BYTES_TOTAL=0`, `REVISIONS_DEBOUNCE_SECONDS=30`, and
+`REVISIONS_CHECKPOINT_SECONDS=300`. Admin overrides are persisted under
+`revisions` in the shared `SERVER_SETTINGS_PATH` and apply without a restart.
+Both bundled Compose deployments expose these variables. Deploy the revisions
+service migration before starting its workers when services are managed
+separately.
+
 ## Files
 
 Files use dedicated upload/download flows rather than being embedded in a note

@@ -73,6 +73,8 @@ export class SQLRevisionPersistenceMapper implements MapperInterface<Revision, S
     const revisionOrError = Revision.create(
       {
         authHash: projection.authHash,
+        sourceUpdatedAt: projection.sourceUpdatedAt == null ? null : Number(projection.sourceUpdatedAt),
+        coalescedChanges: projection.coalescedChanges ?? 1,
         content: projection.content,
         contentType,
         creationDate: new Date(this.timer.convertDateToFormattedString(projection.creationDate, 'YYYY-MM-DD')),
@@ -98,6 +100,8 @@ export class SQLRevisionPersistenceMapper implements MapperInterface<Revision, S
     const sqlRevision = new SQLRevision()
 
     sqlRevision.authHash = domain.props.authHash
+    sqlRevision.sourceUpdatedAt = domain.props.sourceUpdatedAt ?? null
+    sqlRevision.coalescedChanges = domain.props.coalescedChanges ?? 1
     sqlRevision.content = domain.props.content
     sqlRevision.contentType = domain.props.contentType.value
     sqlRevision.createdAt = domain.props.dates.createdAt

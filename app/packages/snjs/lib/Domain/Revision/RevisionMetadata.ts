@@ -1,4 +1,6 @@
 export interface RevisionMetadata {
+  automatic_checkpoint?: boolean
+  coalesced_changes?: number
   uuid: string
   content_type: string
   created_at: string

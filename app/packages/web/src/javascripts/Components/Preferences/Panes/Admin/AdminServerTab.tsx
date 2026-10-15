@@ -20,6 +20,7 @@ import { useTabState } from '@/Components/Tabs/useTabState'
 import { ToastType, addToast } from '@standardnotes/toast'
 import { resolveWorkflowsPublicUrl } from '@/Components/Workflows/workflowsStatus'
 import AdminEmailDeliveryTab from './AdminEmailDeliveryTab'
+import AdminRevisionPolicy from './AdminRevisionPolicy'
 import {
   AdminInviteLinkCreated,
   AdminInviteLinkView,
@@ -1210,6 +1211,9 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
             <Tab id="logging" className="inline-flex items-center gap-1.5 !text-xs">
               <Icon type="list-bulleted" size="medium" />
               Logging
+            </Tab>
+            <Tab id="revisions" className="inline-flex items-center gap-1.5 !text-xs">
+              Revision history
             </Tab>
           </TabList>
         </div>
@@ -2676,6 +2680,12 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
       </TabPanel>
 
       {/* ================= LOGGING ================= */}
+      <TabPanel state={subTab} id="revisions">
+        <PreferencesSegment>
+          <Title>Revision history</Title>
+          <AdminRevisionPolicy application={application} noteIfForbidden={noteIfForbidden} />
+        </PreferencesSegment>
+      </TabPanel>
       <TabPanel state={subTab} id="logging">
         <PreferencesSegment>
           <Title>Logging</Title>
