@@ -1195,6 +1195,56 @@ Only `--proxy-network=NAME` and `--proxy-alias=NAME` also accept the equals
 form. Quote paths containing spaces. Unknown options and missing values are
 errors; there is no passthrough for arbitrary Compose arguments.
 
+#### Frontend handovers
+
+For an existing bundled stack with separate `app` and `server` containers:
+
+```bash
+./deploy.sh --rolling-web --yes   # update backend too; keep the web frontend serving
+./deploy.sh --web-only --yes      # update only the web frontend
+./deploy.sh --web-rollback --yes  # return to the previous healthy frontend
+```
+
+These modes keep the public app container, port and reverse-proxy alias in
+place. A replacement frontend starts privately, with no additional published
+port. Deployment waits for its Docker health check, checks that the public
+container can reach it, validates nginx configuration, then gracefully reloads
+nginx to switch frontend traffic. The served HTML and JavaScript are compared
+with the replacement before success is reported. A failed handover restores
+the previous routing. Existing API, file-transfer and WebSocket routes are
+preserved; Nginx Proxy Manager needs no upstream change.
+
+`--rolling-web` still backs up and updates the backend, database and other
+enabled services. **API calls, sync and collaboration can be interrupted while
+those services restart.** The availability guarantee here concerns the web
+frontend. `--web-only` leaves those services running and skips the database
+backup. Git pull and build stamping otherwise follow the normal deploy flags.
+Use it for frontend changes compatible with the backend version already running;
+frontend and backend revision markers can intentionally differ afterward.
+
+One previous frontend stays running for rollback and for immutable lazy-loaded
+assets requested by older open tabs. Older managed frontend containers are
+stopped gracefully and removed after the next successful handover. Rollback
+changes the frontend only; it does not roll back databases, backend code or
+runtime administration settings. `--timeout` controls each replacement's health
+deadline. These flags are one-run choices and are not remembered implicitly.
+
+The ignored `.deploy-web/<project>.json` holds routing/rollback state. Keep it
+while using handovers. The public container acts as the stable nginx front door,
+so `docker ps` continues to show its original image; the deployment marker and
+frontend release containers identify the web build actually served. Ordinary
+container restarts preserve this routing. A conventional full deploy without
+these flags replaces that front door as usual; use that maintenance path for
+nginx configuration/image, container hardening, public-origin/HTTPS settings,
+public-port or network changes. Handovers refuse those origin, port and network
+changes and the all-in-one `--single` stack.
+
+No host Node.js installation is required for local Docker: when Node is absent,
+the script builds and uses a small Docker-based deployment controller. Remote
+Docker contexts require Node on the deploy host. An operator using private
+registry credential helpers should also run the host Node path so the normal
+Docker client configuration remains available.
+
 #### Topology and saved settings
 
 | Argument | Behavior | Saved for later runs? |

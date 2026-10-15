@@ -65,3 +65,4 @@ backups/
 /.deploy-state
 /.deploy-state.*
 /docker-compose.override.yml
+/.deploy-web/

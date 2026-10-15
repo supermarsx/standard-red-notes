@@ -1,0 +1,4 @@
+**
+!deploy-web.mjs
+!WebDeployer.Dockerfile
+!.dockerignore

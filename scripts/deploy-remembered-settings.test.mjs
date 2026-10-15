@@ -314,6 +314,39 @@ const ONE_SHOT = ["--yes", "--no-pull", "--no-backup"];
 // Side by side: every test has its own checkout and its own docker double, and a deploy is
 // mostly waiting on child processes.
 describe("what deploy.sh remembers between runs", { concurrency: true }, () => {
+  test("web handover dry-runs keep the public container and distinguish frontend-only, full updates and rollback", async (t) => {
+    const sandbox = createSandbox(t);
+    for (const [flag, mode] of [
+      ["--web-only", ""],
+      ["--rolling-web", "--full-update"],
+      ["--web-rollback", "--rollback"],
+    ]) {
+      const result = await sandbox.deploy([flag, "--dry-run", ...ONE_SHOT]);
+      succeeded(result);
+      assert.match(result.output, /scripts\/deploy-web\.mjs/);
+      if (mode) assert.ok(result.output.includes(mode), result.output);
+      assert.equal(result.ups.length, 0);
+    }
+  });
+
+  test("web handover rejects single-container mode and contradictory backend choices", async (t) => {
+    const sandbox = createSandbox(t);
+    const single = await sandbox.deploy([
+      "--single",
+      "--web-only",
+      ...ONE_SHOT,
+    ]);
+    assert.notEqual(single.status, 0);
+    assert.match(single.output, /separate app and server/);
+    const conflict = await sandbox.deploy([
+      "--rolling-web",
+      "--web-only",
+      ...ONE_SHOT,
+    ]);
+    assert.notEqual(conflict.status, 0);
+    assert.match(conflict.output, /Choose one/);
+  });
+
   // ---------------------------------------------------------------------------------------
   // The accident itself
   // ---------------------------------------------------------------------------------------

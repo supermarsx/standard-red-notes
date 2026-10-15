@@ -25,6 +25,9 @@
 #   ./deploy.sh --dry-run            # print every command, change nothing
 #   ./deploy.sh --yes                # non-interactive (no confirmation prompt)
 #   ./deploy.sh --single             # the all-in-one docker-compose.single.yml
+#   ./deploy.sh --web-only           # health-gated web update; leave backend running
+#   ./deploy.sh --rolling-web        # keep web serving while updating the backend too
+#   ./deploy.sh --web-rollback       # restore the previous healthy web release
 #   ./deploy.sh --no-pull            # deploy the checked-out revision as-is
 #   ./deploy.sh --no-backup          # skip the pre-deploy database backup
 #   ./deploy.sh --proxy-network=npm_default   # behind a containerised proxy
@@ -158,6 +161,9 @@ ALLOW_DIRTY=0
 BACKUP_DIR="${REPO_ROOT}/backups"
 CREATE_NETWORK=0
 HEALTH_TIMEOUT=600
+WEB_ONLY=0
+WEB_ROLLBACK=0
+ROLLING_WEB=0
 LOG_LINES=200
 HEALTH_URL=""
 
@@ -202,6 +208,9 @@ while [ "$#" -gt 0 ]; do
     --setup) FORCE_MODE="setup" ;;
     --update) FORCE_MODE="update" ;;
     --single) ARG_SINGLE=1 ;;
+    --web-only) WEB_ONLY=1; DO_BACKUP=0 ;;
+    --rolling-web) ROLLING_WEB=1 ;;
+    --web-rollback) WEB_ONLY=1; WEB_ROLLBACK=1; DO_BACKUP=0; DO_PULL=0 ;;
     -f|--file) need_value "$1" "${2:-}"; ARG_COMPOSE_FILE="$2"; shift ;;
     -p|--project) need_value "$1" "${2:-}"; ARG_PROJECT="$2"; shift ;;
     --no-pull) DO_PULL=0 ;;
@@ -258,6 +267,10 @@ done
 
 # Contradictions that need nothing but the command line. Whatever also depends
 # on what is remembered is decided in section 0, once that has been read.
+if [ "$ROLLING_WEB" -eq 1 ] && [ "$WEB_ONLY" -eq 1 ]; then
+  err "--rolling-web updates the backend; --web-only/--web-rollback leave it running. Choose one."
+  exit 2
+fi
 if [ "$ARG_SINGLE" -eq 1 ] && [ -n "$ARG_COMPOSE_FILE" ]; then
   err "--single and --file are mutually exclusive; --single already selects docker-compose.single.yml."
   exit 2
@@ -1640,6 +1653,11 @@ if [ "$MODE" = "setup" ]; then
   fi
 fi
 
+if { [ "$WEB_ONLY" -eq 1 ] || [ "$ROLLING_WEB" -eq 1 ]; } && { [ "$MODE" != "update" ] || [ "$SINGLE" -eq 1 ]; }; then
+  err "Web handover requires an existing bundled stack with separate app and server containers."
+  exit 2
+fi
+
 # ---------------------------------------------------------------------------
 # 1c. The reverse proxy, when nobody has said anything about it yet.
 #
@@ -2319,6 +2337,10 @@ fi
 # left unset deliberately -- the deployment-identity build stage then derives
 # src-<first 12 of the revision>, which is the documented single-argument form.
 # ---------------------------------------------------------------------------
+if { [ "$WEB_ONLY" -eq 1 ] || [ "$ROLLING_WEB" -eq 1 ]; } && [ "$CHANGE_COUNT" -gt 0 ]; then
+  err "Web handovers keep the public container and its networks in place. Apply deployment/network changes with a full deploy first."
+  exit 2
+fi
 title "Build and deploy"
 if [ "$STAMP_REVISION" -eq 1 ]; then
   BUILD_ENV=(env "SRN_DEPLOY_REVISION=${REVISION}")
@@ -2330,7 +2352,13 @@ else
   warn "Building UNSTAMPED (--allow-dirty)."
 fi
 
-if ! confirm "Rebuild the images and restart the stack now?"; then
+DEPLOY_PROMPT="Rebuild the images and restart the stack now?"
+if [ "$WEB_ONLY" -eq 1 ]; then
+  DEPLOY_PROMPT="Hand over the web app after health checks, leaving the backend running?"
+elif [ "$ROLLING_WEB" -eq 1 ]; then
+  DEPLOY_PROMPT="Update backend services while keeping the web frontend available, then hand over to the healthy web release?"
+fi
+if ! confirm "$DEPLOY_PROMPT"; then
   info "Aborted at the operator prompt. Nothing has been built or restarted."
   if [ -n "$BACKUP_FILE" ]; then
     info "The backup taken above is kept at ${BACKUP_FILE}"
@@ -2344,7 +2372,31 @@ fi
 # the next plain ./deploy.sh would take the container off the network again.
 remember_settings
 
-if ! run "${BUILD_ENV[@]}" "${COMPOSE[@]}" "${COMPOSE_FILE_ARGS[@]}" up -d --build; then
+if [ "$WEB_ONLY" -eq 1 ] || [ "$ROLLING_WEB" -eq 1 ]; then
+  WEB_ARGS=(--timeout "$HEALTH_TIMEOUT")
+  if [ "$WEB_ROLLBACK" -eq 1 ]; then WEB_ARGS+=(--rollback); fi
+  if [ "$ROLLING_WEB" -eq 1 ] && [ "$WEB_ONLY" -eq 0 ]; then WEB_ARGS+=(--full-update); fi
+  if command -v node >/dev/null 2>&1; then
+    run "${BUILD_ENV[@]}" node "${REPO_ROOT}/scripts/deploy-web.mjs" "${WEB_ARGS[@]}" -- "${COMPOSE[@]}" "${COMPOSE_FILE_ARGS[@]}"
+  else
+    # The normal self-hosting installation needs Docker, not host Node/Yarn.
+    # Run the small deployment controller in Docker when Node is absent.
+    WEB_DOCKER_ENDPOINT="${DOCKER_HOST:-$(docker context inspect --format '{{.Endpoints.docker.Host}}')}"
+    case "$WEB_DOCKER_ENDPOINT" in
+      unix://*) WEB_SOCKET="${WEB_DOCKER_ENDPOINT#unix://}" ;;
+      *) err "Web handover on a remote Docker context needs Node.js on the deploy host."; exit 2 ;;
+    esac
+    [ -S "$WEB_SOCKET" ] || { err "The local Docker socket is unavailable."; exit 2; }
+    WEB_SOCKET_GID="$(ls -nd "$WEB_SOCKET" | awk '{print $4}')"
+    run docker build -t standard-red-notes/web-deployer:local -f "${REPO_ROOT}/scripts/WebDeployer.Dockerfile" "${REPO_ROOT}/scripts"
+    run "${BUILD_ENV[@]}" docker run --rm --user "$(id -u):$(id -g)" --group-add "$WEB_SOCKET_GID" \
+      -v "${WEB_SOCKET}:/var/run/docker.sock" -v "${REPO_ROOT}:${REPO_ROOT}" -w "$REPO_ROOT" \
+      -e COMPOSE_PROJECT_NAME -e COMPOSE_PROFILES -e SRN_PROXY_NETWORK -e SRN_PROXY_ALIAS \
+      -e SRN_DEPLOY_REVISION -e SRN_DEPLOY_VERSION standard-red-notes/web-deployer:local \
+      "${WEB_ARGS[@]}" -- docker compose "${COMPOSE_FILE_ARGS[@]}"
+  fi
+  if [ "$WEB_ONLY" -eq 1 ]; then exit 0; fi
+elif ! run "${BUILD_ENV[@]}" "${COMPOSE[@]}" "${COMPOSE_FILE_ARGS[@]}" up -d --build; then
   err "'$(compose_display) up -d --build' failed."
   if [ -n "$BACKUP_FILE" ]; then
     err "  Your pre-deploy backup is at ${BACKUP_FILE}"

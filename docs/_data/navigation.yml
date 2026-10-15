@@ -577,6 +577,8 @@
             - title: Deploy script arguments
               url: /self-hosting.html#deploy-script-arguments
               items:
+                - title: Frontend handovers
+                  url: /self-hosting.html#frontend-handovers
                 - title: Topology and saved settings
                   url: /self-hosting.html#topology-and-saved-settings
                 - title: Reverse proxy and host ports
