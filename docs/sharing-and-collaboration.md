@@ -115,6 +115,32 @@ after the canonical document and its saving device are ready.
 Ordinary notes outside live collaboration retain normal HTTP fallback. Comments
 continue to use their own encrypted item sync.
 
+Transient room preparation failures retry with a 2–30 second backoff while
+the page is visible. A mounted editor retains its Yjs document through socket
+outages; after five failed reconnect attempts it waits 15 seconds before another
+bounded attempt cycle. Returning to the tab or recovering the socket can resume
+that cycle sooner. Permission denials stop automatic retries until access or
+account state changes. A changed room encryption epoch requires fresh room
+preparation. None of these retries bypass the canonical-state or saving-lease
+checks. Saver election coalesces presence changes for 200 milliseconds before
+claiming its server lease and pulling the current revision.
+
+When a tab closes normally, the shared socket releases only the saving lease
+issued to that tab. The server checks the current session and the exact lease
+proof; a stale release cannot remove a successor's lease. A crashed process or
+unavailable socket still relies on the unchanged 20-second server lease expiry.
+
+After a room has been active, brief transient recovery avoids a paused warning:
+the status uses a neutral restoring indication for the first second, a subtle
+reconnecting indication after that, and a paused explanation after five seconds.
+An initial join, an exhausted recovery or a permission denial remains visible
+immediately. This presentation grace does not claim edits are saved or bypass
+the read-only protection while a valid saver is unavailable.
+
+Switching notes can proceed while collaboration is paused if the retained
+document has already been durably acknowledged, or the read-only editor never
+accepted an edit. Pending or unverified edits keep their editor mounted.
+
 The live relay rides the legacy socket derived from the configured sync server.
 An HTTP-only participant can contribute while a socket-capable saving device
 is present; it cannot become the room's saver. Only the saving device can edit
@@ -123,6 +149,12 @@ the note title, which is separate from the shared document body.
 Remote carets repaint on movement, editor changes, scrolling and resizing, and
 are clipped to the visible editor. Other tabs or devices on your own account
 appear as separate cursors.
+
+Selections include wrapped and multiline text, backward selections, selected
+blocks, and table cells. Block and table presence carries encrypted Yjs
+identities, not plaintext content or screen coordinates, and is bounded to
+128 regions. Reload older open tabs after upgrading: their strict presence
+validator cannot interpret the new block/table selection metadata.
 
 ### Shared-vault membership repair
 
@@ -202,6 +234,26 @@ If collaborators see stale content:
 6. confirm that an administrator has not disabled realtime for the user.
 
 ## Comments and mentions
+
+The Super editor's **Checklist & comments** section lets you comment on the
+whole note or an individual checklist item. Comments start in **Private** mode:
+they are stored in your personal encrypted account preferences, including when
+the note belongs to a shared vault. Choose **Collaborative** explicitly to use
+the note's signed, encrypted comment stream. Changing the note or comment target
+returns the selector to Private. Collaborative comments follow the note's access
+permissions; a private comment does not give another person access.
+
+Private comments sync with your account preferences and appear in encrypted
+account backups. They have a combined 256 KiB limit, with at most 256 notes,
+256 comments per note and 64 replies per thread. A full or unreadable preference
+produces an error instead of discarding existing comments. Concurrent edits from
+different devices use ordinary preference synchronization, rather than the live
+collaborative comment stream.
+
+The checklist section also provides pins and high, normal or low priority flags.
+Its display sorts pinned and higher-priority tasks first without rearranging the
+note. Flags remain attached to the task through saving and reopening; portable
+text and document exports include labels for pins and non-default priorities.
 
 Mention candidates are derived from shared-vault users, and display names are
 resolved by the client. A mention does not grant access. If a person is not a

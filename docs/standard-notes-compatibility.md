@@ -20,7 +20,8 @@ This audit describes what the current repository proves. It does not turn
 source-level similarity into an interoperability guarantee. The machine-readable
 audit record is `docs/_data/standard_notes_compatibility.json`, and
 `yarn docs:compatibility` fails when an audited source contract changes without
-this matrix being reviewed. Last audited: 2026-07-31.
+this matrix being reviewed. Baseline audit: 2026-07-31; subsequent scoped reviews
+are recorded below.
 
 ## Audited upstream snapshots
 
@@ -38,6 +39,17 @@ resolvers are byte-identical after line-ending normalization. The fork's
 importer, payload downgrade guard, `Folder` type, account recovery, and many
 feature routes are not identical. Exact hashes are in the audit record so a
 future change forces a fresh comparison.
+
+On 2026-10-15, a scoped review compared the `EncryptionService.ts` change in
+`1975539e` with the previously pinned local baseline `7b4921b8`. The change
+retries existing decryption lookups when synced vault keys arrive, registering
+system items keys before retrying their notes and files, and waits for pending
+retry work during teardown. It does not change encryption operators, registered
+protocol versions, backup/import formats, wire parameters, or the payload
+downgrade guard; unsuccessful payloads remain encrypted. The key-arrival retry
+tests and the `001`–`004` operator, dispatcher, and wrapper tests passed before
+updating this one fork-source hash. The upstream snapshot pins and the
+conditional interoperability boundaries in this page remain unchanged.
 
 {% include mermaid.html %}
 

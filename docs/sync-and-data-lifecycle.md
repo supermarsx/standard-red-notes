@@ -59,6 +59,22 @@ flag remotely purged it.
 Realtime is an accelerator. If WebSockets are unavailable or disabled for a
 user, manual and periodic sync still work.
 
+The browser prefers `SYNC_ITEMS` for ordinary account sync and `API_RPC` for
+eligible authenticated JSON reads and the session-activity heartbeat once the
+socket is ready. Authentication, token refresh and socket-ticket requests
+bootstrap over HTTP. Download-only sync barriers also use HTTP so a read-only
+check cannot recover or replay an older pending upload. File transfers have
+their own transport, and checks explicitly testing HTTP keep using HTTP.
+Seeing a connected socket does not mean every request uses it. A request
+refused before execution may safely fall back; an uncertain write must first
+be reconciled using its durable command identity.
+
+Failed commands that roll back before committing no longer retain an accepted
+journal entry. For entries left behind by older builds, a status read can remove
+an accepted, unclaimed entry after a 30-second grace period. The SQL predicate
+preserves in-flight claims and committed results; clients then reconcile and
+retry using the original command identity instead of dropping an uncertain write.
+
 ## Offline work
 
 Edits can remain local while the network or server is unavailable. Before
