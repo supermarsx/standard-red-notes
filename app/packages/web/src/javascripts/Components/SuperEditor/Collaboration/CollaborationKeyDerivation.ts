@@ -264,6 +264,8 @@ export type PreparedCollaborationAccess =
       available: false
       reason: string
       sourceId?: string
+      recovery?: 'terminal' | 'transient'
+      authorizationFailure?: 'epoch-mismatch'
     }
   | {
       available: true
@@ -311,21 +313,32 @@ export async function prepareCollaborationAccess(
         authorizationContext?.leaseRequestId,
         authorizationContext?.bootstrapChallenge,
         authorizationContext?.expectedRoomEpoch,
+        true,
       ),
     ])
-  } catch {
+  } catch (error: unknown) {
+    const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined
+    const terminal = code === 'COLLABORATION_NOT_AUTHORIZED' || code === 'COLLABORATION_PROTOCOL_INVALID'
     return {
       available: false,
-      reason: 'Live collaboration could not establish a secure room.',
+      reason:
+        code === 'COLLABORATION_NOT_AUTHORIZED'
+          ? 'The server did not authorize live editing for this note. Edit permission is required.'
+          : code === 'COLLABORATION_PROTOCOL_INVALID'
+            ? 'The collaboration gateway did not provide a valid encrypted room authorization.'
+            : 'Live collaboration could not establish a secure room.',
       sourceId: before.sourceId,
+      recovery: terminal ? 'terminal' : 'transient',
+      ...(code === 'COLLABORATION_EPOCH_CHANGED' ? { authorizationFailure: 'epoch-mismatch' as const } : {}),
     }
   }
 
   if (!authorization || typeof authorization !== 'object') {
     return {
       available: false,
-      reason: 'The server did not authorize live editing for this note. Edit permission is required.',
+      reason: 'Live collaboration could not establish a secure room.',
       sourceId: before.sourceId,
+      recovery: 'transient',
     }
   }
 
@@ -349,6 +362,7 @@ export async function prepareCollaborationAccess(
       available: false,
       reason: 'The collaboration gateway did not provide a valid encrypted room epoch.',
       sourceId: before.sourceId,
+      recovery: 'terminal',
     }
   }
 

@@ -707,6 +707,7 @@ export class SyncTransportWorkerRuntime {
   private readonly collaborationSavers = new Map<string, boolean>()
   /** While this is in the future, saves go straight to HTTP (see SAVE_REFUSAL_HOLD_BASE_MS). */
   private saveRefusalHeldUntil?: number
+  private refusedCommandCleanup?: { sessionScope: string; promise: Promise<void> }
   /**
    * Set once the server answers `LIVE_SYNC_DISABLED`: item sync is refused for this
    * account for the rest of the worker's life, so later commands go to HTTP without
@@ -909,6 +910,9 @@ export class SyncTransportWorkerRuntime {
     sessionScope: string,
     replayOverHttp?: SyncFallbackReason,
   ): Promise<void> {
+    if (this.refusedCommandCleanup?.sessionScope === sessionScope) {
+      await this.refusedCommandCleanup.promise
+    }
     if (this.shuttingDown || !validSessionScope(sessionScope)) {
       this.dependencies.postMessage({ type: 'RECOVERY_EMPTY', clientRequestId })
       return
@@ -1022,6 +1026,9 @@ export class SyncTransportWorkerRuntime {
     sessionScope: string,
     context?: AccountSyncTransportContext,
   ): Promise<void> {
+    if (this.refusedCommandCleanup?.sessionScope === sessionScope) {
+      await this.refusedCommandCleanup.promise
+    }
     if (this.shuttingDown || !validSessionScope(sessionScope)) {
       this.postFallback(clientRequestId, body, 'worker-error')
       return
@@ -2433,7 +2440,7 @@ export class SyncTransportWorkerRuntime {
             const clientRequestId = active.clientRequestId
             this.active = undefined
             this.reconnectAttempts = 0
-            this.dependencies.postMessage({ type: 'COLLABORATION_DENIED', clientRequestId })
+            this.dependencies.postMessage({ type: 'COLLABORATION_DENIED', clientRequestId, reason: 'epoch-mismatch' })
             return
           }
           active.phase = 'grant'
@@ -2494,7 +2501,7 @@ export class SyncTransportWorkerRuntime {
           const clientRequestId = active.clientRequestId
           this.active = undefined
           this.reconnectAttempts = 0
-          this.dependencies.postMessage({ type: 'COLLABORATION_DENIED', clientRequestId })
+          this.dependencies.postMessage({ type: 'COLLABORATION_DENIED', clientRequestId, reason: 'not-authorized' })
         } else {
           await this.fallbackCollaboration(
             frame.payload.code === 'OPERATION_UNAVAILABLE' ? 'operation-unavailable' : 'server-kill',
@@ -4050,8 +4057,21 @@ export class SyncTransportWorkerRuntime {
     if (record.socketOnly) {
       // This ERROR proves the command never executed. Drop that identity so a
       // healthy elected saver can persist the merged document with its own base.
-      void this.outbox.delete(record.sessionScope, record.commandId).catch(() => undefined)
-      this.dependencies.postMessage({ type: 'RECOVERY_REQUIRED', clientRequestId: active.clientRequestId })
+      const cleanup = {
+        sessionScope: record.sessionScope,
+        promise: this.outbox.delete(record.sessionScope, record.commandId).catch(() => undefined),
+      }
+      this.refusedCommandCleanup = cleanup
+      void cleanup.promise.then(() => {
+        if (this.refusedCommandCleanup === cleanup) {
+          this.refusedCommandCleanup = undefined
+        }
+      })
+      this.dependencies.postMessage({
+        type: 'RECOVERY_REQUIRED',
+        clientRequestId: active.clientRequestId,
+        reason: 'socket-save-refused',
+      })
       this.active = undefined
       this.outboxRecord = undefined
       this.resultDelivered = false

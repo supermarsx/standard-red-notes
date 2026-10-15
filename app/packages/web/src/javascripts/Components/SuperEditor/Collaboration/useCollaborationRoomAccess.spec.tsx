@@ -14,6 +14,7 @@ import {
   EDITOR_ACTIVATION_SAFETY_MARGIN_MS,
   prepareSynchronizedEditorAccess,
   RATE_LIMITED_RETRY_DELAY_MS,
+  ROOM_RECOVERY_INITIAL_DELAY_MS,
   useCollaborationRoomAccess,
 } from './useCollaborationRoomAccess'
 
@@ -125,6 +126,194 @@ describe('useCollaborationRoomAccess security transitions', () => {
       sessionUser,
       username: 'Alice',
     }))
+  })
+
+  it.each([false, true])(
+    'automatically recovers a transient preparation failure without reopening the socket, hidden=%s',
+    async (hidden) => {
+      jest.useFakeTimers({ doNotFake: ['queueMicrotask', 'nextTick'] })
+      const visibility = jest.spyOn(document, 'visibilityState', 'get').mockReturnValue(hidden ? 'hidden' : 'visible')
+      try {
+        const sent: CollabFrame[] = []
+        mockedCreateChannel.mockReturnValue(createAutoLeaseChannel(sent).channel)
+        const note = { uuid: 'timer-note', text: 'canonical', dirty: false, serverUpdatedAtTimestamp: 100 } as never
+        const application = {
+          items: { streamItems: () => jest.fn(), findItem: () => note },
+          sync: { sync: jest.fn().mockResolvedValue(undefined) },
+          vaultLocks: { addEventObserver: () => jest.fn() },
+          sockets: { addEventObserver: () => jest.fn(), isWebSocketConnectionOpen: () => true },
+          addEventObserver: () => jest.fn(),
+        } as never
+        mockedPrepare.mockResolvedValueOnce({
+          available: false,
+          reason: 'Temporarily unavailable',
+          recovery: 'transient',
+        })
+        const View = () => {
+          latestAccess = useCollaborationRoomAccess(application, note, true)
+          return null
+        }
+        await act(async () => {
+          root.render(createElement(View))
+          await flushMicrotasks(30)
+        })
+        expect(latestAccess).toMatchObject({ status: 'disabled' })
+        expect(latestAccess).not.toHaveProperty('retriesExhausted')
+        await act(async () => {
+          jest.advanceTimersByTime(ROOM_RECOVERY_INITIAL_DELAY_MS)
+          await flushMicrotasks(30)
+        })
+        if (hidden) {
+          expect(mockedPrepare).toHaveBeenCalledTimes(1)
+          visibility.mockReturnValue('visible')
+          await act(async () => {
+            jest.advanceTimersByTime(ROOM_RECOVERY_INITIAL_DELAY_MS)
+            await flushMicrotasks(30)
+          })
+        }
+        expect(latestAccess).toMatchObject({ status: 'ready' })
+        const prepared = mockedPrepare.mock.calls.length
+        await act(async () => {
+          jest.advanceTimersByTime(120_000)
+          await flushMicrotasks(30)
+        })
+        expect(mockedPrepare).toHaveBeenCalledTimes(prepared)
+      } finally {
+        visibility.mockRestore()
+        jest.useRealTimers()
+      }
+    },
+  )
+
+  it('keeps a typed permission denial stopped across timers and completed syncs', async () => {
+    jest.useFakeTimers({ doNotFake: ['queueMicrotask', 'nextTick'] })
+    try {
+      let applicationObserver: ((event: ApplicationEvent) => Promise<void>) | undefined
+      const note = { uuid: 'denied-note', text: 'canonical', dirty: false, serverUpdatedAtTimestamp: 100 } as never
+      const application = {
+        items: { streamItems: () => jest.fn(), findItem: () => note },
+        sync: { sync: jest.fn().mockResolvedValue(undefined) },
+        vaultLocks: { addEventObserver: () => jest.fn() },
+        sockets: { addEventObserver: () => jest.fn(), isWebSocketConnectionOpen: () => true },
+        addEventObserver: (observer: (event: ApplicationEvent) => Promise<void>) => {
+          applicationObserver = observer
+          return jest.fn()
+        },
+      } as never
+      const success = mockedPrepare.getMockImplementation()!
+      mockedPrepare.mockResolvedValue({ available: false, reason: 'Permission denied', recovery: 'terminal' })
+      const View = () => {
+        latestAccess = useCollaborationRoomAccess(application, note, true)
+        return null
+      }
+      await act(async () => {
+        root.render(createElement(View))
+        await flushMicrotasks(30)
+      })
+      expect(latestAccess).toMatchObject({ status: 'disabled', retriesExhausted: true })
+      await act(async () => {
+        jest.advanceTimersByTime(120_000)
+        await applicationObserver?.(ApplicationEvent.CompletedFullSync)
+        window.dispatchEvent(new Event('focus'))
+        await flushMicrotasks(30)
+      })
+      expect(mockedPrepare).toHaveBeenCalledTimes(1)
+      mockedPrepare.mockImplementation(success)
+      mockedCreateChannel.mockReturnValue(createAutoLeaseChannel([]).channel)
+      await act(async () => {
+        await applicationObserver?.(ApplicationEvent.UserRolesChanged)
+        await flushMicrotasks(30)
+      })
+      expect(latestAccess).toMatchObject({ status: 'ready' })
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  it('backs persistent transient failures off to one bounded retry per thirty seconds', async () => {
+    jest.useFakeTimers({ doNotFake: ['queueMicrotask', 'nextTick'] })
+    const visibility = jest.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+    try {
+      const note = { uuid: 'backoff-note', text: 'canonical', dirty: false, serverUpdatedAtTimestamp: 100 } as never
+      const application = {
+        items: { streamItems: () => jest.fn(), findItem: () => note },
+        sync: { sync: jest.fn().mockResolvedValue(undefined) },
+        vaultLocks: { addEventObserver: () => jest.fn() },
+        sockets: { addEventObserver: () => jest.fn(), isWebSocketConnectionOpen: () => true },
+        addEventObserver: () => jest.fn(),
+      } as never
+      mockedPrepare.mockResolvedValue({ available: false, reason: 'Temporary relay failure', recovery: 'transient' })
+      const View = () => {
+        latestAccess = useCollaborationRoomAccess(application, note, true)
+        return null
+      }
+      await act(async () => {
+        root.render(createElement(View))
+        await flushMicrotasks(30)
+      })
+      let expected = 1
+      for (const delay of [2_000, 4_000, 8_000, 16_000, 30_000, 30_000]) {
+        await act(async () => {
+          jest.advanceTimersByTime(delay - 1)
+          await flushMicrotasks(30)
+        })
+        expect(mockedPrepare).toHaveBeenCalledTimes(expected)
+        await act(async () => {
+          jest.advanceTimersByTime(1)
+          await flushMicrotasks(30)
+        })
+        expect(mockedPrepare).toHaveBeenCalledTimes(++expected)
+      }
+      expect(latestAccess).not.toHaveProperty('retriesExhausted')
+    } finally {
+      visibility.mockRestore()
+      jest.useRealTimers()
+    }
+  })
+
+  it('cancels the old note retry when switching identity or unmounting', async () => {
+    jest.useFakeTimers({ doNotFake: ['queueMicrotask', 'nextTick'] })
+    const visibility = jest.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+    try {
+      let note = { uuid: 'old-note', text: 'canonical', dirty: false, serverUpdatedAtTimestamp: 100 }
+      mockedCreateChannel.mockReturnValue(createAutoLeaseChannel([]).channel)
+      const application = {
+        items: { streamItems: () => jest.fn(), findItem: () => note },
+        sync: { sync: jest.fn().mockResolvedValue(undefined) },
+        vaultLocks: { addEventObserver: () => jest.fn() },
+        sockets: { addEventObserver: () => jest.fn(), isWebSocketConnectionOpen: () => true },
+        addEventObserver: () => jest.fn(),
+      } as never
+      mockedPrepare.mockResolvedValueOnce({
+        available: false,
+        reason: 'Temporary relay failure',
+        recovery: 'transient',
+      })
+      const View = () => {
+        latestAccess = useCollaborationRoomAccess(application, note as never, true)
+        return null
+      }
+      await act(async () => {
+        root.render(createElement(View))
+        await flushMicrotasks(30)
+      })
+      note = { ...note, uuid: 'new-note' }
+      await act(async () => {
+        root.render(createElement(View))
+        await flushMicrotasks(30)
+      })
+      expect(latestAccess).toMatchObject({ status: 'ready', noteUuid: 'new-note' })
+      const prepared = mockedPrepare.mock.calls.length
+      await act(async () => {
+        root.render(null)
+        jest.advanceTimersByTime(120_000)
+        await flushMicrotasks(30)
+      })
+      expect(mockedPrepare).toHaveBeenCalledTimes(prepared)
+    } finally {
+      visibility.mockRestore()
+      jest.useRealTimers()
+    }
   })
 
   it('defers distributed reservation so StrictMode abandons its first setup before bootstrap election', async () => {
@@ -1014,7 +1203,7 @@ describe('useCollaborationRoomAccess security transitions', () => {
         root.render(createElement(View))
         await flushMicrotasks(30)
       })
-      for (let step = 0; step < 5; step += 1) {
+      for (let step = 0; step < 3; step += 1) {
         await act(async () => {
           jest.advanceTimersByTime(activationTtlMs + 5_000)
           await flushMicrotasks(30)
@@ -1026,7 +1215,8 @@ describe('useCollaborationRoomAccess security transitions', () => {
       expect(sent.filter((frame) => frame.t === 'room-leave')).toHaveLength(3)
       expect(latestAccess).toMatchObject({
         status: 'disabled',
-        reason: 'Live collaboration could not establish a stable current revision. Sync and retry.',
+        reason:
+          'Live collaboration could not establish a stable current revision. Sync and retry. Live collaboration will retry automatically.',
       })
     } finally {
       jest.useRealTimers()
@@ -1338,7 +1528,7 @@ describe('useCollaborationRoomAccess security transitions', () => {
 
     expect(latestAccess).toEqual({
       status: 'disabled',
-      reason: 'Live collaboration could not establish a secure room.',
+      reason: 'Live collaboration could not establish a secure room. Live collaboration will retry automatically.',
     })
   })
 
@@ -2081,7 +2271,9 @@ describe('useCollaborationRoomAccess security transitions', () => {
       return access?.status === 'disabled' ? access.reason : undefined
     }
 
-    expect(await run({ reason: 'room-full' })).toBe('This note already has the maximum number of live collaborators.')
+    expect(await run({ reason: 'room-full' })).toBe(
+      'This note already has the maximum number of live collaborators. Live collaboration will retry.',
+    )
     expect(await run({ reason: 'relay-unhealthy' })).toBe(
       'The collaboration gateway relay is unavailable right now. Live collaboration will retry.',
     )
@@ -2094,6 +2286,7 @@ describe('useCollaborationRoomAccess security transitions', () => {
   it('waits out the gateway control window after a rate-limited denial instead of spending the sync retry budget', async () => {
     // The hook defers its first preparation through queueMicrotask; keep that real.
     jest.useFakeTimers({ doNotFake: ['queueMicrotask', 'nextTick'] })
+    const visibility = jest.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
     try {
       const sent: CollabFrame[] = []
       let applicationObserver: ((event: ApplicationEvent) => Promise<void>) | undefined
@@ -2149,6 +2342,13 @@ describe('useCollaborationRoomAccess security transitions', () => {
       }
       expect(reservesOf(sent)).toHaveLength(1)
 
+      visibility.mockReturnValue('hidden')
+      await act(async () => {
+        jest.advanceTimersByTime(RATE_LIMITED_RETRY_DELAY_MS)
+        await flushMicrotasks(30)
+      })
+      expect(reservesOf(sent)).toHaveLength(1)
+      visibility.mockReturnValue('visible')
       rateLimited = false
       await act(async () => {
         jest.advanceTimersByTime(RATE_LIMITED_RETRY_DELAY_MS)
@@ -2157,6 +2357,7 @@ describe('useCollaborationRoomAccess security transitions', () => {
       expect(reservesOf(sent)).toHaveLength(2)
       expect(latestAccess).toMatchObject({ status: 'ready' })
     } finally {
+      visibility.mockRestore()
       jest.useRealTimers()
     }
   })
@@ -2217,7 +2418,8 @@ describe('useCollaborationRoomAccess security transitions', () => {
       await completeSync()
       await completeSync()
       expect(mockedPrepare).toHaveBeenCalledTimes(12)
-      expect(latestAccess).toMatchObject({ status: 'disabled', retriesExhausted: true })
+      expect(latestAccess).toMatchObject({ status: 'disabled' })
+      expect(latestAccess).not.toHaveProperty('retriesExhausted')
 
       // Budget spent: a sync that changed nothing does not retry.
       await completeSync()
@@ -2238,7 +2440,8 @@ describe('useCollaborationRoomAccess security transitions', () => {
       await completeSync()
       await completeSync()
       expect(mockedPrepare).toHaveBeenCalledTimes(24)
-      expect(latestAccess).toMatchObject({ status: 'disabled', retriesExhausted: true })
+      expect(latestAccess).toMatchObject({ status: 'disabled' })
+      expect(latestAccess).not.toHaveProperty('retriesExhausted')
 
       live = { ...stale, serverUpdatedAtTimestamp: 101 }
       await completeSync()

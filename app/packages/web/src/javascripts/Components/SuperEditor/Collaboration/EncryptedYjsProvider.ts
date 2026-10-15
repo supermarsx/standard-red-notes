@@ -21,10 +21,11 @@ import {
 } from './CollabChannel'
 import { EphemeralRoomPresence, type CollaborationPresenceActivity } from './EphemeralRoomPresence'
 import { isCollaborationCipherError, type RoomCipher } from './RoomCrypto'
-import type { ActiveEditorCollaborationLease } from './useCollaborationRoomAccess'
+import type { ActiveEditorCollaborationLease, RoomDenial } from './useCollaborationRoomAccess'
 
 type Listener = (...args: never[]) => void
 const MAX_JOIN_RETRIES = 5
+const JOIN_RECOVERY_COOLDOWN_MS = 15_000
 export const YJS_CHUNK_PLAINTEXT_BYTES = 128 * 1024
 export const MAX_YJS_TRANSFER_BYTES = COLLABORATION_MAX_TRANSFER_BYTES
 export const MAX_YJS_TRANSFER_CHUNKS = MAX_YJS_TRANSFER_BYTES / YJS_CHUNK_PLAINTEXT_BYTES
@@ -130,7 +131,10 @@ export type EncryptedYjsProviderOptions = {
   /** Synchronous final canonical-revision guard before any relay subscription or send. */
   validateAttachment(): boolean
   /** Full freshness-barrier + reserve/activate flow used on socket reconnect. */
-  reactivate(): Promise<ActiveEditorCollaborationLease | { reason: string; requiresRemount?: true }>
+  reactivate(): Promise<
+    | ActiveEditorCollaborationLease
+    | { reason: string; requiresRemount?: true; denial?: RoomDenial; recovery?: 'terminal' | 'transient' }
+  >
   /** Epoch used to construct the immutable cipher; defaults to the initial lease epoch. */
   expectedRoomEpoch?: string
   /** Fatal transport limits fall back to the ordinary encrypted editor path. */
@@ -173,6 +177,8 @@ export class EncryptedYjsProvider implements Provider {
   private joining = false
   private joinRetryAttempts = 0
   private joinRetryTimeout: ReturnType<typeof setTimeout> | undefined
+  private joinRecoveryCoolingDown = false
+  private recoveryStopped = false
   // In-flight encrypt/send/decrypt work. Entries REMOVE THEMSELVES on settle so
   // this never grows unbounded over a long editing session (awareness fires on
   // every cursor move); flush() still works for tests by awaiting the live set.
@@ -459,7 +465,7 @@ export class EncryptedYjsProvider implements Provider {
   // --- lifecycle ---------------------------------------------------------
 
   connect(): void {
-    if (this.connected || this.terminallyDestroyed) {
+    if (this.connected || this.terminallyDestroyed || this.recoveryStopped) {
       return
     }
     if (!this.initialDocumentWithinBudget) {
@@ -555,7 +561,7 @@ export class EncryptedYjsProvider implements Provider {
   }
 
   private async attachActiveLease(lease: ActiveEditorCollaborationLease): Promise<void> {
-    if (!this.connected || !this.channel.isConnected()) {
+    if (this.recoveryStopped || !this.connected || !this.channel.isConnected()) {
       lease.release()
       return
     }
@@ -674,9 +680,24 @@ export class EncryptedYjsProvider implements Provider {
     this.reactivatingGeneration = generation
     try {
       const lease = await this.options.reactivate()
+      if (
+        this.recoveryStopped ||
+        generation !== this.transportGeneration ||
+        !this.connected ||
+        !this.channel.isConnected()
+      ) {
+        if (!('reason' in lease)) {
+          lease.release()
+        }
+        return
+      }
       if ('reason' in lease) {
         this.recordLeaseFailure(lease.reason)
-        if (lease.requiresRemount) {
+        if (lease.recovery === 'terminal' || this.isTerminalDenial(lease.denial?.reason)) {
+          this.fatal(
+            'Live collaboration stopped because the server denied edit permission. Check access before retrying.',
+          )
+        } else if (lease.requiresRemount) {
           this.options.onBootstrapRetry?.()
         } else if (this.connected && this.channel.isConnected()) {
           this.scheduleJoinRetry()
@@ -693,6 +714,9 @@ export class EncryptedYjsProvider implements Provider {
       }
       await this.attachActiveLease(lease)
     } catch {
+      if (generation !== this.transportGeneration || !this.connected) {
+        return
+      }
       this.recordLeaseFailure('lease-reactivation-threw')
       if (this.connected && this.channel.isConnected()) {
         this.scheduleJoinRetry()
@@ -744,6 +768,11 @@ export class EncryptedYjsProvider implements Provider {
   private readonly onVisibilityChange = (): void => {
     if (this.visibilityListenerTarget?.visibilityState !== 'visible') {
       return
+    }
+    if (this.joinRecoveryCoolingDown && this.connected && this.channel.isConnected() && !this.recoveryStopped) {
+      this.clearJoinRetry()
+      this.joinRetryAttempts = 0
+      this.track(this.reactivateAfterReconnect())
     }
     if (!this.connected || !this.joined || !this.currentLease || !this.expectedRoomEpoch) {
       return
@@ -976,6 +1005,9 @@ export class EncryptedYjsProvider implements Provider {
     this.transportGeneration += 1
     const generation = this.transportGeneration
     if (connected) {
+      if (this.recoveryStopped) {
+        return
+      }
       this.clearJoinRetry()
       this.joinRetryAttempts = 0
       if (this.options) {
@@ -1898,7 +1930,7 @@ export class EncryptedYjsProvider implements Provider {
   }
 
   private readonly onFrame = (frame: CollabFrame): void => {
-    if (frame.room !== this.room) {
+    if (this.recoveryStopped || frame.room !== this.room) {
       return
     }
     if (this.options && this.joined && !this.validateLiveAttachment()) {
@@ -1949,6 +1981,12 @@ export class EncryptedYjsProvider implements Provider {
           this.ephemeralPresence?.clear()
           this.clearRemoteAwareness('room-denied')
           this.emit('sync', false as never)
+          if (this.isTerminalDenial(deniedReason)) {
+            this.fatal(
+              'Live collaboration stopped because the server denied edit permission. Check access before retrying.',
+            )
+            break
+          }
           if (shouldReauthorize && this.connected) {
             if (this.options) {
               const expiredLease = this.currentLease
@@ -3029,6 +3067,10 @@ export class EncryptedYjsProvider implements Provider {
   }
 
   private fatal(reason: string): void {
+    this.recoveryStopped = true
+    this.transportGeneration += 1
+    this.reactivatingGeneration = undefined
+    this.clearJoinRetry()
     this.lastSyncFailure = 'encrypted-yjs-fatal'
     this.setJoined(false)
     this.setStateServingReady(false)
@@ -3077,22 +3119,34 @@ export class EncryptedYjsProvider implements Provider {
     return this.lastLeaseFailure
   }
 
+  private isTerminalDenial(reason: RoomDenial['reason'] | undefined): boolean {
+    return reason === 'policy' || reason === 'security-revoked' || reason === 'capability-invalid'
+  }
+
   private scheduleJoinRetry(): void {
-    if (this.joinRetryTimeout !== undefined || !this.connected || !this.channel.isConnected()) {
+    if (this.recoveryStopped || this.joinRetryTimeout !== undefined || !this.connected || !this.channel.isConnected()) {
       return
     }
     if (this.joinRetryAttempts >= MAX_JOIN_RETRIES) {
-      // Never leave a mounted editor permanently waiting on an open socket.
-      // Production remounts through the bootstrap preparation barrier; direct
-      // consumers receive an explicit fatal fallback. Name the cause the ladder
-      // died on: five identical retries with no stated reason is undiagnosable.
+      // Pause between bounded production retry cycles without discarding the
+      // document. Direct consumers have no reserve/activate recovery contract.
       console.error(
         `[collab] encrypted-yjs-join-retries-exhausted attempts=${MAX_JOIN_RETRIES} reason=${
           this.lastLeaseFailure ?? 'unknown'
         }`,
       )
       if (this.options) {
-        this.requestBootstrapFailover()
+        // Keep the established document mounted. A transient outage must not
+        // discard retained CRDT work or permanently spend this retry budget.
+        this.joinRecoveryCoolingDown = true
+        this.joinRetryTimeout = setTimeout(() => {
+          this.joinRetryTimeout = undefined
+          this.joinRecoveryCoolingDown = false
+          this.joinRetryAttempts = 0
+          if (this.connected && this.channel.isConnected() && !this.recoveryStopped) {
+            this.track(this.reactivateAfterReconnect())
+          }
+        }, JOIN_RECOVERY_COOLDOWN_MS)
       } else {
         this.fatal('Live collaboration stopped after bounded authorization retries failed.')
       }
@@ -3112,6 +3166,7 @@ export class EncryptedYjsProvider implements Provider {
   }
 
   private clearJoinRetry(): void {
+    this.joinRecoveryCoolingDown = false
     if (this.joinRetryTimeout !== undefined) {
       clearTimeout(this.joinRetryTimeout)
       this.joinRetryTimeout = undefined

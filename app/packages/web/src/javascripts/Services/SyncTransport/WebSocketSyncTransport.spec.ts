@@ -1594,6 +1594,28 @@ describe('WebSocketSyncTransport', () => {
       { type: 'AUTHORIZE_COLLABORATION' }
     >
 
+  it.each([
+    ['epoch-mismatch', 'COLLABORATION_EPOCH_CHANGED'],
+    ['not-authorized', 'COLLABORATION_NOT_AUTHORIZED'],
+  ] as const)('preserves typed collaboration denial %s for scoped recovery', async (reason, code) => {
+    const transport = createTransport()
+    const pending = transport.authorizeCollaborationRoom('note-1', 'lease-1', 'challenge-1')
+    const rejected = expect(pending).rejects.toMatchObject({ code, safeToFallback: false })
+    await flush()
+    worker.emit({ type: 'COLLABORATION_DENIED', clientRequestId: collaborationPost().clientRequestId, reason })
+    await rejected
+    transport.deinit()
+  })
+
+  it('keeps legacy untyped collaboration denials compatible with a null result', async () => {
+    const transport = createTransport()
+    const pending = transport.authorizeCollaborationRoom('note-1', 'lease-1', 'challenge-1')
+    await flush()
+    worker.emit({ type: 'COLLABORATION_DENIED', clientRequestId: collaborationPost().clientRequestId })
+    expect(await pending).toBeNull()
+    transport.deinit()
+  })
+
   it('forwards an expectedRoomEpoch pin from the four-argument call into the worker request', async () => {
     const transport = createTransport()
     const roomEpoch = 'c'.repeat(64)

@@ -1597,28 +1597,43 @@ describe('EncryptedYjsProvider convergence', () => {
     consoleError.mockRestore()
   })
 
-  it('leaves the mounted editor through bootstrap failover after bounded reconnect lease retries', async () => {
+  it('retains its document across repeated bounded reconnect cycles and resumes on visibility', async () => {
     jest.useFakeTimers()
+    const visibility = installFakeVisibilityDocument()
     const random = jest.spyOn(Math, 'random').mockReturnValue(1)
     const release = jest.fn()
     const onBootstrapRetry = jest.fn()
+    let receive: ((frame: CollabFrame) => void) | undefined
     let status: ((connected: boolean) => void) | undefined
     let connected = true
     const channel: CollabChannel = {
       isConnected: () => connected,
       authorize: jest.fn(),
-      subscribe: () => jest.fn(),
+      subscribe: (handler) => {
+        receive = handler
+        return jest.fn()
+      },
       subscribeStatus: (handler) => {
         status = handler
         return () => {
           status = undefined
         }
       },
-      send: jest.fn(),
+      send: (frame) => {
+        if (frame.t === 'yjs' && frame.transferId) {
+          receive?.({
+            t: 'yjs-accepted',
+            room: 'bounded-reconnect-room',
+            transferId: frame.transferId,
+            protocolVersion: 3,
+          })
+        }
+      },
     }
     const reactivate = jest.fn().mockResolvedValue({ reason: 'temporary lease failure' })
+    const doc = new Y.Doc()
     const provider = new EncryptedYjsProvider(
-      new Y.Doc(),
+      doc,
       'bounded-reconnect-room',
       channel,
       createTestTransportCipher(),
@@ -1646,6 +1661,7 @@ describe('EncryptedYjsProvider convergence', () => {
       await Promise.resolve()
       connected = false
       status?.(false)
+      doc.getText('draft').insert(0, 'retained edits')
       connected = true
       status?.(true)
       await Promise.resolve()
@@ -1654,15 +1670,206 @@ describe('EncryptedYjsProvider convergence', () => {
       await provider.flush()
 
       expect(reactivate).toHaveBeenCalledTimes(6)
-      expect(onBootstrapRetry).toHaveBeenCalledTimes(1)
+      expect(onBootstrapRetry).not.toHaveBeenCalled()
       expect(release).toHaveBeenCalledTimes(1)
       expect(provider.isRoomJoined()).toBe(false)
+      expect(doc.getText('draft').toString()).toBe('retained edits')
+      await jest.advanceTimersByTimeAsync(14_999)
+      expect(reactivate).toHaveBeenCalledTimes(6)
+      await jest.advanceTimersByTimeAsync(1)
+      expect(reactivate).toHaveBeenCalledTimes(7)
+      await jest.advanceTimersByTimeAsync(31_000)
+      expect(reactivate).toHaveBeenCalledTimes(12)
+      expect(onBootstrapRetry).not.toHaveBeenCalled()
+      visibility.document.dispatchVisibilityChange()
+      await Promise.resolve()
+      expect(reactivate).toHaveBeenCalledTimes(13)
+      expect(doc.getText('draft').toString()).toBe('retained edits')
+      reactivate.mockResolvedValue({
+        requestId: 'recovered-lease',
+        shouldBootstrap: true,
+        protocolVersion: 3,
+        maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+        roomEpoch: TEST_ROOM_EPOCH,
+        release: jest.fn(),
+      })
+      await jest.advanceTimersByTimeAsync(1_000)
+      await provider.flush()
+      expect(reactivate).toHaveBeenCalledTimes(14)
+      expect(provider.doc).toBe(doc)
+      expect(provider.isRoomJoined()).toBe(true)
+      expect(provider.isCanonicalReady()).toBe(true)
+      expect(provider.getActiveEditorLeaseIdentity()?.leaseId).toBe('recovered-lease')
+      provider.destroy()
+      await jest.advanceTimersByTimeAsync(120_000)
+      expect(reactivate).toHaveBeenCalledTimes(14)
     } finally {
       provider.destroy()
       random.mockRestore()
+      visibility.restore()
       jest.useRealTimers()
     }
   })
+
+  it.each(['policy', 'security-revoked', 'capability-invalid', 'typed-api-denial'] as const)(
+    'does not rejoin a typed %s denial on cooldown, visibility or socket readiness',
+    async (reason) => {
+      jest.useFakeTimers()
+      const visibility = installFakeVisibilityDocument()
+      const error = jest.spyOn(console, 'error').mockImplementation(() => undefined)
+      let status: ((connected: boolean) => void) | undefined
+      let inbound: ((frame: CollabFrame) => void) | undefined
+      const reactivate = jest
+        .fn()
+        .mockResolvedValue(
+          reason === 'typed-api-denial'
+            ? { reason: 'Denied', recovery: 'terminal' }
+            : { reason: 'Denied', denial: { reason } },
+        )
+      const onFatal = jest.fn()
+      const onBootstrapRetry = jest.fn()
+      const doc = new Y.Doc()
+      const provider = new EncryptedYjsProvider(
+        doc,
+        'terminal-room',
+        {
+          isConnected: () => true,
+          authorize: jest.fn(),
+          subscribe: (listener) => {
+            inbound = listener
+            return jest.fn()
+          },
+          subscribeStatus: (listener) => {
+            status = listener
+            return jest.fn()
+          },
+          send: jest.fn(),
+        },
+        createTestTransportCipher(),
+        undefined,
+        'terminal-lease',
+        {
+          activeLease: {
+            requestId: 'terminal-lease',
+            shouldBootstrap: true,
+            protocolVersion: 3,
+            maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+            roomEpoch: TEST_ROOM_EPOCH,
+            release: jest.fn(),
+          },
+          shouldBootstrap: true,
+          validateAttachment: () => true,
+          reactivate,
+          onFatal,
+          onBootstrapRetry,
+        },
+      )
+      try {
+        provider.connect()
+        await provider.flush()
+        status?.(false)
+        doc.getText('draft').insert(0, 'unsaved retained data')
+        status?.(true)
+        await provider.flush()
+        expect(onFatal).toHaveBeenCalledTimes(1)
+        expect(provider.isRoomJoined()).toBe(false)
+        expect(provider.getActiveEditorLeaseIdentity()).toBeUndefined()
+        status?.(false)
+        status?.(true)
+        visibility.document.dispatchVisibilityChange()
+        await jest.advanceTimersByTimeAsync(300_000)
+        expect(reactivate).toHaveBeenCalledTimes(1)
+        expect(onBootstrapRetry).not.toHaveBeenCalled()
+        expect(doc.getText('draft').toString()).toBe('unsaved retained data')
+        // A denied, unjoined provider cannot regain authority from late frames.
+        inbound?.({
+          t: 'room-denied',
+          room: 'terminal-room',
+          requestId: 'terminal-lease',
+          reason: reason === 'typed-api-denial' ? 'policy' : reason,
+        })
+        expect(provider.isRoomJoined()).toBe(false)
+      } finally {
+        provider.destroy()
+        visibility.restore()
+        error.mockRestore()
+        jest.useRealTimers()
+      }
+    },
+  )
+
+  it.each(['failure', 'throw'] as const)(
+    'ignores a stale reactivation %s after a newer lease attaches',
+    async (kind) => {
+      const error = jest.spyOn(console, 'error').mockImplementation(() => undefined)
+      let status: ((connected: boolean) => void) | undefined
+      let resolveOld!: (value: { reason: string; requiresRemount: true }) => void
+      let rejectOld!: (error: Error) => void
+      const old = new Promise<{ reason: string; requiresRemount: true }>((resolve, reject) => {
+        resolveOld = resolve
+        rejectOld = reject
+      })
+      const lease = {
+        requestId: 'fresh-lease',
+        shouldBootstrap: true,
+        protocolVersion: 3 as const,
+        maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+        roomEpoch: TEST_ROOM_EPOCH,
+        release: jest.fn(),
+      }
+      const reactivate = jest.fn().mockReturnValueOnce(old).mockResolvedValue(lease)
+      const onBootstrapRetry = jest.fn()
+      const onFatal = jest.fn()
+      const provider = new EncryptedYjsProvider(
+        new Y.Doc(),
+        'stale-failure-room',
+        {
+          isConnected: () => true,
+          authorize: jest.fn(),
+          subscribe: () => jest.fn(),
+          subscribeStatus: (listener) => {
+            status = listener
+            return jest.fn()
+          },
+          send: jest.fn(),
+        },
+        createTestTransportCipher(),
+        undefined,
+        'first-lease',
+        {
+          activeLease: { ...lease, requestId: 'first-lease' },
+          shouldBootstrap: true,
+          validateAttachment: () => true,
+          reactivate,
+          onBootstrapRetry,
+          onFatal,
+        },
+      )
+      try {
+        provider.connect()
+        await provider.flush()
+        status?.(false)
+        status?.(true)
+        await Promise.resolve()
+        status?.(false)
+        status?.(true)
+        await flushMicrotasksUntil(() => provider.getActiveEditorLeaseIdentity()?.leaseId === 'fresh-lease')
+        if (kind === 'failure') {
+          resolveOld({ reason: 'stale epoch failure', requiresRemount: true })
+        } else {
+          rejectOld(new Error('stale error'))
+        }
+        await provider.flush()
+        expect(onBootstrapRetry).not.toHaveBeenCalled()
+        expect(onFatal).not.toHaveBeenCalled()
+        expect(provider.getLastLeaseFailure()).toBeUndefined()
+        expect(provider.getActiveEditorLeaseIdentity()?.leaseId).toBe('fresh-lease')
+      } finally {
+        provider.destroy()
+        error.mockRestore()
+      }
+    },
+  )
 
   it('names the cause a spent reconnect ladder died on and never mints its own capability', async () => {
     jest.useFakeTimers()
@@ -1746,7 +1953,7 @@ describe('EncryptedYjsProvider convergence', () => {
       // Precondition: the ladder really re-examined a socket it believed open at
       // each retry, so these are live attempts and not a drained timer queue.
       expect(connectedChecks).toBeGreaterThan(checksAfterReconnect)
-      expect(onBootstrapRetry).toHaveBeenCalledTimes(1)
+      expect(onBootstrapRetry).not.toHaveBeenCalled()
       expect(onFatal).not.toHaveBeenCalled()
       // The production ladder must never mint a capability itself nor replay a
       // room-join: the hook owns the reserve/activate handshake.
@@ -1824,7 +2031,7 @@ describe('EncryptedYjsProvider convergence', () => {
       await provider.flush()
 
       expect(reactivate).toHaveBeenCalledTimes(6)
-      expect(onBootstrapRetry).toHaveBeenCalledTimes(1)
+      expect(onBootstrapRetry).not.toHaveBeenCalled()
       // A throw is a lease failure like any other, and it says so rather than
       // leaking the thrown value.
       expect(provider.getLastLeaseFailure()).toBe('lease-reactivation-threw')
@@ -2345,7 +2552,12 @@ describe('EncryptedYjsProvider convergence', () => {
     inbound?.({ t: 'room-joined', room: 'expiring-room', requestId: firstJoin.requestId })
     await provider.flush()
 
-    inbound?.({ t: 'room-denied', room: 'expiring-room', requestId: firstJoin.requestId })
+    inbound?.({
+      t: 'room-denied',
+      room: 'expiring-room',
+      requestId: firstJoin.requestId,
+      reason: 'reservation-expired',
+    })
     await Promise.resolve()
     await Promise.resolve()
     const joins = sent.filter((frame): frame is Extract<CollabFrame, { t: 'room-join' }> => frame.t === 'room-join')

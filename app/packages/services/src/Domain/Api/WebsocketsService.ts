@@ -188,6 +188,23 @@ export type CollaborationRoomAuthorization = {
   bootstrapChallenge?: string
 }
 
+class CollaborationAuthorizationError extends Error {
+  constructor(readonly code: 'COLLABORATION_NOT_AUTHORIZED' | 'COLLABORATION_PROTOCOL_INVALID') {
+    super('Collaboration authorization failed')
+  }
+}
+
+function isTypedCollaborationAuthorizationError(error: unknown): boolean {
+  return (
+    !!error &&
+    typeof error === 'object' &&
+    'code' in error &&
+    ['COLLABORATION_NOT_AUTHORIZED', 'COLLABORATION_PROTOCOL_INVALID', 'COLLABORATION_EPOCH_CHANGED'].includes(
+      String(error.code),
+    )
+  )
+}
+
 export type CollaborationRoomEpochDiscovery = {
   room: string
   serverUpdatedAtTimestamp: number
@@ -767,6 +784,7 @@ export class WebSocketsService extends AbstractService<
     leaseRequestId?: string,
     bootstrapChallenge?: string,
     expectedRoomEpoch?: string,
+    reportTypedFailure = false,
   ): Promise<CollaborationRoomAuthorization | undefined> {
     if (expectedRoomEpoch !== undefined && !isValidCollaborationEpoch(expectedRoomEpoch)) {
       return undefined
@@ -776,6 +794,7 @@ export class WebSocketsService extends AbstractService<
       leaseRequestId ?? null,
       bootstrapChallenge ?? null,
       expectedRoomEpoch ?? null,
+      reportTypedFailure,
     ])
     const cached = this.collaborationAuthorizationCache.get(key)
     if (cached && cached.expiresAt > Date.now() + 5_000) {
@@ -803,7 +822,12 @@ export class WebSocketsService extends AbstractService<
         })
         return result.authorization
       })
-      .catch(() => undefined)
+      .catch((error: unknown) => {
+        if (reportTypedFailure && isTypedCollaborationAuthorizationError(error)) {
+          throw error
+        }
+        return undefined
+      })
       .finally(() => this.collaborationAuthorizationRequests.delete(key))
     this.collaborationAuthorizationRequests.set(key, request)
     return request
@@ -842,11 +866,14 @@ export class WebSocketsService extends AbstractService<
     if (!isValidCollaborationEpoch(exactRoomEpoch)) {
       const discoveryResponse = await this.webSocketApiService.discoverCollaborationRoomEpoch(noteUuid)
       if (isErrorResponse(discoveryResponse)) {
+        if (discoveryResponse.status === 403) {
+          throw new CollaborationAuthorizationError('COLLABORATION_NOT_AUTHORIZED')
+        }
         return undefined
       }
       const discovery = normalizeCollaborationEpochDiscovery(discoveryResponse.data, noteUuid)
       if (!discovery) {
-        return undefined
+        throw new CollaborationAuthorizationError('COLLABORATION_PROTOCOL_INVALID')
       }
       exactRoomEpoch = discovery.roomEpoch
     }
@@ -857,9 +884,23 @@ export class WebSocketsService extends AbstractService<
       bootstrapChallenge,
       exactRoomEpoch,
     )
-    return isErrorResponse(response)
-      ? undefined
-      : normalizeCollaborationAuthorization(response.data, noteUuid, leaseRequestId, bootstrapChallenge, exactRoomEpoch)
+    if (isErrorResponse(response)) {
+      if (response.status === 403) {
+        throw new CollaborationAuthorizationError('COLLABORATION_NOT_AUTHORIZED')
+      }
+      return undefined
+    }
+    const authorization = normalizeCollaborationAuthorization(
+      response.data,
+      noteUuid,
+      leaseRequestId,
+      bootstrapChallenge,
+      exactRoomEpoch,
+    )
+    if (!authorization) {
+      throw new CollaborationAuthorizationError('COLLABORATION_PROTOCOL_INVALID')
+    }
+    return authorization
   }
 
   async discoverCollaborationRoomEpoch(noteUuid: string): Promise<CollaborationRoomEpochDiscovery | undefined> {

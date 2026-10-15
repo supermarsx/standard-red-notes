@@ -590,6 +590,36 @@ describe('SyncTransportWorkerRuntime', () => {
     )
   }
 
+  it('distinguishes a changed room epoch from a permission denial without closing the healthy socket', async () => {
+    const harness = setup()
+    const { socket, discovery } = await startCollaborationHandshake(harness)
+    socket.receive({
+      ...serverFrame('COLLABORATION_AUTHORIZED', discovery.commandId, {
+        epochDiscovery: true,
+        room: 'note-1',
+        serverUpdatedAtTimestamp: 123,
+        collaborationProtocolVersion: 3,
+        roomEpoch: 'room_epoch_00000002',
+        collaborationSecurityEpoch: SECURITY_EPOCH,
+        epochDiscoveryChallenge: 'challenge_abcdefghijklmnopqrstuvwxyz0123456789',
+        epochDiscoveryRequestId: discovery.requestId,
+        challengeExpiresAt: Date.now() + 10_000,
+      }),
+      requestId: discovery.requestId,
+    })
+    await flush()
+    expect(harness.messages).toContainEqual({
+      type: 'COLLABORATION_DENIED',
+      clientRequestId: 'collaboration-client-1',
+      reason: 'epoch-mismatch',
+    })
+    expect(socket.readyState).toBe(1)
+    expect(
+      socket.sent.map((entry) => JSON.parse(entry)).filter((frame) => frame.type === 'COLLABORATION_AUTHORIZE'),
+    ).toHaveLength(1)
+    expect(harness.outbox.records.size).toBe(0)
+  })
+
   it('keeps epoch discovery internal and performs exactly one challenged grant retry on the same socket', async () => {
     const harness = setup()
     const { socket, discovery } = await startCollaborationHandshake(harness)
@@ -4891,7 +4921,11 @@ describe('SyncTransportWorkerRuntime', () => {
       await flush()
       expect(httpFallbacks(harness)).toEqual([])
       expect(harness.outbox.records.has(command.commandId)).toBe(false)
-      expect(harness.messages).toContainEqual({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' })
+      expect(harness.messages).toContainEqual({
+        type: 'RECOVERY_REQUIRED',
+        clientRequestId: 'client-1',
+        reason: 'socket-save-refused',
+      })
       expect(socket.readyState).toBe(1)
     })
 
@@ -4909,6 +4943,49 @@ describe('SyncTransportWorkerRuntime', () => {
       expect(framesOf(socket, 'COMMAND')).toHaveLength(0)
       expect(httpFallbacks(harness)).toEqual([])
       expect(harness.messages).toContainEqual({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' })
+    })
+
+    it('waits for deletion of a proven unexecuted save before attempting durable recovery', async () => {
+      const harness = setup()
+      const socket = await authorize(
+        harness,
+        body(),
+        't'.repeat(40),
+        SESSION_A,
+        ['SYNC_ITEMS', 'AUTHORIZE_COLLABORATION'],
+        { socketOnly: true },
+      )
+      const command = framesOf(socket, 'COMMAND')[0]
+      const originalDelete = harness.outbox.delete.bind(harness.outbox)
+      let finishDeletion!: () => Promise<void>
+      jest.spyOn(harness.outbox, 'delete').mockImplementationOnce(
+        (scope, id) =>
+          new Promise<void>((resolve) => {
+            finishDeletion = async () => {
+              await originalDelete(scope, id)
+              resolve()
+            }
+          }),
+      )
+      answer(socket, command, 'NOT_AUTHORIZED')
+      await flush()
+      const recovery = harness.runtime.handle({
+        type: 'RECOVER',
+        clientRequestId: 'recover-after-refusal',
+        sessionScope: SESSION_A,
+      })
+      await flush()
+      expect(
+        harness.messages.some(
+          (message) => 'clientRequestId' in message && message.clientRequestId === 'recover-after-refusal',
+        ),
+      ).toBe(false)
+      expect(framesOf(socket, 'STATUS')).toHaveLength(0)
+      await finishDeletion()
+      await recovery
+      expect(harness.messages).toContainEqual({ type: 'RECOVERY_EMPTY', clientRequestId: 'recover-after-refusal' })
+      expect(httpFallbacks(harness)).toEqual([])
+      expect(harness.outbox.records.size).toBe(0)
     })
 
     it('a strict recovered command proven UNKNOWN frees the outbox for a fresh socket proof', async () => {
@@ -5416,6 +5493,7 @@ describe('SyncTransportWorkerRuntime', () => {
       expect(harness.messages).toContainEqual({
         type: 'COLLABORATION_DENIED',
         clientRequestId: 'collaboration-client-1',
+        reason: 'not-authorized',
       })
       expect(refreshAsks(harness)).toHaveLength(0)
     })

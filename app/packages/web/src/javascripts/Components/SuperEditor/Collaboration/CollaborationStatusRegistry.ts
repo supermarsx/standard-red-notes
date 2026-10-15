@@ -28,8 +28,8 @@ export type CollaborationRoomStatus =
   | { kind: 'active' }
   /**
    * Collaboration is not running. `reason` is the human-readable explanation.
-   * `retriesExhausted` says the automatic retries have stood down and only user
-   * activity (focus, an edit) or a transport change will start them again.
+   * `retriesExhausted` marks a terminal denial awaiting an access or identity
+   * change. Transient failures recover automatically with bounded cooldowns.
    */
   | { kind: 'unavailable'; reason: string; retriesExhausted?: boolean; readonly?: boolean }
 

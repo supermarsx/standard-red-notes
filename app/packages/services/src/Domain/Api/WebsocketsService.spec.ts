@@ -77,6 +77,46 @@ describe('webSocketsService', () => {
   })
 
   describe('authorizeCollaborationRoom()', () => {
+    it.each(['COLLABORATION_NOT_AUTHORIZED', 'COLLABORATION_EPOCH_CHANGED'])(
+      'preserves the closed socket failure %s only for callers requesting typed recovery',
+      async (code) => {
+        const service = createService()
+        service.setCollaborationAuthorizationTransport(
+          jest.fn().mockRejectedValue(Object.assign(new Error('private backend message'), { code })),
+        )
+        await expect(
+          service.authorizeCollaborationRoom('note-1', undefined, undefined, roomEpoch),
+        ).resolves.toBeUndefined()
+        await expect(
+          service.authorizeCollaborationRoom('note-1', undefined, undefined, roomEpoch, true),
+        ).rejects.toMatchObject({ code })
+      },
+    )
+
+    it.each([401, 403, 503])('exposes only HTTP403 as a terminal permission denial, status=%s', async (status) => {
+      const service = createService()
+      webSocketApiService.authorizeCollaboration = jest
+        .fn()
+        .mockResolvedValue({ status, data: { error: { message: 'private backend details' } } })
+      const result = service.authorizeCollaborationRoom('note-1', undefined, undefined, roomEpoch, true)
+      if (status === 403) {
+        await expect(result).rejects.toMatchObject({
+          code: 'COLLABORATION_NOT_AUTHORIZED',
+          message: 'Collaboration authorization failed',
+        })
+      } else {
+        await expect(result).resolves.toBeUndefined()
+      }
+    })
+
+    it('exposes a malformed successful grant as a closed protocol failure without its payload', async () => {
+      webSocketApiService.authorizeCollaboration = jest
+        .fn()
+        .mockResolvedValue({ status: 200, data: { secret: 'private payload' } })
+      await expect(
+        createService().authorizeCollaborationRoom('note-1', undefined, undefined, roomEpoch, true),
+      ).rejects.toMatchObject({ code: 'COLLABORATION_PROTOCOL_INVALID', message: 'Collaboration authorization failed' })
+    })
     it('returns only a capability bound to the requested room and canonical server revision', async () => {
       webSocketApiService.authorizeCollaboration = jest.fn().mockResolvedValue({
         status: 200,

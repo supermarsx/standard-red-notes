@@ -1076,7 +1076,7 @@ export type SyncWorkerToMainMessage =
     }
   | { type: 'RESULT'; clientRequestId: string; commandId: string; result: unknown }
   | { type: 'RECOVERY_EMPTY'; clientRequestId: string }
-  | { type: 'RECOVERY_REQUIRED'; clientRequestId: string }
+  | { type: 'RECOVERY_REQUIRED'; clientRequestId: string; reason?: 'socket-save-refused' }
   /**
    * There IS a durable command in the shared outbox, and it is not this tab's to
    * reconcile: another tab of this account holds the lane, so only that tab can ask
@@ -1095,7 +1095,12 @@ export type SyncWorkerToMainMessage =
       clientRequestId: string
       result?: CollaborationAuthorizationTransportResult
     }
-  | { type: 'COLLABORATION_DENIED'; clientRequestId: string }
+  | {
+      type: 'COLLABORATION_DENIED'
+      clientRequestId: string
+      /** Older workers omit this; absence is never evidence of permission revocation. */
+      reason?: 'epoch-mismatch' | 'not-authorized'
+    }
   | { type: 'COLLABORATION_FALLBACK'; clientRequestId: string; reason: SyncFallbackReason }
   | { type: 'RPC_ACCEPTED'; clientRequestId: string }
   | {

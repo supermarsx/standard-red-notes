@@ -2308,7 +2308,17 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
         this.recordLaneStandDown(message.reason)
         collaborationPending.resolve(undefined)
       } else if (message.type === 'COLLABORATION_DENIED') {
-        collaborationPending.resolve(null)
+        if (message.reason) {
+          collaborationPending.reject(
+            new AuthenticatedRpcError(
+              message.reason === 'epoch-mismatch' ? 'COLLABORATION_EPOCH_CHANGED' : 'COLLABORATION_NOT_AUTHORIZED',
+              false,
+              false,
+            ),
+          )
+        } else {
+          collaborationPending.resolve(null)
+        }
       } else {
         collaborationPending.resolve(message.result)
       }
@@ -2338,7 +2348,13 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
         break
       case 'RECOVERY_REQUIRED':
         this.pending.delete(message.clientRequestId)
-        pending.reject(transportError('Durable sync recovery must complete before a new command can execute.'))
+        pending.reject(
+          transportError(
+            message.reason === 'socket-save-refused'
+              ? 'The collaboration socket save was refused. Its local changes remain pending until a saving device recovers.'
+              : 'Durable sync recovery must complete before a new command can execute.',
+          ),
+        )
         break
       case 'HTTP_FALLBACK':
         if (message.refusal !== undefined) {

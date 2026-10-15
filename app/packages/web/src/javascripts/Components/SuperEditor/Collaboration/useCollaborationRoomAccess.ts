@@ -6,6 +6,7 @@ import {
   SNNote,
   VaultLockServiceEvent,
   WebSocketsServiceEvent,
+  VaultUserServiceEvent,
 } from '@standardnotes/snjs'
 import type { WebApplication } from '@/Application/WebApplication'
 import {
@@ -28,7 +29,7 @@ import { isValidCollaborationRoomEpoch } from './RoomCrypto'
 /** A gateway `room-denied` as the client read it (contract C1). */
 export type RoomDenial = { reason: RoomDeniedReason; roomEpoch?: string }
 
-type LeaseFailure = { reason: string; requiresRemount?: true; denial?: RoomDenial }
+type LeaseFailure = { reason: string; requiresRemount?: true; denial?: RoomDenial; recovery?: 'terminal' | 'transient' }
 
 export const SUPER_COLLABORATION_NO_GATEWAY_REASON =
   'Live collaboration is not available on this deployment because no realtime gateway is configured.'
@@ -50,11 +51,11 @@ export function describeRoomDenial(reason: RoomDeniedReason): string {
     case 'capability-invalid':
       return 'The collaboration gateway rejected the edit authorization for this note. Edit permission is required.'
     case 'room-full':
-      return 'This note already has the maximum number of live collaborators.'
+      return 'This note already has the maximum number of live collaborators. Live collaboration will retry.'
     case 'reservation-expired':
       return 'The collaboration reservation expired before this note finished syncing. Live collaboration will retry.'
     case 'room-limit':
-      return 'This connection has reached its limit of live collaboration rooms.'
+      return 'This connection has reached its limit of live collaboration rooms. Live collaboration will retry.'
     case 'policy':
       return 'The server did not authorize an editor lease for this note.'
   }
@@ -98,7 +99,7 @@ type AvailablePreparedRoomAccess = Extract<PreparedCollaborationAccess, { availa
 }
 
 type UnavailableRoomAccess = Exclude<PreparedCollaborationAccess, { available: true }> & {
-  /** The sync-driven retry budget is spent; only user activity or a transport change re-arms it. */
+  /** A terminal denial stopped automatic retries until the identity or access changes. */
   retriesExhausted?: true
   denial?: RoomDenial
 }
@@ -117,7 +118,7 @@ export type CollaborationRoomAccessState =
   | {
       status: 'disabled'
       reason: string
-      /** True once automatic retries have stood down (see MAX_SYNC_DRIVEN_PREPARATION_RETRIES). */
+      /** True when a terminal denial stopped automatic recovery. */
       retriesExhausted?: true
     }
   | { status: 'preparing' }
@@ -162,6 +163,12 @@ export const ACTIVITY_RETRY_THROTTLE_MS = 30_000
  */
 export const RATE_LIMITED_RETRY_DELAY_MS = 10_000
 const MAX_RATE_LIMITED_RETRIES = 3
+export const ROOM_RECOVERY_INITIAL_DELAY_MS = 2_000
+export const ROOM_RECOVERY_MAX_DELAY_MS = 30_000
+
+function isRecoverableRoomDenial(denial?: RoomDenial): boolean {
+  return !denial || !['security-revoked', 'capability-invalid', 'policy'].includes(denial.reason)
+}
 
 type CanonicalEditorSnapshot = {
   noteUuid: string
@@ -653,7 +660,11 @@ async function attemptEditorAccess(
       expectedRoomEpoch: expectedIdentity?.roomEpoch,
     })
     if (!beforeReservation.available) {
-      return { reason: beforeReservation.reason }
+      return {
+        reason: beforeReservation.reason,
+        recovery: beforeReservation.recovery,
+        ...(beforeReservation.authorizationFailure === 'epoch-mismatch' ? { requiresRemount: true as const } : {}),
+      }
     }
     if (
       expectedIdentity &&
@@ -709,6 +720,10 @@ async function attemptEditorAccess(
         reason: activationAccess.available
           ? 'The note encryption key changed before collaboration activation.'
           : activationAccess.reason,
+        ...(!activationAccess.available ? { recovery: activationAccess.recovery } : {}),
+        ...(!activationAccess.available && activationAccess.authorizationFailure === 'epoch-mismatch'
+          ? { requiresRemount: true as const }
+          : {}),
       }
     }
     const expectedRevision = {
@@ -792,6 +807,8 @@ export function useCollaborationRoomAccess(
   /** While set, sync-driven retries are held: the gateway's control window is still closed. */
   const rateLimitedUntil = useRef(0)
   const rateLimitedRetries = useRef(0)
+  const recoveryDelay = useRef(ROOM_RECOVERY_INITIAL_DELAY_MS)
+  const recoveryAllowed = useRef(true)
   const [providerOwnsCanonicalState, setProviderOwnsCanonicalState] = useState(false)
 
   useLayoutEffect(() => {
@@ -808,13 +825,22 @@ export function useCollaborationRoomAccess(
       rateLimitedRetries.current = 0
       rateLimitedUntil.current = 0
     }
+    const retryAfterAccessChange = (): void => {
+      recoveryAllowed.current = true
+      recoveryDelay.current = ROOM_RECOVERY_INITIAL_DELAY_MS
+      resetSyncDrivenRetryBudget()
+      refresh()
+      if (!hasReadyAccess.current && activePreparations.current === 0) {
+        retryPreparation()
+      }
+    }
     /**
      * The user came back (tab visible, window focused) or a durable revision of the note
      * advanced: a stood-down room gets its budget back and one immediate retry, at most once
      * per ACTIVITY_RETRY_THROTTLE_MS.
      */
     const refillOnActivity = (): void => {
-      if (hasReadyAccess.current) {
+      if (hasReadyAccess.current || !recoveryAllowed.current) {
         return
       }
       const now = Date.now()
@@ -850,24 +876,43 @@ export function useCollaborationRoomAccess(
     })
     const disposeVaultLocks = application.vaultLocks.addEventObserver((event) => {
       if (event === VaultLockServiceEvent.VaultLocked || event === VaultLockServiceEvent.VaultUnlocked) {
+        recoveryAllowed.current = true
+        recoveryDelay.current = ROOM_RECOVERY_INITIAL_DELAY_MS
         invalidateActiveLease()
         refresh()
+      }
+      return Promise.resolve()
+    })
+    const disposeVaultUsers = application.vaultUsers?.addEventObserver?.((event) => {
+      // UsersChanged follows an explicit membership/permission operation, not
+      // the repeated cache invalidation caused by ordinary sync.
+      if (event === VaultUserServiceEvent.UsersChanged && !hasReadyAccess.current) {
+        retryAfterAccessChange()
       }
       return Promise.resolve()
     })
     const disposeSocket = application.sockets.addEventObserver((event) => {
       // A mounted provider retains its Y.Doc and performs a fresh authenticated
       // reserve/activate handshake itself. Only a pre-mount preparation retries.
-      if (event === WebSocketsServiceEvent.WebSocketDidOpen && !hasReadyAccess.current) {
+      if (event === WebSocketsServiceEvent.WebSocketDidOpen && !hasReadyAccess.current && recoveryAllowed.current) {
         resetSyncDrivenRetryBudget()
         retryPreparation()
       }
       return Promise.resolve()
     })
     const disposeApplication = application.addEventObserver((event) => {
+      if (event === ApplicationEvent.UserRolesChanged) {
+        if (!hasReadyAccess.current) {
+          retryAfterAccessChange()
+        }
+        return Promise.resolve()
+      }
       if (event === ApplicationEvent.CompletedFullSync) {
         refresh()
         if (hasReadyAccess.current || activePreparations.current > 0) {
+          return Promise.resolve()
+        }
+        if (!recoveryAllowed.current) {
           return Promise.resolve()
         }
         if (Date.now() < rateLimitedUntil.current) {
@@ -896,6 +941,8 @@ export function useCollaborationRoomAccess(
         event === ApplicationEvent.UnprotectedSessionExpired
       ) {
         invalidateActiveLease()
+        recoveryAllowed.current = true
+        recoveryDelay.current = ROOM_RECOVERY_INITIAL_DELAY_MS
         resetSyncDrivenRetryBudget()
         refresh()
       }
@@ -908,6 +955,7 @@ export function useCollaborationRoomAccess(
       disposeItems()
       disposeNotes()
       disposeVaultLocks()
+      disposeVaultUsers?.()
       disposeSocket()
       disposeApplication()
     }
@@ -947,6 +995,8 @@ export function useCollaborationRoomAccess(
    */
   useLayoutEffect(() => {
     syncDrivenRetryBudget.current = MAX_SYNC_DRIVEN_PREPARATION_RETRIES
+    recoveryAllowed.current = true
+    recoveryDelay.current = ROOM_RECOVERY_INITIAL_DELAY_MS
   }, [noteUuid, sourceId, sourceUserUuid, sourceSessionUser])
 
   useEffect(() => {
@@ -978,6 +1028,7 @@ export function useCollaborationRoomAccess(
     setPrepared(preparedIdentity)
     setProviderOwnsCanonicalState(false)
     let rateLimitedRetryTimer: ReturnType<typeof setTimeout> | undefined
+    let recoveryTimer: ReturnType<typeof setTimeout> | undefined
 
     if (sourceUnavailableReason) {
       setPrepared({ ...preparedIdentity, result: { available: false, reason: sourceUnavailableReason } })
@@ -1000,25 +1051,56 @@ export function useCollaborationRoomAccess(
      * Every failed preparation lands here so the stand-down is visible (retriesExhausted) and
      * a rate-limited denial waits the gateway's control window out instead of spending retries.
      */
-    const unavailable = (reason: string, denial?: RoomDenial): UnavailableRoomAccess => {
+    const unavailable = (
+      reason: string,
+      denial?: RoomDenial,
+      recovery?: 'terminal' | 'transient',
+    ): UnavailableRoomAccess => {
       lastFailedRevision.current = application.items.findItem<SNNote>(noteUuid)?.serverUpdatedAtTimestamp
+      recoveryAllowed.current = recovery !== 'terminal' && isRecoverableRoomDenial(denial)
       if (denial?.reason === 'rate-limited' && !cancelled && rateLimitedRetries.current < MAX_RATE_LIMITED_RETRIES) {
         rateLimitedRetries.current += 1
         rateLimitedUntil.current = Date.now() + RATE_LIMITED_RETRY_DELAY_MS
-        rateLimitedRetryTimer = setTimeout(() => {
+        const retryRateLimited = (): void => {
           rateLimitedRetryTimer = undefined
+          if (cancelled || hasReadyAccess.current) {
+            return
+          }
+          if (document.visibilityState !== 'visible') {
+            rateLimitedUntil.current = Date.now() + RATE_LIMITED_RETRY_DELAY_MS
+            rateLimitedRetryTimer = setTimeout(retryRateLimited, RATE_LIMITED_RETRY_DELAY_MS)
+            return
+          }
           rateLimitedUntil.current = 0
-          if (!cancelled && !hasReadyAccess.current && activePreparations.current === 0) {
+          if (activePreparations.current === 0) {
             retryPreparation()
           }
-        }, RATE_LIMITED_RETRY_DELAY_MS)
+        }
+        rateLimitedRetryTimer = setTimeout(retryRateLimited, RATE_LIMITED_RETRY_DELAY_MS)
+      } else if (!cancelled && recoveryAllowed.current) {
+        const delay = recoveryDelay.current
+        recoveryDelay.current = Math.min(ROOM_RECOVERY_MAX_DELAY_MS, delay * 2)
+        const recover = (): void => {
+          recoveryTimer = undefined
+          if (cancelled || hasReadyAccess.current || !recoveryAllowed.current) {
+            return
+          }
+          // An idle background tab must not authorize repeatedly. Retain the
+          // cooldown so becoming visible can recover without a socket reopen.
+          if (document.visibilityState !== 'visible' || activePreparations.current > 0) {
+            recoveryTimer = setTimeout(recover, delay)
+            return
+          }
+          retryPreparation()
+        }
+        recoveryTimer = setTimeout(recover, delay)
       }
       return {
         available: false,
         sourceId,
-        reason,
+        reason: recoveryAllowed.current && !denial ? `${reason} Live collaboration will retry automatically.` : reason,
         ...(denial ? { denial } : {}),
-        ...(syncDrivenRetryBudget.current === 0 && rateLimitedUntil.current === 0 ? { retriesExhausted: true } : {}),
+        ...(!recoveryAllowed.current ? { retriesExhausted: true } : {}),
       }
     }
 
@@ -1089,7 +1171,7 @@ export function useCollaborationRoomAccess(
           }
           const { result } = preparedResult
           if ('reason' in result) {
-            setPrepared({ ...preparedIdentity, result: unavailable(result.reason, result.denial) })
+            setPrepared({ ...preparedIdentity, result: unavailable(result.reason, result.denial, result.recovery) })
             return
           }
 
@@ -1209,6 +1291,7 @@ export function useCollaborationRoomAccess(
             },
           }
           setPrepared({ ...preparedIdentity, result: { ...result.access, editorLease } })
+          recoveryDelay.current = ROOM_RECOVERY_INITIAL_DELAY_MS
         })
         .catch(() => {
           if (!cancelled) {
@@ -1232,6 +1315,9 @@ export function useCollaborationRoomAccess(
       if (rateLimitedRetryTimer !== undefined) {
         clearTimeout(rateLimitedRetryTimer)
         rateLimitedRetryTimer = undefined
+      }
+      if (recoveryTimer !== undefined) {
+        clearTimeout(recoveryTimer)
       }
       const snapshot = canonicalEditorSnapshot.current
       if (snapshot?.noteUuid === noteUuid && snapshot.sourceId === sourceId) {

@@ -82,7 +82,47 @@ maybe('collaboration room-key derivation', () => {
       available: false,
       reason: 'The collaboration gateway did not provide a valid encrypted room epoch.',
       sourceId: expect.any(String),
+      recovery: 'terminal',
     })
+  })
+
+  it.each([
+    'COLLABORATION_NOT_AUTHORIZED',
+    'COLLABORATION_PROTOCOL_INVALID',
+    'COLLABORATION_EPOCH_CHANGED',
+    'NETWORK_TIMEOUT',
+  ])('carries structured recovery semantics for %s without relying on private error text', async (code) => {
+    const sessionUser = { uuid: 'user-a', email: 'alice@example.com' }
+    const application = {
+      sessions: { isSignedIn: () => true, getUser: () => sessionUser },
+      vaults: { getItemVault: () => undefined },
+      vaultLocks: { getUnlockedVaultRootKey: () => undefined },
+      encryption: {
+        getRootKey: () => ({
+          masterKey: 'account-root',
+          keyVersion: '004',
+          keyParams: { getPortableValue: () => ({ identifier: 'alice', pw_nonce: 'parameters' }) },
+        }),
+      },
+      sockets: {
+        authorizeCollaborationRoom: jest
+          .fn()
+          .mockRejectedValue(Object.assign(new Error('private backend details'), { code })),
+      },
+      isAuthorizedToRenderItem: () => true,
+    } as never
+    const note = { uuid: 'personal-note', user_uuid: 'user-a', locked: false } as never
+    const result = await prepareCollaborationAccess(application, note)
+    expect(result).toMatchObject({
+      available: false,
+      recovery: ['COLLABORATION_NOT_AUTHORIZED', 'COLLABORATION_PROTOCOL_INVALID'].includes(code)
+        ? 'terminal'
+        : 'transient',
+    })
+    expect(JSON.stringify(result)).not.toContain('private backend details')
+    if (code === 'COLLABORATION_EPOCH_CHANGED') {
+      expect(result).toHaveProperty('authorizationFailure', 'epoch-mismatch')
+    }
   })
 
   it('derives the same non-extractable AES-256-GCM key for two vault members', async () => {
