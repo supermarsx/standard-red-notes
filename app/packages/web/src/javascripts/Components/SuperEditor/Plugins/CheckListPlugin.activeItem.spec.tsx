@@ -16,7 +16,7 @@ import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext
 import { LexicalErrorBoundary } from '@lexical/react/LexicalErrorBoundary'
 import { RichTextPlugin } from '@lexical/react/LexicalRichTextPlugin'
 import { $createListItemNode, $createListNode, ListItemNode, ListNode } from '@lexical/list'
-import { $createParagraphNode, $createTextNode, $getRoot, type LexicalEditor } from 'lexical'
+import { $createParagraphNode, $createTextNode, $getRoot, $getSelection, type LexicalEditor } from 'lexical'
 import { act, createElement, useEffect } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { CheckListPlugin } from './CheckListPlugin'
@@ -137,6 +137,39 @@ describe('the schedule affordance follows the caret through the real plugin', ()
       .map(taskText)
 
   const revealedCount = () => container.querySelectorAll(`[${CHECKLIST_DUE_REVEAL_ATTR}='active']`).length
+
+  it('triple-click selects the item text without the schedule controls or following row', () => {
+    const row = rows()[1]
+    const text = row.querySelector('[data-lexical-text]')!
+    act(() => {
+      text.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 3 }))
+    })
+    editor!.getEditorState().read(() => expect($getSelection()?.getTextContent()).toBe('second task'))
+    expect(row.getAttribute('aria-checked')).toBe('false')
+  })
+
+  it('triple-click spans formatted text and wrapped lines while excluding nested checklist items', () => {
+    act(() =>
+      editor!.update(
+        () => {
+          const row = $getRoot().getFirstChild<ListNode>()!.getChildren<ListItemNode>()[1]
+          row
+            .clear()
+            .append(
+              $createTextNode('first '),
+              $createTextNode('formatted wrapped text').toggleFormat('italic'),
+              $createListNode('check').append($createListItemNode(false).append($createTextNode('nested task'))),
+            )
+        },
+        { discrete: true },
+      ),
+    )
+    const text = rows()[1].querySelector('em')!
+    act(() => {
+      text.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 3 }))
+    })
+    editor!.getEditorState().read(() => expect($getSelection()?.getTextContent()).toBe('first formatted wrapped text'))
+  })
 
   it('renders a due shell on every row but reveals at most one', () => {
     expect(rows()).toHaveLength(ROW_LABELS.length)

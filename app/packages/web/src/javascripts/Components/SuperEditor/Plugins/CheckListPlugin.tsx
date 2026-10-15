@@ -13,6 +13,10 @@ import {
   $getNodeByKey,
   $getSelection,
   $isRangeSelection,
+  $isElementNode,
+  $isTextNode,
+  $createRangeSelection,
+  $setSelection,
   COMMAND_PRIORITY_LOW,
   KEY_ENTER_COMMAND,
   SKIP_DOM_SELECTION_TAG,
@@ -791,6 +795,48 @@ export function CheckListPlugin({
         }
 
         function handleClick(event: Event) {
+          // Native paragraph selection can include the non-editable schedule
+          // shell or the next row. Select this item's Lexical children instead.
+          if (event instanceof MouseEvent && event.detail === 3) {
+            const target = event.target
+            const element =
+              target instanceof HTMLElement ? target : target instanceof Node ? target.parentElement : null
+            const itemElement = element?.closest('li')
+            let checkbox = false
+            handleCheckItemEvent(event as PointerEvent, () => {
+              checkbox = true
+            })
+            if (
+              itemElement &&
+              rootElement?.contains(itemElement) &&
+              !element?.closest(`[${CHECKLIST_DUE_SHELL_ATTR}]`) &&
+              !checkbox
+            ) {
+              editor.update(
+                () => {
+                  const item = $getNearestNodeFromDOMNode(itemElement)
+                  if (!$isListItemNode(item) || item.getParent<ListNode>()?.getListType() !== 'check') {
+                    return
+                  }
+                  const nestedList = item.getChildren().findIndex($isListNode)
+                  const children = item.getChildren().slice(0, nestedList < 0 ? undefined : nestedList)
+                  const first = children[0]
+                  const last = children.at(-1)
+                  const start = $isElementNode(first) ? first.getFirstDescendant() : first
+                  const end = $isElementNode(last) ? last.getLastDescendant() : last
+                  if ($isTextNode(start) && $isTextNode(end)) {
+                    const selection = $createRangeSelection()
+                    selection.setTextNodeRange(start, 0, end, end.getTextContentSize())
+                    $setSelection(selection)
+                  } else {
+                    item.select(0, children.length)
+                  }
+                },
+                { discrete: true },
+              )
+              return
+            }
+          }
           handleCheckItemEvent(event as PointerEvent, () => {
             const isTouchEvent = (event as PointerEvent).pointerType === 'touch'
             if (!editor.isEditable()) {
