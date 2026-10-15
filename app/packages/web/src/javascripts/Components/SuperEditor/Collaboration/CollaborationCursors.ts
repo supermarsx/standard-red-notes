@@ -1,5 +1,8 @@
-import type { Provider } from '@lexical/yjs'
-import type { LexicalEditor } from 'lexical'
+import type { Provider, SyncCursorPositionsFn } from '@lexical/yjs'
+import { $getSelection, $isNodeSelection, type LexicalEditor } from 'lexical'
+import { $isTableSelection } from '@lexical/table'
+import type * as Y from 'yjs'
+import { syncCollaborationSelectionGeometry } from './CollaborationSelectionGeometry'
 
 /** Keep the body portal inside the visible editor, including nested scroll panes. */
 export function clipCursorOverlay(overlay: HTMLElement, root: HTMLElement): void {
@@ -49,6 +52,28 @@ export function createCollaborationCursorTracking(
   const view = doc.defaultView!
   let frame: number | undefined
   let disposed = false
+  let binding: Parameters<SyncCursorPositionsFn>[0] | undefined
+  // Lexical publishes its binding as the origin of local Yjs transactions,
+  // including selection-only updates. The public transaction event exposes
+  // the actual binding without private React state or fabricated doc edits.
+  const ydoc = (actualProvider as Provider & { doc?: Y.Doc }).doc
+  const observeBinding = (transaction: Y.Transaction): void => {
+    if (disposed) {
+      return
+    }
+    const origin = transaction.origin as Partial<Parameters<SyncCursorPositionsFn>[0]> | null
+    if (
+      origin &&
+      origin.editor === editor &&
+      origin.doc === ydoc &&
+      typeof origin.cursors?.get === 'function' &&
+      typeof origin.cursors.set === 'function' &&
+      ('collabNodeMap' in origin || 'mapping' in origin)
+    ) {
+      binding = origin as Parameters<SyncCursorPositionsFn>[0]
+      schedule()
+    }
+  }
   const paint = () => {
     invalidatedPresentations.clear()
     const currentRoot = editor.getRootElement()
@@ -62,17 +87,26 @@ export function createCollaborationCursorTracking(
     const selection = view.getSelection()
     // A root may already own focus while its canonical document is becoming
     // editable. That transition emits no new DOM focus event for Lexical.
+    const nonRangeSelection =
+      editor.getEditorState?.().read(() => {
+        const current = $getSelection()
+        return $isNodeSelection(current) || $isTableSelection(current)
+      }) ?? false
     const focusing =
       !!currentRoot &&
       currentRoot.contains(doc.activeElement) &&
       doc.hasFocus() &&
       editor.isEditable() &&
-      !!selection?.anchorNode &&
-      currentRoot.contains(selection.anchorNode)
+      (nonRangeSelection || (!!selection?.anchorNode && currentRoot.contains(selection.anchorNode)))
     if (local && typeof local.focusing === 'boolean' && local.focusing !== focusing) {
       awareness.setLocalStateField('focusing', focusing)
     }
     cursorListeners.forEach((listener) => listener())
+    // Lexical's awareness hook calls the native renderer directly, bypassing
+    // the custom doc-update renderer. Reapply geometry after that native pass.
+    if (binding) {
+      syncCollaborationSelectionGeometry(binding, provider)
+    }
   }
   const schedule = () => {
     if (!disposed && frame === undefined) {
@@ -137,11 +171,15 @@ export function createCollaborationCursorTracking(
           // advertisement installed by the room lifetime; null still leaves.
           const saver = target.getLocalState()?.saver
           const previousData = target.getLocalState()?.awarenessData
+          const previousRegions = target.getLocalState()?.selectionRegions
           target.setLocalState(
             state
               ? {
                   ...state,
                   ...(saver !== undefined ? { saver } : {}),
+                  ...(state.focusing && state.selectionRegions === undefined && previousRegions !== undefined
+                    ? { selectionRegions: previousRegions }
+                    : {}),
                   awarenessData: {
                     ...previousData,
                     ...state.awarenessData,
@@ -176,6 +214,7 @@ export function createCollaborationCursorTracking(
   view.visualViewport?.addEventListener('resize', schedule)
   view.visualViewport?.addEventListener('scroll', schedule)
   awareness.on('update', schedule)
+  ydoc?.on('afterTransaction', observeBinding)
   const resize = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(schedule)
   const unregisterRoot = editor.registerRootListener((nextRoot) => {
     resize?.disconnect()
@@ -202,6 +241,8 @@ export function createCollaborationCursorTracking(
       view.visualViewport?.removeEventListener('resize', schedule)
       view.visualViewport?.removeEventListener('scroll', schedule)
       awareness.off('update', schedule)
+      ydoc?.off('afterTransaction', observeBinding)
+      binding = undefined
       doc.fonts?.removeEventListener('loadingdone', schedule)
       resize?.disconnect()
       unregisterRoot()

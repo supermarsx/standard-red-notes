@@ -5,7 +5,8 @@ import { LexicalCollaboration, useCollaborationContext } from '@lexical/react/Le
 import type { InitialEditorStateType } from '@lexical/react/LexicalComposer'
 import * as Y from 'yjs'
 import type { Doc } from 'yjs'
-import { syncCursorPositions, type Provider, type SyncCursorPositionsFn } from '@lexical/yjs'
+import { type Provider, type SyncCursorPositionsFn } from '@lexical/yjs'
+import { syncCollaborationSelectionGeometry } from './CollaborationSelectionGeometry'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
 import { WebApplication } from '@/Application/WebApplication'
 import { EncryptedYjsProvider } from './EncryptedYjsProvider'
@@ -133,7 +134,7 @@ const AvailableSuperCollaborationPlugin: FunctionComponent<Props> = ({
   const [editor] = useLexicalComposerContext()
   const syncResumeCursors = useCallback<SyncCursorPositionsFn>((binding, provider, options) => {
     trackEditorResumeCollaboration(binding, provider)
-    syncCursorPositions(binding, provider, options)
+    syncCollaborationSelectionGeometry(binding, provider, options)
   }, [])
   const effectiveChecklistOwnerLeaseId = checklistOwnerLeaseId ?? config.editorLease.requestId
   const channel = useMemo(() => createGatewayCollabChannel(application), [application])

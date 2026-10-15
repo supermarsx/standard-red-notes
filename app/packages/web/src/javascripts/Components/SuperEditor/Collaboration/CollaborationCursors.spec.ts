@@ -4,6 +4,9 @@ import { Awareness } from 'y-protocols/awareness'
 import type { Provider } from '@lexical/yjs'
 import type { LexicalEditor } from 'lexical'
 import { clipCursorOverlay, createCollaborationCursorTracking, cursorLabel } from './CollaborationCursors'
+import { syncCollaborationSelectionGeometry } from './CollaborationSelectionGeometry'
+
+jest.mock('./CollaborationSelectionGeometry', () => ({ syncCollaborationSelectionGeometry: jest.fn() }))
 
 const rect = (left: number, top: number, width: number, height: number) => ({
   left,
@@ -86,6 +89,7 @@ afterEach(() => {
 
 function tracking() {
   const provider = {
+    doc,
     awareness,
     connect: jest.fn(),
     disconnect: jest.fn(),
@@ -96,6 +100,29 @@ function tracking() {
   dispose = tracker.dispose
   return { provider, tracker }
 }
+
+it('reapplies custom geometry after the real native awareness listener using the local transaction binding, without a remote edit', () => {
+  const { tracker } = tracking()
+  const nativePaint = jest.fn()
+  tracker.provider.awareness.on('update', nativePaint)
+  const binding = { editor, doc, cursors: new Map(), collabNodeMap: new Map() }
+  doc.transact(() => {}, binding)
+  jest.advanceTimersByTime(20)
+  const customPaint = jest.mocked(syncCollaborationSelectionGeometry)
+  expect(customPaint).toHaveBeenLastCalledWith(binding, tracker.provider)
+  expect(nativePaint.mock.invocationCallOrder.at(-1)).toBeLessThan(customPaint.mock.invocationCallOrder.at(-1)!)
+  nativePaint.mockClear()
+  customPaint.mockClear()
+  awareness.setLocalStateField('focusing', false)
+  jest.advanceTimersByTime(20)
+  expect(nativePaint).toHaveBeenCalled()
+  expect(customPaint).toHaveBeenCalledWith(binding, tracker.provider)
+  tracker.dispose()
+  customPaint.mockClear()
+  doc.transact(() => {}, binding)
+  jest.advanceTimersByTime(20)
+  expect(customPaint).not.toHaveBeenCalled()
+})
 
 it('clips to the editor and its nested scrolling viewport, and hides an offscreen editor', () => {
   clipCursorOverlay(overlay, root)
@@ -183,6 +210,17 @@ it('uses the existing provider lifecycle and unregisters queued layout paints on
   tracker.dispose()
   jest.advanceTimersByTime(20)
   expect(repaint).not.toHaveBeenCalled()
+})
+
+it('preserves encrypted nonrange selection during Lexical focus updates and lets deliberate range clearing remove it', () => {
+  const selectionRegions = { kind: 'nodes', positions: [{ tname: 'root', assoc: 0 }] }
+  awareness.setLocalState({ name: 'self', focusing: true, selectionRegions })
+  const { tracker } = tracking()
+  tracker.provider.awareness.setLocalState({ name: 'self', focusing: true, anchorPos: null, focusPos: null } as never)
+  expect(awareness.getLocalState()?.selectionRegions).toEqual(selectionRegions)
+  tracker.provider.awareness.setLocalStateField('selectionRegions', undefined)
+  tracker.provider.awareness.setLocalState({ name: 'self', focusing: true, anchorPos: null, focusPos: null } as never)
+  expect(Object.hasOwn(awareness.getLocalState()!, 'selectionRegions')).toBe(false)
 })
 
 it('does not cache an anonymous cursor before a newly joined own device identifies itself', () => {
