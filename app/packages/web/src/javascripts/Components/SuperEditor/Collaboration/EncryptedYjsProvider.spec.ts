@@ -3669,3 +3669,153 @@ describe('EncryptedYjsProvider presence between people who are both here', () =>
     }
   })
 })
+
+describe('Encrypted selection region metadata', () => {
+  const normalize = (provider: EncryptedYjsProvider, value: unknown) =>
+    (
+      provider as unknown as { normalizeAwarenessState(state: unknown): Record<string, unknown> }
+    ).normalizeAwarenessState(value)
+  const valid = { kind: 'nodes', positions: [{ type: { client: 1, clock: 0 }, assoc: 0 }] }
+
+  it.each(['nodes', 'table'])(
+    'round-trips real Yjs identities for %s without transmitting document content',
+    async (kind) => {
+      const room = 'selection-regions-' + kind
+      const { provider, inbound, sent } = createPresenceProvider(room)
+      const remoteDoc = new Y.Doc()
+      try {
+        const root = remoteDoc.getXmlFragment('root')
+        const node = new Y.XmlElement('check-item')
+        node.insert(0, [new Y.XmlText('private task text must not enter awareness')])
+        root.insert(0, [node])
+        const regions = {
+          kind,
+          positions: [
+            Y.relativePositionToJSON(Y.createRelativePositionFromTypeIndex(node, 0)),
+            Y.relativePositionToJSON(Y.createRelativePositionFromTypeIndex(root, 1, -1)),
+          ],
+        }
+        provider.connect()
+        await flushMicrotasksUntil(() => provider.isRoomJoined())
+        const remote = provider.doc.clientID === 9988 ? 9989 : 9988
+        inbound.deliver(awarenessFrameFrom(room, remote, { ...PEER_STATE, selectionRegions: regions }))
+        await provider.flush()
+        const state = (provider.awareness as unknown as Awareness).getStates().get(remote)!
+        expect(state.selectionRegions).toEqual(JSON.parse(JSON.stringify(regions)))
+        const positions = state.selectionRegions.positions
+        expect(
+          Y.createAbsolutePositionFromRelativePosition(Y.createRelativePositionFromJSON(positions[0]), remoteDoc)?.type,
+        ).toBe(node)
+        expect(
+          Y.createAbsolutePositionFromRelativePosition(Y.createRelativePositionFromJSON(positions[1]), remoteDoc)?.type,
+        ).toBe(root)
+        expect(JSON.stringify(state)).not.toContain('private task text')
+        ;(provider.awareness as unknown as Awareness).setLocalState({ ...PEER_STATE, selectionRegions: regions })
+        await provider.flush()
+        expect(
+          sent.some(
+            (frame) =>
+              frame.t === 'awareness' && Buffer.from(frame.payload, 'base64').includes(Buffer.from('selectionRegions')),
+          ),
+        ).toBe(true)
+        inbound.deliver(rawAwarenessFrame(room, [{ clientId: remote, clock: 100, state: PEER_STATE }]))
+        await provider.flush()
+        expect((provider.awareness as unknown as Awareness).getStates().get(remote)?.selectionRegions).toBeUndefined()
+        expect((provider.awareness as unknown as Awareness).getStates().get(remote)?.name).toBe('Bob')
+      } finally {
+        provider.destroy()
+        remoteDoc.destroy()
+      }
+    },
+  )
+
+  it('accepts the bounded maximum and rejects empty, oversized, malformed, or content-bearing regions', () => {
+    const { provider } = createPresenceProvider('selection-schema')
+    try {
+      expect(
+        normalize(provider, {
+          ...PEER_STATE,
+          selectionRegions: { ...valid, positions: Array.from({ length: 128 }, () => valid.positions[0]) },
+        }).selectionRegions,
+      ).toBeDefined()
+      const invalid = [
+        null,
+        undefined,
+        {},
+        { ...valid, kind: 'range' },
+        { ...valid, positions: [] },
+        { ...valid, positions: Array(129).fill(valid.positions[0]) },
+        { ...valid, text: 'private' },
+        { ...valid, positions: [{ type: { client: 1, clock: 0 }, assoc: 0, html: '<b>private</b>' }] },
+        { ...valid, positions: [{ type: { client: 1, clock: 0 }, assoc: 0, key: 'local-lexical-key' }] },
+        { ...valid, positions: [{ type: { client: 1, clock: 0 }, assoc: 0, x: 10, y: 20 }] },
+        { ...valid, positions: [{}] },
+        { ...valid, positions: [{ assoc: 0 }] },
+        { ...valid, positions: [{ type: null, assoc: 0 }] },
+        { ...valid, positions: [{ tname: '', assoc: 0 }] },
+        { ...valid, positions: [{ tname: 'x'.repeat(129), assoc: 0 }] },
+        { ...valid, positions: [{ tname: 'root', type: { client: 1, clock: 0 }, assoc: 0 }] },
+        { ...valid, positions: [{ type: { client: 1, clock: 0 }, item: null, assoc: 0 }] },
+        { ...valid, positions: [{ type: { client: 1, clock: 0, extra: 'secret' }, assoc: 0 }] },
+        { ...valid, positions: [{ type: { client: -1, clock: 0 }, assoc: 0 }] },
+        { ...valid, positions: [{ type: { client: 1, clock: Number.MAX_SAFE_INTEGER + 1 }, assoc: 0 }] },
+        { ...valid, positions: [{ type: { client: 1, clock: 0.5 }, assoc: 0 }] },
+        { ...valid, positions: [{ type: { client: 1, clock: 0 }, assoc: NaN }] },
+        { ...valid, positions: [{ type: { client: 1, clock: 0 }, assoc: Infinity }] },
+        { ...valid, positions: [{ type: { client: 1, clock: 0 }, assoc: 0.5 }] },
+        { ...valid, positions: [null] },
+        { ...valid, positions: new Array(1) },
+        Object.create({ kind: 'nodes', positions: valid.positions }),
+      ]
+      for (const regions of invalid) {
+        expect(() => normalize(provider, { ...PEER_STATE, selectionRegions: regions })).toThrow(
+          'invalid-awareness-selection-regions',
+        )
+      }
+      const accessor = Object.defineProperty({}, 'assoc', {
+        get() {
+          throw new Error('must not read accessor')
+        },
+        enumerable: true,
+      })
+      expect(() =>
+        normalize(provider, { ...PEER_STATE, selectionRegions: { ...valid, positions: [accessor] } }),
+      ).toThrow('invalid-awareness-selection-regions')
+      const unsafeID = JSON.parse('{"client":1,"clock":0,"__proto__":{}}')
+      expect(() =>
+        normalize(provider, {
+          ...PEER_STATE,
+          selectionRegions: { ...valid, positions: [{ type: unsafeID, assoc: 0 }] },
+        }),
+      ).toThrow('invalid-awareness-selection-regions')
+    } finally {
+      provider.destroy()
+    }
+  })
+
+  it('rejects invalid encrypted metadata without ending the editor lease or retaining a misleading remote region', async () => {
+    const room = 'invalid-selection-regions'
+    const { provider, inbound, onFatal } = createPresenceProvider(room)
+    const errors = jest.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      provider.connect()
+      await flushMicrotasksUntil(() => provider.isRoomJoined())
+      const remote = provider.doc.clientID === 9090 ? 9091 : 9090
+      inbound.deliver(awarenessFrameFrom(room, remote, { ...PEER_STATE, selectionRegions: valid }))
+      await provider.flush()
+      expect((provider.awareness as unknown as Awareness).getStates().has(remote)).toBe(true)
+      inbound.deliver(
+        rawAwarenessFrame(room, [
+          { clientId: remote, clock: 100, state: { ...PEER_STATE, selectionRegions: { ...valid, text: 'private' } } },
+        ]),
+      )
+      await provider.flush()
+      expect((provider.awareness as unknown as Awareness).getStates().has(remote)).toBe(false)
+      expect(provider.isRoomJoined()).toBe(true)
+      expect(onFatal).not.toHaveBeenCalled()
+    } finally {
+      provider.destroy()
+      errors.mockRestore()
+    }
+  })
+})

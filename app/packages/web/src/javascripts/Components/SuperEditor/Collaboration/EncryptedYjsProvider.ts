@@ -1525,11 +1525,23 @@ export class EncryptedYjsProvider implements Provider {
       throw new Error('invalid-awareness-state')
     }
     const value = state as Record<string, unknown>
-    const allowed = new Set(['name', 'color', 'focusing', 'anchorPos', 'focusPos', 'awarenessData', 'saver'])
+    const allowed = new Set([
+      'name',
+      'color',
+      'focusing',
+      'anchorPos',
+      'focusPos',
+      'awarenessData',
+      'saver',
+      'selectionRegions',
+    ])
     if (Object.keys(value).some((key) => !allowed.has(key))) {
       throw new Error('invalid-awareness-field')
     }
     const normalized: Record<string, unknown> = {}
+    if (Object.prototype.hasOwnProperty.call(value, 'selectionRegions')) {
+      normalized.selectionRegions = this.normalizeSelectionRegions(value.selectionRegions)
+    }
     if (value.saver !== undefined) {
       if (value.saver === null) {
         normalized.saver = null
@@ -1623,6 +1635,87 @@ export class EncryptedYjsProvider implements Provider {
       normalized.awarenessData = normalizedData
     }
     return normalized
+  }
+
+  private isClosedAwarenessRecord(value: unknown, fields: readonly string[]): value is Record<string, unknown> {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      return false
+    }
+    const prototype = Object.getPrototypeOf(value)
+    if (prototype !== Object.prototype && prototype !== null) {
+      return false
+    }
+    return Reflect.ownKeys(value).every((key) => {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key)
+      return typeof key === 'string' && fields.includes(key) && descriptor?.enumerable === true && 'value' in descriptor
+    })
+  }
+
+  private normalizeSelectionRegions(value: unknown): Record<string, unknown> {
+    const invalid = () => {
+      throw new Error('invalid-awareness-selection-regions')
+    }
+    if (
+      !this.isClosedAwarenessRecord(value, ['kind', 'positions']) ||
+      !Object.prototype.hasOwnProperty.call(value, 'kind') ||
+      !Object.prototype.hasOwnProperty.call(value, 'positions') ||
+      (value.kind !== 'nodes' && value.kind !== 'table') ||
+      !Array.isArray(value.positions)
+    ) {
+      return invalid()
+    }
+    const positions = value.positions
+    if (
+      Object.getPrototypeOf(positions) !== Array.prototype ||
+      positions.length < 1 ||
+      positions.length > 128 ||
+      Reflect.ownKeys(positions).length !== positions.length + 1
+    ) {
+      return invalid()
+    }
+    const id = (entry: unknown): { client: number; clock: number } => {
+      if (
+        !this.isClosedAwarenessRecord(entry, ['client', 'clock']) ||
+        !Object.prototype.hasOwnProperty.call(entry, 'client') ||
+        !Object.prototype.hasOwnProperty.call(entry, 'clock') ||
+        !Number.isSafeInteger(entry.client) ||
+        (entry.client as number) < 0 ||
+        !Number.isSafeInteger(entry.clock) ||
+        (entry.clock as number) < 0
+      ) {
+        return invalid()
+      }
+      return { client: entry.client as number, clock: entry.clock as number }
+    }
+    const normalized = []
+    for (let index = 0; index < positions.length; index++) {
+      const descriptor = Object.getOwnPropertyDescriptor(positions, String(index))
+      if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) {
+        return invalid()
+      }
+      const position: unknown = descriptor.value
+      if (
+        !this.isClosedAwarenessRecord(position, ['type', 'tname', 'item', 'assoc']) ||
+        !Object.prototype.hasOwnProperty.call(position, 'assoc') ||
+        !Number.isSafeInteger(position.assoc)
+      ) {
+        return invalid()
+      }
+      const hasType = Object.prototype.hasOwnProperty.call(position, 'type')
+      const hasName = Object.prototype.hasOwnProperty.call(position, 'tname')
+      if (
+        hasType === hasName ||
+        (hasName && (typeof position.tname !== 'string' || !position.tname.length || position.tname.length > 128))
+      ) {
+        return invalid()
+      }
+      normalized.push({
+        ...(hasType ? { type: id(position.type) } : { tname: position.tname }),
+        ...(Object.prototype.hasOwnProperty.call(position, 'item') ? { item: id(position.item) } : {}),
+        assoc: position.assoc,
+      })
+    }
+    return { kind: value.kind, positions: normalized }
   }
 
   private isBoundedAwarenessJson(value: unknown, depth: number, counter: { nodes: number }): boolean {
