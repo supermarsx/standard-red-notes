@@ -78,6 +78,20 @@ const keySet = (signing: string, previousSigning?: string) => ({
 })
 
 describe('comment authorship attestation', () => {
+  it('binds a checklist comment proof to its persistent task identity', () => {
+    const author = applicationFor({ contactCurrentKey: currentPair.publicKey }).application
+    const signed = signedWith(currentPair, {
+      ...baseComment(),
+      anchor: { kind: 'checklist', todoId: 'todo-original', snippet: 'Task' },
+    })
+    expect(verifyCommentAuthorship(author, 'note-1', signed).status).toBe('verified')
+    expect(
+      verifyCommentAuthorship(author, 'note-1', {
+        ...signed,
+        anchor: { kind: 'checklist', todoId: 'todo-replaced', snippet: 'Task' },
+      }).status,
+    ).toBe('invalid')
+  })
   let currentPair: ReturnType<typeof WebCrypto.sodiumCryptoSignSeedKeypair>
   let previousPair: ReturnType<typeof WebCrypto.sodiumCryptoSignSeedKeypair>
   let unrelatedPair: ReturnType<typeof WebCrypto.sodiumCryptoSignSeedKeypair>

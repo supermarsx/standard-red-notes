@@ -11,6 +11,8 @@ import { $createTextNode, $getRoot } from 'lexical'
 import * as Y from 'yjs'
 import {
   $getChecklistDueAt,
+  $getChecklistFlags,
+  $setChecklistFlags,
   $getChecklistRecurrence,
   $getChecklistSchedule,
   $getChecklistTodoId,
@@ -38,6 +40,33 @@ const createEditor = () =>
   })
 
 describe('checklist ListItemNode state serialization', () => {
+  it('round-trips pinned priority in portable Lexical JSON without changing task order or node type', () => {
+    const editor = createEditor()
+    editor.update(
+      () => {
+        const list = $createListNode('check')
+        const first = $createListItemNode(false).append($createTextNode('First'))
+        const second = $createListItemNode(false).append($createTextNode('Second'))
+        $setChecklistFlags(second, { pinned: true, priority: 'high' })
+        list.append(first, second)
+        $getRoot().append(list)
+      },
+      { discrete: true },
+    )
+    const json = JSON.stringify(editor.getEditorState().toJSON())
+    expect(json).toContain('srnChecklistFlags')
+    const restored = createEditor()
+    restored.setEditorState(restored.parseEditorState(json))
+    restored.getEditorState().read(() => {
+      const list = $getRoot().getFirstChild() as ListNode
+      const first = list.getFirstChild() as ListItemNode
+      const second = first.getNextSibling() as ListItemNode
+      expect(first.getTextContent()).toBe('First')
+      expect(second.getType()).toBe('listitem')
+      expect($getChecklistFlags(first)).toEqual({ version: 1, pinned: false, priority: 'normal' })
+      expect($getChecklistFlags(second)).toEqual({ version: 1, pinned: true, priority: 'high' })
+    })
+  })
   it('uses secure random bytes rather than time/counters when randomUUID is unavailable', () => {
     let seed = 0
     const secureBytesOnly = {

@@ -1197,6 +1197,7 @@ export const SuperEditor: FunctionComponent<Props> = ({
               >
                 <BlocksEditor
                   noteUuid={authorizedEditorNote.uuid}
+                  commentNote={authorizedEditorNote}
                   onChange={handleChange}
                   className="blocks-editor h-full resize-none"
                   previewLength={SuperNotePreviewCharLimit}

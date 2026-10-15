@@ -1,16 +1,19 @@
 import { FunctionComponent, useMemo, useState } from 'react'
 import { SNNote } from '@standardnotes/snjs'
 import Icon from '@/Components/Icon/Icon'
-import { useNoteComments } from '@/Comments/useNoteComments'
+import { CommentsApi, useNoteComments } from '@/Comments/useNoteComments'
 import { useMentionCandidates } from '@/Comments/useMentionCandidates'
-import { buildCommentThreads } from '@/Comments/comments'
-import { segmentCommentText } from '@/Comments/mentions'
+import { buildCommentThreads, CommentAnchor, CommentScope } from '@/Comments/comments'
+import { usePrivateNoteComments } from '@/Comments/usePrivateNoteComments'
+import { useApplication } from '@/Components/ApplicationProvider'
+import { MentionCandidate, segmentCommentText } from '@/Comments/mentions'
 import { collaboratorColor, collaboratorInitials } from '@/Components/SuperEditor/Collaboration/collaboratorColor'
 import CommentComposer from './CommentComposer'
 import type { DisplayNoteComment } from '@/Comments/CommentAuthorship'
 
 type Props = {
   note: SNNote
+  anchor?: CommentAnchor
 }
 
 function formatTime(iso: string): string {
@@ -121,11 +124,53 @@ const CommentRow: FunctionComponent<{
  * follow-up; the data model already carries the anchor so the panel can show an
  * "inline" badge + snippet today.
  */
-export const CommentsPanel: FunctionComponent<Props> = ({ note }) => {
-  const { comments, quarantinedCount, addComment, removeComment, setResolved, selfUuid } = useNoteComments(note)
-  const candidates = useMentionCandidates(note)
+type ScopedProps = Props & { scope: CommentScope; setScope: (scope: CommentScope) => void }
+const CommentsPanelContent: FunctionComponent<ScopedProps & { api: CommentsApi; candidates: MentionCandidate[] }> = ({
+  note,
+  anchor,
+  scope,
+  setScope,
+  api,
+  candidates,
+}) => {
+  const application = useApplication()
+  const { quarantinedCount, addComment, removeComment, setResolved, selfUuid } = api
+  const comments = api.comments.filter((comment) => {
+    return anchor?.kind === 'checklist'
+      ? comment.anchor?.kind === 'checklist' && comment.anchor.todoId === anchor.todoId
+      : comment.anchor?.kind !== 'checklist'
+  })
   const [replyingTo, setReplyingTo] = useState<string | null>(null)
   const [showResolved, setShowResolved] = useState(false)
+  const [error, setError] = useState<string>()
+  let canWrite = Boolean(
+    selfUuid &&
+    !note.trashed &&
+    application.isAuthorizedToRenderItem(note) &&
+    !application.sessions.isCurrentSessionReadOnly(),
+  )
+  if (scope === 'collaborative') {
+    const vault = application.vaults.getItemVault(note)
+    canWrite =
+      canWrite &&
+      !note.locked &&
+      !(vault?.isSharedVaultListing() && application.vaultUsers.isCurrentUserReadonlyVaultMember(vault))
+  }
+  const perform = (work: Promise<unknown>) => {
+    setError(undefined)
+    void work.catch((failure: unknown) =>
+      setError(failure instanceof Error ? failure.message : 'The comment could not be saved. Try again.'),
+    )
+  }
+  const submit = async (text: string, parentId?: string) => {
+    if (!canWrite) {
+      return
+    }
+    const saved = await addComment({ text, parentId, anchor })
+    if (!saved) {
+      throw new Error('The comment could not be saved. Check that the note is unlocked and you still have access.')
+    }
+  }
 
   const threads = useMemo(() => buildCommentThreads(comments), [comments])
   const visibleThreads = useMemo(
@@ -134,14 +179,14 @@ export const CommentsPanel: FunctionComponent<Props> = ({ note }) => {
   )
   const resolvedCount = useMemo(() => threads.filter((t) => t.comment.resolved).length, [threads])
 
-  const isSelf = (comment: DisplayNoteComment): boolean => comment.verifiedAuthorUuid === selfUuid
+  const isSelf = (comment: DisplayNoteComment): boolean => canWrite && comment.verifiedAuthorUuid === selfUuid
 
   return (
     <div className="border-border bg-default rounded border p-2.5">
       <div className="mb-2 flex items-center justify-between">
         <div className="text-passive-0 flex items-center gap-1.5 text-xs font-semibold tracking-wide uppercase">
           <Icon type="comment" size="small" />
-          Comments
+          {anchor?.kind === 'checklist' ? 'Item comments' : 'Note comments'}
           {comments.length > 0 && <span className="text-passive-1">({comments.length})</span>}
         </div>
         {resolvedCount > 0 && (
@@ -154,6 +199,27 @@ export const CommentsPanel: FunctionComponent<Props> = ({ note }) => {
           </button>
         )}
       </div>
+      <label className="mb-2 flex items-center gap-2 text-xs">
+        Visibility
+        <select
+          aria-label="Comment visibility"
+          value={scope}
+          onChange={(event) => setScope(event.target.value as CommentScope)}
+        >
+          <option value="private">Private — only you</option>
+          <option value="collaborative">Collaborative — note members</option>
+        </select>
+      </label>
+      <p className="text-passive-1 mb-2 text-xs">
+        {scope === 'private'
+          ? 'Encrypted in your account. Never shared with note members.'
+          : 'Shared with everyone who can read this note.'}
+      </p>
+      {error && (
+        <p role="alert" className="text-danger mb-2 text-xs">
+          {error}
+        </p>
+      )}
 
       <div className="mb-2.5 max-h-80 space-y-3 overflow-y-auto overscroll-contain">
         {quarantinedCount > 0 && (
@@ -169,9 +235,9 @@ export const CommentsPanel: FunctionComponent<Props> = ({ note }) => {
               <CommentRow
                 comment={comment}
                 isSelf={isSelf(comment)}
-                onDelete={() => void removeComment(comment.id)}
-                onToggleResolved={() => void setResolved(comment.id, !comment.resolved)}
-                onReply={() => setReplyingTo((id) => (id === comment.id ? null : comment.id))}
+                onDelete={() => canWrite && perform(removeComment(comment.id))}
+                onToggleResolved={canWrite ? () => perform(setResolved(comment.id, !comment.resolved)) : undefined}
+                onReply={canWrite ? () => setReplyingTo((id) => (id === comment.id ? null : comment.id)) : undefined}
               />
               {replies.map((reply) => (
                 <CommentRow
@@ -179,7 +245,7 @@ export const CommentsPanel: FunctionComponent<Props> = ({ note }) => {
                   comment={reply}
                   isSelf={isSelf(reply)}
                   isReply
-                  onDelete={() => void removeComment(reply.id)}
+                  onDelete={() => canWrite && perform(removeComment(reply.id))}
                 />
               ))}
               {replyingTo === comment.id && (
@@ -190,7 +256,7 @@ export const CommentsPanel: FunctionComponent<Props> = ({ note }) => {
                     submitLabel="Reply"
                     placeholder="Write a reply…"
                     onSubmit={(text) => {
-                      void addComment({ text, parentId: comment.id })
+                      perform(submit(text, comment.id))
                       setReplyingTo(null)
                     }}
                     onCancel={() => setReplyingTo(null)}
@@ -202,8 +268,37 @@ export const CommentsPanel: FunctionComponent<Props> = ({ note }) => {
         )}
       </div>
 
-      <CommentComposer candidates={candidates} onSubmit={(text) => void addComment({ text })} />
+      {canWrite ? (
+        <CommentComposer candidates={candidates} onSubmit={(text) => perform(submit(text))} />
+      ) : (
+        <p className="text-passive-1 text-xs">Comments are read-only for this account or note.</p>
+      )}
     </div>
+  )
+}
+
+const PrivateCommentsPanel: FunctionComponent<ScopedProps> = (props) => {
+  const api = usePrivateNoteComments(props.note)
+  return <CommentsPanelContent {...props} api={api} candidates={[]} />
+}
+
+const CollaborativeCommentsPanel: FunctionComponent<ScopedProps> = (props) => {
+  const api = useNoteComments(props.note)
+  const candidates = useMentionCandidates(props.note)
+  return <CommentsPanelContent {...props} api={api} candidates={candidates} />
+}
+
+/** Private is the default and never mounts the shared-key/room-access hook. */
+export const CommentsPanel: FunctionComponent<Props> = ({ note, anchor }) => {
+  const application = useApplication()
+  const scopeKey = `${application.sessions.getUser()?.uuid ?? 'offline'}:${note.uuid}:${anchor?.kind === 'checklist' ? anchor.todoId : 'note'}`
+  const [state, setState] = useState<{ key: string; scope: CommentScope }>({ key: scopeKey, scope: 'private' })
+  const scope = state.key === scopeKey ? state.scope : 'private'
+  const props = { note, anchor, scope, setScope: (value: CommentScope) => setState({ key: scopeKey, scope: value }) }
+  return scope === 'private' ? (
+    <PrivateCommentsPanel key={scopeKey} {...props} />
+  ) : (
+    <CollaborativeCommentsPanel key={scopeKey} {...props} />
   )
 }
 

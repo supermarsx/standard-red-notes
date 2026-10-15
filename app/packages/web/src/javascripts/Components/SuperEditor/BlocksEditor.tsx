@@ -11,6 +11,9 @@ import SuperHistoryPlugin from './Plugins/HistoryPlugin/SuperHistoryPlugin'
 import { LinkPlugin } from '@lexical/react/LexicalLinkPlugin'
 import { ListPlugin } from '@lexical/react/LexicalListPlugin'
 import { EditorState, LexicalEditor } from 'lexical'
+import { SNNote } from '@standardnotes/snjs'
+import { ChecklistPanel } from './Checklist/ChecklistPanel'
+import { CommentsPlugin } from './Plugins/CommentsPlugin/CommentsPlugin'
 import HorizontalRulePlugin from './Plugins/HorizontalRulePlugin'
 import CollapsiblePlugin from './Plugins/CollapsiblePlugin'
 import FootnotePlugin from './Plugins/FootnotePlugin/FootnotePlugin'
@@ -54,6 +57,7 @@ import { editorResumeStorageKey } from './Plugins/EditorResume/EditorResumeStora
 type BlocksEditorProps = {
   /** Exact note lifetime owned by this composer; required for aggregate todo mutations. */
   noteUuid?: string
+  commentNote?: SNNote
   /**
    * Standard Red Notes (last-edit-loss fix): `bypassDebounce` is true ONLY when the
    * change originates from a lifecycle flush (note-switch/unmount/blur/logout/unload),
@@ -88,6 +92,7 @@ type BlocksEditorProps = {
 
 export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
   noteUuid,
+  commentNote,
   onChange,
   className,
   children,
@@ -325,6 +330,8 @@ export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
       {noteUuid && <AssistantStructuralBridgePlugin noteUuid={noteUuid} />}
       {noteUuid && <AssistantChangeDecorationsPlugin noteUuid={noteUuid} />}
       {!isMobile && <ToolbarPlugin noteUuid={noteUuid} />}
+      {commentNote && <ChecklistPanel note={commentNote} />}
+      <CommentsPlugin />
       {/*
         Standard Red Notes: dock the on-screen navigation sidebar (Word-style
         outline of headings + bookmarks) to the LEFT of the editor content. The

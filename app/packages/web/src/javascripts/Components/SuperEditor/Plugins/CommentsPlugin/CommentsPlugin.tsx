@@ -1,7 +1,13 @@
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
 import { $getSelection, $isRangeSelection, COMMAND_PRIORITY_EDITOR, createCommand } from 'lexical'
 import { useEffect } from 'react'
-import type { SuperCommentAnchor } from '@/Comments/comments'
+import type { CommentAnchor, SuperCommentAnchor } from '@/Comments/comments'
+import { $isListItemNode } from '@lexical/list'
+import {
+  $ensureChecklistTodoId,
+  $getChecklistTodoId,
+  $isChecklistItemNode,
+} from '../../Lexical/Nodes/ChecklistItemNode'
 
 /**
  * Standard Red Notes: bridge between the Super (Lexical) editor and the comments
@@ -20,7 +26,7 @@ import type { SuperCommentAnchor } from '@/Comments/comments'
  * when a comment is clicked — both can be built on top of this same node key
  * without changing the stored data model.
  */
-export const CAPTURE_COMMENT_ANCHOR_COMMAND = createCommand<(anchor: SuperCommentAnchor | null) => void>(
+export const CAPTURE_COMMENT_ANCHOR_COMMAND = createCommand<(anchor: CommentAnchor | null) => void>(
   'CAPTURE_COMMENT_ANCHOR_COMMAND',
 )
 
@@ -40,6 +46,22 @@ export function CommentsPlugin(): null {
         }
         try {
           const anchorNode = selection.anchor.getNode()
+          let current = anchorNode
+          while (current.getParent()) {
+            if ($isListItemNode(current) && $isChecklistItemNode(current)) {
+              const todoId =
+                $getChecklistTodoId(current) ?? (editor.isEditable() ? $ensureChecklistTodoId(current) : undefined)
+              if (todoId) {
+                report({
+                  kind: 'checklist',
+                  todoId,
+                  snippet: current.getTextContent().trim().slice(0, SNIPPET_MAX) || undefined,
+                })
+                return true
+              }
+            }
+            current = current.getParent()!
+          }
           const block = anchorNode.getTopLevelElementOrThrow()
           const text = block.getTextContent().trim()
           const anchor: SuperCommentAnchor = { kind: 'super', blockKey: block.getKey() }

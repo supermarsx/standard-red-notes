@@ -124,6 +124,7 @@ export const PrefDefaults = {
   [PrefKey.RecentNotesHistory]: [],
   [PrefKey.RecentNotesRecordingEnabled]: true,
   [PrefKey.RecentNotesHistoryLimit]: 25,
+  [PrefKey.PrivateNoteComments]: undefined,
   [PrefKey.AutoVaultRules]: [],
   // Standard Red Notes: custom manual orderings start empty; until the user
   // drags to reorder, the Custom sort falls back to its stable secondary sort.

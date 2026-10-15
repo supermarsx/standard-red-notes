@@ -211,6 +211,7 @@ export enum PrefKey {
   RecentNotesHistory = 'recentNotesHistory',
   RecentNotesRecordingEnabled = 'recentNotesRecordingEnabled',
   RecentNotesHistoryLimit = 'recentNotesHistoryLimit',
+  PrivateNoteComments = 'privateNoteComments',
   AutoVaultRules = 'autoVaultRules',
   // Standard Red Notes: explicit user-defined ("custom") manual orderings, each
   // stored as an array of item uuids. These drive ordering when the Custom sort
@@ -496,6 +497,7 @@ export type PrefValue = {
   [PrefKey.RecentNotesHistory]: RecentNoteEntry[]
   [PrefKey.RecentNotesRecordingEnabled]: boolean
   [PrefKey.RecentNotesHistoryLimit]: number
+  [PrefKey.PrivateNoteComments]: { version: 1; ownerUuid: string; notes: Record<string, unknown[]> } | undefined
   [PrefKey.AutoVaultRules]: AutoVaultRulePreference[]
   [PrefKey.CustomNotesOrder]: string[]
   [PrefKey.CustomFoldersOrder]: string[]

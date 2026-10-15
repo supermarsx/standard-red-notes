@@ -2,12 +2,15 @@ import { normalizeChecklistDueAt } from '../SuperEditor/Checklist/checklistDueDa
 import { normalizeChecklistRecurrence, type ChecklistRecurrence } from '../SuperEditor/Checklist/checklistRecurrence'
 import {
   CHECKLIST_DUE_AT_STATE_KEY,
+  CHECKLIST_FLAGS_STATE_KEY,
   CHECKLIST_OCCURRENCE_SUMMARY_STATE_KEY,
   CHECKLIST_RECURRENCE_STATE_KEY,
   CHECKLIST_SCHEDULE_STATE_KEY,
   CHECKLIST_TODO_ID_STATE_KEY,
   CHECKLIST_SCHEDULE_VERSION,
   normalizeChecklistOccurrenceSummary,
+  normalizeChecklistFlags,
+  type ChecklistPriority,
   normalizeChecklistSchedule,
   normalizeChecklistTodoId,
   type ChecklistOccurrenceSummaryState,
@@ -26,6 +29,8 @@ export type SuperChecklistTodo = {
   locator: string
   text: string
   checked: boolean
+  pinned?: boolean
+  priority?: ChecklistPriority
   dueAt?: string
   recurrence?: ChecklistRecurrence
   /**
@@ -259,6 +264,8 @@ function collectCandidates(parsed: unknown, options: TodoHierarchyOptions): Todo
           locator,
           text,
           checked: item.checked === true,
+          pinned: normalizeChecklistFlags(nodeState(item)?.[CHECKLIST_FLAGS_STATE_KEY])?.pinned ?? false,
+          priority: normalizeChecklistFlags(nodeState(item)?.[CHECKLIST_FLAGS_STATE_KEY])?.priority ?? 'normal',
           dueAt: schedule?.dueAt,
           recurrence: schedule?.recurrence,
           // Section base plus checklist nesting: the two sources of structure

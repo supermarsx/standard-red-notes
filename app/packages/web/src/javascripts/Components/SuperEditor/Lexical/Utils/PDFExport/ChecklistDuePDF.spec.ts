@@ -26,7 +26,7 @@ Object.defineProperty(globalThis, 'window', { configurable: true, value: globalT
 const { $createListItemNode, $createListNode, ListItemNode, ListNode } =
   require('@lexical/list') as typeof import('@lexical/list')
 const { $createTextNode, $getRoot, createEditor } = require('lexical') as typeof import('lexical')
-const { $setChecklistDueAt, $setChecklistRecurrence } =
+const { $setChecklistDueAt, $setChecklistFlags, $setChecklistRecurrence } =
   require('../../Nodes/ChecklistItemNode') as typeof import('../../Nodes/ChecklistItemNode')
 const { createChecklistRecurrence } =
   require('../../../Checklist/checklistRecurrence') as typeof import('../../../Checklist/checklistRecurrence')
@@ -237,6 +237,21 @@ const loadArtifactRenderer = (): Promise<ArtifactRenderer> => {
 }
 
 describe('checklist due date PDF projection', () => {
+  it('preserves pin and priority labels without requiring a deadline', () => {
+    const editor = createSingleChecklistEditor('Important task', false)
+    editor.update(
+      () => {
+        const list = $getRoot().getFirstChild() as ListNodeType
+        $setChecklistFlags(list.getFirstChild() as ListItemNodeType, { pinned: true, priority: 'high' })
+      },
+      { discrete: true },
+    )
+    const data = editor.getEditorState().read(() => {
+      const list = $getRoot().getFirstChild() as ListNodeType
+      return getPDFDataNodeFromLexicalNode(list.getFirstChild()!, [], false, EXPORT_NOW)
+    })
+    expect(projectedText(data)).toContain('Pinned · High priority')
+  })
   it('projects a normal checkbox row with label and due text, then indents its nested list below', () => {
     const editor = createNestedChecklistEditor()
 

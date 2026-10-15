@@ -20,6 +20,10 @@ import { PrefKey } from './PrefKey'
  * therefore a storage migration, not a rename.
  */
 describe('PrefDefaults', () => {
+  it('does not create a private-comment payload until the account adds a comment', () => {
+    expect(PrefKey.PrivateNoteComments).toBe('privateNoteComments')
+    expect(PrefDefaults[PrefKey.PrivateNoteComments]).toBeUndefined()
+  })
   it('has a default for every PrefKey member', () => {
     for (const key of Object.values(PrefKey)) {
       expect(Object.keys(PrefDefaults)).toContain(key)

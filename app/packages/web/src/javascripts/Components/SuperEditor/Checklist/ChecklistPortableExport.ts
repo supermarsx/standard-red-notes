@@ -1,6 +1,11 @@
 import { $isListNode } from '@lexical/list'
 import { $createTextNode, $getRoot, $isElementNode, LexicalNode } from 'lexical'
-import { $getChecklistDueAt, $getChecklistRecurrence, $isChecklistItemNode } from '../Lexical/Nodes/ChecklistItemNode'
+import {
+  $getChecklistDueAt,
+  $getChecklistFlags,
+  $getChecklistRecurrence,
+  $isChecklistItemNode,
+} from '../Lexical/Nodes/ChecklistItemNode'
 import { checklistDueExportText } from './checklistDueDate'
 import { checklistRecurrenceSummary } from './checklistRecurrence'
 
@@ -25,9 +30,15 @@ export function $projectChecklistDueDatesForPortableExport(now = Date.now()): nu
     if ($isChecklistItemNode(node)) {
       const dueAt = $getChecklistDueAt(node)
       const dueText = dueAt ? checklistDueExportText(dueAt, Boolean(node.getChecked()), now) : undefined
-      if (dueText) {
-        const recurrenceText = checklistRecurrenceSummary($getChecklistRecurrence(node), true)
-        const projection = $createTextNode(` - ${dueText}${recurrenceText ? ` · ${recurrenceText}` : ''}`)
+      const flags = $getChecklistFlags(node)
+      const labels = [
+        flags.pinned ? 'Pinned' : undefined,
+        flags.priority !== 'normal' ? `${flags.priority === 'high' ? 'High' : 'Low'} priority` : undefined,
+        dueText,
+        checklistRecurrenceSummary($getChecklistRecurrence(node), true),
+      ].filter(Boolean)
+      if (labels.length) {
+        const projection = $createTextNode(` - ${labels.join(' · ')}`)
         const nestedList = node.getChildren().find($isListNode)
         if (nestedList) {
           nestedList.insertBefore(projection)

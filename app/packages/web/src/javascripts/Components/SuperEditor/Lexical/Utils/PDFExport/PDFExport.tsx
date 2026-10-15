@@ -53,7 +53,12 @@ import {
   PDF_PAGE_PADDING,
   PDF_QUOTE_INNER_GAP,
 } from './PDFLayoutConstants'
-import { $getChecklistDueAt, $getChecklistRecurrence, $isChecklistItemNode } from '../../Nodes/ChecklistItemNode'
+import {
+  $getChecklistDueAt,
+  $getChecklistFlags,
+  $getChecklistRecurrence,
+  $isChecklistItemNode,
+} from '../../Nodes/ChecklistItemNode'
 import { checklistDueExportText } from '../../../Checklist/checklistDueDate'
 import { checklistRecurrenceSummary } from '../../../Checklist/checklistRecurrence'
 
@@ -471,15 +476,21 @@ export const getPDFDataNodeFromLexicalNode = (
     const sourceChildren = node.getChildren()
     const labelChildren = (children ?? []).filter((_, index) => !$isListNode(sourceChildren[index]))
     const nestedListChildren = (children ?? []).filter((_, index) => $isListNode(sourceChildren[index]))
-    const dueAt = $isChecklistItemNode(node) ? $getChecklistDueAt(node) : undefined
-    if (dueAt) {
-      const dueText = checklistDueExportText(dueAt, Boolean(node.getChecked()), now)
-      if (dueText) {
-        const recurrenceText = checklistRecurrenceSummary($getChecklistRecurrence(node), true)
+    if ($isChecklistItemNode(node)) {
+      const dueAt = $getChecklistDueAt(node)
+      const dueText = dueAt ? checklistDueExportText(dueAt, Boolean(node.getChecked()), now) : undefined
+      const flags = $getChecklistFlags(node)
+      const labels = [
+        flags.pinned ? 'Pinned' : undefined,
+        flags.priority !== 'normal' ? `${flags.priority === 'high' ? 'High' : 'Low'} priority` : undefined,
+        dueText,
+        checklistRecurrenceSummary($getChecklistRecurrence(node), true),
+      ].filter(Boolean)
+      if (labels.length) {
         const dueNode: PDFDataNode = {
           type: 'Text',
           style: { color: '#72767e', fontSize: 9 },
-          children: ` - ${dueText}${recurrenceText ? ` · ${recurrenceText}` : ''}`,
+          children: ` - ${labels.join(' · ')}`,
         }
         labelChildren.push(dueNode)
       }

@@ -62,6 +62,9 @@ function canonicalAnchor(comment: NoteComment): unknown {
   if (!anchor) {
     return null
   }
+  if (anchor.kind === 'checklist') {
+    return ['checklist', anchor.todoId, anchor.snippet ?? null]
+  }
   return anchor.kind === 'super'
     ? ['super', anchor.blockKey, anchor.snippet ?? null]
     : ['plain', anchor.start, anchor.end, anchor.snippet ?? null]

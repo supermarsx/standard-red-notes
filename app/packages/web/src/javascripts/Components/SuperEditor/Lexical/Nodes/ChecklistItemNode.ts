@@ -14,6 +14,44 @@ export const CHECKLIST_DUE_AT_STATE_KEY = 'srnChecklistDueAt'
 export const CHECKLIST_RECURRENCE_STATE_KEY = 'srnChecklistRecurrence'
 export const CHECKLIST_OCCURRENCE_SUMMARY_STATE_KEY = 'srnChecklistOccurrenceSummary'
 export const CHECKLIST_SCHEDULE_VERSION = 1
+export const CHECKLIST_FLAGS_STATE_KEY = 'srnChecklistFlags'
+export type ChecklistPriority = 'high' | 'normal' | 'low'
+export type ChecklistFlags = { version: 1; pinned: boolean; priority: ChecklistPriority }
+
+export function normalizeChecklistFlags(value: unknown): ChecklistFlags | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined
+  }
+  const flags = value as Record<string, unknown>
+  if (
+    flags.version !== 1 ||
+    typeof flags.pinned !== 'boolean' ||
+    !['high', 'normal', 'low'].includes(flags.priority as string)
+  ) {
+    return undefined
+  }
+  return { version: 1, pinned: flags.pinned, priority: flags.priority as ChecklistPriority }
+}
+
+const checklistFlagsState = createState(CHECKLIST_FLAGS_STATE_KEY, {
+  parse: normalizeChecklistFlags,
+  isEqual: (left, right) => left?.pinned === right?.pinned && left?.priority === right?.priority,
+  resetOnCopyNode: true,
+})
+
+export function $getChecklistFlags(item: ListItemNode): ChecklistFlags {
+  return $getState(item, checklistFlagsState) ?? { version: 1, pinned: false, priority: 'normal' }
+}
+
+export function $setChecklistFlags(
+  item: ListItemNode,
+  patch: Partial<Pick<ChecklistFlags, 'pinned' | 'priority'>>,
+): void {
+  const flags = normalizeChecklistFlags({ ...$getChecklistFlags(item), ...patch })
+  if (flags) {
+    $setState(item, checklistFlagsState, flags)
+  }
+}
 export const CHECKLIST_OCCURRENCE_SUMMARY_VERSION = 1
 
 export type ChecklistSchedule = {

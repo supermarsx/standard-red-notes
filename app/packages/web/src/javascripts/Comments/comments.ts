@@ -139,7 +139,10 @@ export type PlainCommentAnchor = {
   snippet?: string
 }
 
-export type CommentAnchor = SuperCommentAnchor | PlainCommentAnchor
+/** A persisted checklist identity, stable across editor reloads and room merges. */
+export type ChecklistCommentAnchor = { kind: 'checklist'; todoId: string; snippet?: string }
+export type CommentScope = 'private' | 'collaborative'
+export type CommentAnchor = SuperCommentAnchor | PlainCommentAnchor | ChecklistCommentAnchor
 
 /** A single comment in a note's thread. */
 export type NoteComment = {
@@ -256,7 +259,7 @@ export function normalizeCommentMutationClockProof(value: unknown): CommentMutat
   }
 }
 
-function utf8ByteLength(value: string): number {
+export function utf8ByteLength(value: string): number {
   let bytes = 0
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index)
@@ -289,6 +292,23 @@ function normalizeAnchor(value: unknown): CommentAnchor | undefined {
     return undefined
   }
   const candidate = value as Record<string, unknown>
+  if (candidate.kind === 'checklist') {
+    if (
+      typeof candidate.todoId !== 'string' ||
+      candidate.todoId.length < 8 ||
+      candidate.todoId.length > 96 ||
+      !/^[A-Za-z0-9_-]+$/.test(candidate.todoId) ||
+      (candidate.snippet !== undefined &&
+        !isBoundedNonEmptyString(candidate.snippet, MAX_COMMENT_ANCHOR_SNIPPET_LENGTH))
+    ) {
+      return undefined
+    }
+    return {
+      kind: 'checklist',
+      todoId: candidate.todoId,
+      ...(typeof candidate.snippet === 'string' ? { snippet: candidate.snippet } : {}),
+    }
+  }
   if (candidate.kind === 'super' && isBoundedNonEmptyString(candidate.blockKey, MAX_COMMENT_ANCHOR_BLOCK_KEY_LENGTH)) {
     const anchor: SuperCommentAnchor = { kind: 'super', blockKey: candidate.blockKey }
     if (isBoundedNonEmptyString(candidate.snippet, MAX_COMMENT_ANCHOR_SNIPPET_LENGTH)) {

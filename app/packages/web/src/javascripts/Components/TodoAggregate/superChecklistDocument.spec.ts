@@ -1,5 +1,6 @@
 import {
   CHECKLIST_DUE_AT_STATE_KEY,
+  CHECKLIST_FLAGS_STATE_KEY,
   CHECKLIST_OCCURRENCE_SUMMARY_STATE_KEY,
   CHECKLIST_OCCURRENCE_SUMMARY_VERSION,
   CHECKLIST_RECURRENCE_STATE_KEY,
@@ -45,6 +46,14 @@ const documentText = (): string =>
   })
 
 describe('Super checklist persisted document parsing', () => {
+  it('extracts pin/priority metadata while retaining persisted document order and safe legacy defaults', () => {
+    const doc = JSON.parse(documentText())
+    doc.root.children[0].children[1].$ = { [CHECKLIST_FLAGS_STATE_KEY]: { version: 1, pinned: true, priority: 'high' } }
+    const rows = parseSuperChecklistDocument(JSON.stringify(doc))
+    expect(rows.map((row) => row.text)).toEqual(['Alpha', 'Legacy'])
+    expect(rows[0]).toMatchObject({ pinned: false, priority: 'normal' })
+    expect(rows[1]).toMatchObject({ pinned: true, priority: 'high' })
+  })
   it('extracts stable identity, legacy locator and canonical due time', () => {
     const items = parseSuperChecklistDocument(documentText())
     expect(items[0]).toMatchObject({

@@ -1,10 +1,23 @@
 import { $createListItemNode, $createListNode, ListItemNode, ListNode } from '@lexical/list'
 import { $createTextNode, $getRoot, createEditor } from 'lexical'
-import { $setChecklistDueAt, $setChecklistRecurrence } from '../Lexical/Nodes/ChecklistItemNode'
+import { $setChecklistDueAt, $setChecklistFlags, $setChecklistRecurrence } from '../Lexical/Nodes/ChecklistItemNode'
 import { $projectChecklistDueDatesForPortableExport } from './ChecklistPortableExport'
 import { createChecklistRecurrence } from './checklistRecurrence'
 
 describe('portable checklist deadline projection', () => {
+  it('includes pinned/non-default priorities in exported text even without a due date', () => {
+    const editor = createEditor({ nodes: [ListNode, ListItemNode] })
+    editor.update(
+      () => {
+        const item = $createListItemNode(false).append($createTextNode('Important task'))
+        $setChecklistFlags(item, { pinned: true, priority: 'high' })
+        $getRoot().append($createListNode('check').append(item))
+        expect($projectChecklistDueDatesForPortableExport()).toBe(1)
+        expect(item.getTextContent()).toBe('Important task - Pinned · High priority')
+      },
+      { discrete: true },
+    )
+  })
   it('places parent and child deadlines next to their own labels', () => {
     const editor = createEditor({ nodes: [ListNode, ListItemNode] })
     let text = ''
