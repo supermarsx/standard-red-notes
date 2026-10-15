@@ -984,6 +984,35 @@ describe('SyncService local-only PERSISTENCE (silent data-loss regression)', () 
     expect(persistedUuids()).toContain(NORMAL_UUID)
   })
 
+  it('completes its own LocalOnly disk checkpoint without awaiting a queued blocked network sync', async () => {
+    const service = createService([makeDirtyItem(NORMAL_UUID, false)])
+    const disk = createDeferred()
+    const network = createDeferred<unknown>()
+    persistPayloads.mockImplementation(() => disk.promise)
+    const sync = jest.spyOn(service, 'sync').mockImplementation(() => network.promise)
+    const internal = service as unknown as {
+      performSync: (options: Record<string, unknown>) => Promise<unknown>
+      spawnQueue: Array<{ options: Record<string, unknown>; resolve: jest.Mock; reject: jest.Mock }>
+    }
+    internal.spawnQueue.push({ options: {}, resolve: jest.fn(), reject: jest.fn() })
+    let complete = false
+    const checkpoint = internal.performSync({ mode: SyncMode.LocalOnly, awaitAll: false }).then(() => {
+      complete = true
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(complete).toBe(false)
+    expect(persistPayloads).toHaveBeenCalledTimes(1)
+    disk.resolve()
+    await checkpoint
+    expect(persistedUuids()).toContain(NORMAL_UUID)
+    expect(complete).toBe(true)
+    expect(sync).toHaveBeenCalledWith(expect.objectContaining({ source: SyncSource.SpawnQueue }))
+    network.resolve(undefined)
+    await Promise.resolve()
+    sync.mockRestore()
+  })
+
   it('prepareForSync excludes a local-only item from the returned upload set', async () => {
     const service = createService([makeDirtyItem(LOCAL_ONLY_UUID, true), makeDirtyItem(NORMAL_UUID, false)])
 

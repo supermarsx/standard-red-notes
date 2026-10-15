@@ -714,7 +714,7 @@ describe('NotesController comment mutation serialization and authorization', () 
     expect(harness.application.sync.sync).toHaveBeenCalledTimes(2)
     expect(harness.application.sync.sync).toHaveBeenCalledWith()
     expect(harness.application.sync.sync).toHaveBeenCalledWith(
-      expect.objectContaining({ awaitAll: true, mode: 'LocalOnly' }),
+      expect.objectContaining({ awaitAll: false, mode: 'LocalOnly' }),
     )
   })
 

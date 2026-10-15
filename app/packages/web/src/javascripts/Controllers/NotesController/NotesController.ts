@@ -1184,7 +1184,9 @@ export class NotesController
       await this.application.sync.sync({
         mode: SyncMode.LocalOnly,
         queueStrategy: SyncQueueStrategy.ForceSpawnNew,
-        awaitAll: true,
+        // This checkpoint owns local persistence; an unrelated network request
+        // may itself be waiting for the comment relay that follows readback.
+        awaitAll: false,
         isUserInitiated: true,
       })
       if (!hasCurrentIdentity()) {
