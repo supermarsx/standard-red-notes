@@ -305,16 +305,22 @@ export class Database {
       this.rejectReadOnTransactionFailure(transaction, reject, 'getPayloadsForKeys')
       const payloads: any = []
       /**
-       * We intentionally skip-and-continue on unreadable (corrupt/partial) rows so a
-       * single bad record can't abort the whole cold-load. But a skipped row must not
-       * vanish silently — collect the affected uuids and warn so a caller/UI can see
-       * that N items could not be read. Return shape is unchanged (Promise<any[]>) to
-       * avoid breaking callers (getDatabaseEntries in WebOrDesktopDevice).
+       * A key snapshot can outlive rows deleted by sync or another tab. An
+       * answered get with no row is absence, not a failed database read. Keep
+       * actual request errors separate so legitimate deletion is not reported
+       * as unreadable data; neither case may abort unrelated successful reads.
        */
       const skippedUuids: string[] = []
+      let missingCount = 0
       let numComplete = 0
       const finishIfDone = () => {
         if (numComplete === keys.length) {
+          if (missingCount > 0) {
+            // eslint-disable-next-line no-console -- A successful absent-row read is informational, not a database failure.
+            console.info(
+              `[Database] getPayloadsForKeys: ${missingCount} requested item(s) are no longer present locally.`,
+            )
+          }
           if (skippedUuids.length > 0) {
             console.warn(
               `[Database] getPayloadsForKeys: ${skippedUuids.length} item(s) could not be read and were skipped: ${skippedUuids.join(', ')}`,
@@ -331,11 +337,7 @@ export class Database {
           if (result) {
             payloads.push(result)
           } else {
-            /**
-             * A get that succeeds but returns no result means the row is absent. This
-             * is also a (quieter) form of silent loss for a requested key, so record it.
-             */
-            skippedUuids.push(key)
+            missingCount++
           }
           numComplete++
           finishIfDone()

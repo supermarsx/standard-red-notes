@@ -251,9 +251,9 @@ describe('Database silent-data-loss fixes', () => {
       expect(payloads).toEqual([{ uuid: 'a' }])
       expect(warnSpy).toHaveBeenCalledTimes(1)
       const message = warnSpy.mock.calls[0][0] as string
-      expect(message).toContain('2 item(s) could not be read')
+      expect(message).toContain('1 item(s) could not be read')
       expect(message).toContain('b')
-      expect(message).toContain('c')
+      expect(message.split(': ').at(-1)).toBe('b')
 
       warnSpy.mockRestore()
     })
@@ -283,6 +283,29 @@ describe('Database silent-data-loss fixes', () => {
       expect(warnSpy).not.toHaveBeenCalled()
 
       warnSpy.mockRestore()
+    })
+
+    it('treats rows deleted after a key snapshot as absent rather than unreadable', async () => {
+      const transaction = new MockTransaction(null)
+      const store = new MockObjectStore(
+        [],
+        [
+          { behavior: 'success', result: undefined },
+          { behavior: 'success', result: undefined },
+        ],
+        transaction,
+      )
+      transaction.setStore(store)
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {})
+      const infoSpy = jest.spyOn(console, 'info').mockImplementation(() => {})
+      const database = buildDatabaseWithMock({ transaction: () => transaction })
+      expect(await database.getPayloadsForKeys(['deleted-a', 'deleted-b'])).toEqual([])
+      expect(warnSpy).not.toHaveBeenCalled()
+      expect(infoSpy).toHaveBeenCalledWith(
+        '[Database] getPayloadsForKeys: 2 requested item(s) are no longer present locally.',
+      )
+      warnSpy.mockRestore()
+      infoSpy.mockRestore()
     })
   })
 
