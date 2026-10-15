@@ -1,3 +1,4 @@
+import ToolbarButton from './ToolbarButton'
 import Icon from '@/Components/Icon/Icon'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
 import useModal from '../../Lexical/Hooks/useModal'
@@ -50,19 +51,7 @@ import {
 import { $isHeadingNode, $isQuoteNode } from '@lexical/rich-text'
 import { $patchStyleText, $getSelectionStyleValueForProperty, $setBlocksType } from '@lexical/selection'
 import { $createCodeNode, $isCodeNode } from '@lexical/code'
-import {
-  ComponentPropsWithoutRef,
-  ForwardedRef,
-  Fragment,
-  ReactNode,
-  forwardRef,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from 'react'
+import { Fragment, ReactNode, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { CenterAlignBlock, JustifyAlignBlock, LeftAlignBlock, RightAlignBlock } from '../Blocks/Alignment'
 import { BulletedListBlock, ChecklistBlock, NumberedListBlock } from '../Blocks/List'
 import { CodeBlock } from '../Blocks/Code'
@@ -82,7 +71,7 @@ import { useApplication } from '@/Components/ApplicationProvider'
 import { InsertRemoteImageDialog } from '../RemoteImagePlugin/RemoteImagePlugin'
 import SymbolPickerDialog from '../SymbolPicker/SymbolPickerDialog'
 import StyledTooltip from '@/Components/StyledTooltip/StyledTooltip'
-import { Toolbar, ToolbarItem, useToolbarStore } from '@ariakit/react'
+import { Toolbar, useToolbarStore } from '@ariakit/react'
 import { URL_REGEX } from '@/Constants/Constants'
 import Popover from '@/Components/Popover/Popover'
 import { TableOfContentsPlugin } from '@lexical/react/LexicalTableOfContentsPlugin'
@@ -468,93 +457,6 @@ const toCamelCase = (text: string): string => {
     })
     .join('')
 }
-
-interface ToolbarButtonProps extends Omit<ComponentPropsWithoutRef<'button'>, 'name'> {
-  name: NonNullable<ReactNode>
-  active?: boolean
-  iconName?: string
-  children?: ReactNode
-  onSelect: () => void
-}
-
-const ToolbarButton = forwardRef(
-  (
-    { name, active, iconName, children, onSelect, disabled, className, ...props }: ToolbarButtonProps,
-    ref: ForwardedRef<HTMLButtonElement>,
-  ) => {
-    const [editor] = useLexicalComposerContext()
-
-    const isMobile = useMediaQuery(MutuallyExclusiveMediaQueryBreakpoints.sm)
-    const parentElement = editor.getRootElement()?.parentElement ?? document.body
-
-    return (
-      <StyledTooltip
-        showOnMobile
-        showOnHover
-        label={name}
-        side="top"
-        portalElement={isMobile ? parentElement : undefined}
-        documentElement={parentElement}
-      >
-        <ToolbarItem
-          className={classNames(
-            'flex items-center justify-center rounded-md p-0.5 transition-colors duration-75 select-none focus:shadow-none focus:outline-none md:border md:border-transparent',
-            'hover:bg-passive-4 focus-visible:bg-passive-4 active:bg-passive-3 hover:md:border-border',
-            // Disabled buttons keep aria-disabled (not the native attribute) so they
-            // stay hoverable and their tooltip still explains them; override the
-            // interactive styling back so they read as greyed and inert.
-            'aria-disabled:cursor-default aria-disabled:opacity-50 aria-disabled:hover:bg-transparent aria-disabled:active:bg-transparent aria-disabled:hover:md:border-transparent',
-            className,
-          )}
-          onClick={() => {
-            if (!disabled) {
-              onSelect()
-            }
-          }}
-          onMouseDown={(event) => {
-            event.preventDefault()
-          }}
-          onContextMenu={(event) => {
-            editor.focus()
-            event.preventDefault()
-          }}
-          disabled={disabled}
-          // Keep disabled buttons hoverable (aria-disabled, not the native disabled
-          // attribute) so their StyledTooltip still explains what the greyed-out
-          // button does instead of being inert.
-          accessibleWhenDisabled
-          ref={ref}
-          {...props}
-        >
-          <div
-            className={classNames(
-              // Desktop padding is deliberately tighter than the touch target
-              // kept for mobile (p-2.5): three rows of these make up most of the
-              // ribbon's height, so each 2px here is 12px off the writing area.
-              'flex items-center justify-center rounded-md p-2.5 transition-colors duration-75 md:p-1.5',
-              active && 'bg-info text-info-contrast shadow-sm',
-            )}
-          >
-            {children ? (
-              children
-            ) : iconName ? (
-              <Icon
-                type={iconName}
-                size="custom"
-                // Icon size is driven by the `.super-toolbar-icon` class, which
-                // resolves `var(--super-toolbar-icon-size, 0.875rem)` (set on the
-                // toolbar root from the SuperToolbarIconSize pref). The class's
-                // fallback guarantees a concrete size even if the var is unset, so
-                // every toolbar icon scales together and can never collapse.
-                className="super-toolbar-icon !text-current [&>path]:!text-current"
-              />
-            ) : null}
-          </div>
-        </ToolbarItem>
-      </StyledTooltip>
-    )
-  },
-)
 
 const ToolbarSeparator = () => (
   <div aria-hidden className="bg-border mx-1 my-1 h-6 w-px flex-shrink-0 self-center" role="separator" />
@@ -4195,6 +4097,18 @@ const ToolbarPlugin = ({
                       )
                     })
                   : floatingSelectionToolbar}
+                {note && canShowAllItems && effectiveTabId === 'checklistTab' && (
+                  <ChecklistPanel
+                    key={note.uuid}
+                    note={note}
+                    activeSection={effectiveTabId === 'checklistTab' ? 'checklist' : null}
+                    onOpenReview={() => {
+                      selectRibbonTab('review')
+                      controlsState.openComments()
+                    }}
+                    flushChanges={flushChanges}
+                  />
+                )}
               </Toolbar>
             )}
             {isMobile && (
@@ -4256,38 +4170,47 @@ const ToolbarPlugin = ({
             {note && canShowAllItems && (
               <>
                 {isReviewActive && (
-                  <div className="flex w-full flex-wrap gap-2 p-2" aria-label="Review tools">
-                    <button
-                      type="button"
-                      className="border-border hover:bg-contrast rounded border px-3 py-1 text-sm"
-                      onClick={() => controlsState.openComments()}
+                  <Toolbar
+                    className="super-toolbar flex flex-grow items-center gap-1.5 px-1 pt-1 pb-1"
+                    store={toolbarStore}
+                  >
+                    <div
+                      role="group"
+                      aria-label="Review tools"
+                      className="super-toolbar-group bg-contrast flex flex-shrink-0 flex-col rounded-lg px-1 py-0.5"
                     >
-                      Show comments
-                    </button>
-                    <button
-                      type="button"
-                      className="border-border hover:bg-contrast rounded border px-3 py-1 text-sm"
-                      onMouseDown={(event) => event.preventDefault()}
-                      onClick={() =>
-                        editor.dispatchCommand(CAPTURE_COMMENT_ANCHOR_COMMAND, (anchor) =>
-                          controlsState.openComments(anchor ?? undefined),
-                        )
-                      }
-                    >
-                      New comment on selection
-                    </button>
-                  </div>
+                      <div className="flex flex-col items-start justify-center gap-0.5 md:min-h-[6.25rem]">
+                        <ToolbarButton
+                          name="Show comments"
+                          iconName="comment"
+                          onSelect={() => controlsState.openComments()}
+                        >
+                          <Icon type="comment" size="small" />
+                          <span className="ml-1.5 text-xs">Show comments</span>
+                        </ToolbarButton>
+                        <ToolbarButton
+                          name="New comment on selection"
+                          aria-label="New comment on selection"
+                          iconName="pencil-filled"
+                          onSelect={() =>
+                            editor.dispatchCommand(CAPTURE_COMMENT_ANCHOR_COMMAND, (anchor) =>
+                              controlsState.openComments(anchor ?? undefined),
+                            )
+                          }
+                        >
+                          <Icon type="pencil-filled" size="small" />
+                          <span className="ml-1.5 text-xs">New comment</span>
+                        </ToolbarButton>
+                      </div>
+                      <span
+                        aria-hidden
+                        className="text-passive-1 mt-px hidden truncate text-center text-[10px] leading-none font-medium tracking-wide uppercase select-none md:block"
+                      >
+                        Comments
+                      </span>
+                    </div>
+                  </Toolbar>
                 )}
-                <ChecklistPanel
-                  key={note.uuid}
-                  note={note}
-                  activeSection={effectiveTabId === 'checklistTab' ? 'checklist' : null}
-                  onOpenReview={() => {
-                    selectRibbonTab('review')
-                    controlsState.openComments()
-                  }}
-                  flushChanges={flushChanges}
-                />
               </>
             )}
           </div>

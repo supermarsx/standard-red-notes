@@ -18,7 +18,7 @@
  */
 import { act, useEffect } from 'react'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
-import { $createListItemNode, $createListNode } from '@lexical/list'
+import { $createListItemNode, $createListNode, ListNode } from '@lexical/list'
 import { $createTextNode, $getRoot, $createParagraphNode, LexicalEditor } from 'lexical'
 import { createRoot, Root } from 'react-dom/client'
 import { LocalPrefDefaults, PrefDefaults, PrefKey } from '@standardnotes/snjs'
@@ -87,6 +87,7 @@ const fakeApp = {
   // Render authorization (useItemAuthorization) subscribes to these on mount.
   isAuthorizedToRenderItem: () => true,
   vaultLocks: { addEventObserver: () => () => undefined },
+  sessions: { getUser: () => ({ uuid: 'alice' }) },
   items: { streamItems: () => () => undefined, addObserver: () => () => undefined },
   keyboardService: { addCommandHandler: () => () => undefined },
 } as never
@@ -194,7 +195,7 @@ const clickTab = async (name: string) => {
   })
 }
 
-it('offers Review for every note, Checklist only for task documents, and routes task comments without losing a draft across tabs', async () => {
+it('uses ribbon groups for per-item settings and Review, with no duplicate task or comment list', async () => {
   await mount(false)
   expect(findTab('Review')).toBeDefined()
   expect(findTab('Checklist')).toBeUndefined()
@@ -204,6 +205,7 @@ it('offers Review for every note, Checklist only for task documents, and routes 
         $getRoot().append(
           $createListNode('check').append($createListItemNode(false).append($createTextNode('Review this task'))),
         )
+        ;($getRoot().getLastChild() as ListNode).getFirstChild()!.selectEnd()
       },
       { discrete: true },
     )
@@ -211,36 +213,25 @@ it('offers Review for every note, Checklist only for task documents, and routes 
   await clickTab('Checklist')
   const tasks = container.querySelector<HTMLElement>('[aria-label="Checklist tasks"]')!
   expect(tasks.hidden).toBe(false)
-  expect(container.textContent).not.toContain('Checklist & comments')
-  await act(async () => {
-    ;[...tasks.querySelectorAll('button')].find((button) => button.textContent === 'Comments')!.click()
-  })
+  expect(tasks.classList.contains('super-toolbar-group')).toBe(true)
+  expect(tasks.closest('[role="toolbar"]')).not.toBeNull()
+  expect(tasks.querySelectorAll('[role="combobox"]')).toHaveLength(2)
+  expect(tasks.querySelectorAll('[aria-label="Selected checklist item"]')).toHaveLength(1)
+  await act(async () => tasks.querySelector<HTMLButtonElement>('[aria-label="Item comments"]')!.click())
   expect(findTab('Review')?.getAttribute('aria-selected')).toBe('true')
-  const review = container.querySelector<HTMLElement>('[aria-label="Review comments"]')!
-  expect(review.hidden).toBe(false)
-  const draft = review.querySelector<HTMLInputElement>('[aria-label="Comment draft"]')!
-  expect(draft.dataset.commentTarget).not.toBe('note')
-  draft.value = 'Unfinished comment'
+  const review = container.querySelector<HTMLElement>('[aria-label="Review tools"]')!
+  expect(review.classList.contains('super-toolbar-group')).toBe(true)
+  expect(review.closest('[role="toolbar"]')).not.toBeNull()
+  expect(review.querySelectorAll('button')).toHaveLength(2)
+  expect(container.querySelector('[aria-label="Comment draft"]')).toBeNull()
   await clickTab('Home')
-  expect(review.hidden).toBe(true)
+  expect(container.querySelector('[aria-label="Review tools"]')).toBeNull()
   await clickTab('Review')
-  expect(review.querySelector<HTMLInputElement>('input')?.value).toBe('Unfinished comment')
-  await act(async () => {
-    editor.setEditable(false)
-  })
+  await act(async () => editor.setEditable(false))
   expect(findTab('Review')?.getAttribute('aria-selected')).toBe('true')
   expect(findTab('Home')).toBeUndefined()
-  expect(container.querySelector('[aria-label="Clipboard and history tools"]')?.hasAttribute('inert')).toBe(true)
-  expect(review.querySelector<HTMLInputElement>('input')?.value).toBe('Unfinished comment')
-  await act(async () => {
-    editor.update(
-      () => {
-        $getRoot().clear().append($createParagraphNode())
-      },
-      { discrete: true },
-    )
-  })
+  expect(container.querySelector('[aria-label="Review tools"]')).not.toBeNull()
+  await act(async () => editor.update(() => $getRoot().clear().append($createParagraphNode()), { discrete: true }))
   expect(findTab('Checklist')).toBeUndefined()
   expect(findTab('Review')).toBeDefined()
-  expect(review.textContent).toContain('This task is no longer in the note.')
 })

@@ -1,6 +1,9 @@
-import { ReactElement, useEffect, useMemo, useState } from 'react'
+import Dropdown from '@/Components/Dropdown/Dropdown'
+import ToolbarButton from '../Plugins/ToolbarPlugin/ToolbarButton'
+import Icon from '@/Components/Icon/Icon'
+import { ReactElement, useEffect, useRef, useState } from 'react'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
-import { $getNodeByKey, $getRoot, $isElementNode, LexicalNode } from 'lexical'
+import { $getNodeByKey, $getSelection, $isRangeSelection, $isElementNode, LexicalNode } from 'lexical'
 import { $isListItemNode } from '@lexical/list'
 import { SNNote } from '@standardnotes/snjs'
 import {
@@ -33,9 +36,17 @@ type Row = {
   ticks: string[]
   perPerson: boolean
 }
-const priorityRank = { high: 0, normal: 1, low: 2 }
+function $selectedTask(node: LexicalNode | null): LexicalNode | null {
+  while (node) {
+    if ($isChecklistItemNode(node)) {
+      return node
+    }
+    node = node.getParent()
+  }
+  return null
+}
 
-/** Ribbon sections share task identity; sorting this view never reorders the document. */
+/** Compact ribbon controls follow the task under the caret, never a duplicate task list. */
 export function ChecklistPanel({
   activeSection,
   onOpenReview,
@@ -49,64 +60,53 @@ export function ChecklistPanel({
   const [editor] = useLexicalComposerContext()
   const application = useApplicationOrNull()
   const selfUuid = application?.sessions.getUser()?.uuid
-  const [rows, setRows] = useState<Row[]>([])
+  const [row, setRow] = useState<Row | null>(null)
+  const selectedKey = useRef<string | null>(null)
   const [editable, setEditable] = useState(editor.isEditable())
   const controlsState = useEditorControlsState()
   const setSelected = controlsState.setCommentTarget
   useEffect(() => {
     const refresh = () =>
       editor.getEditorState().read(() => {
-        const next: Row[] = []
-        const stack: LexicalNode[] = [...$getRoot().getChildren()].reverse()
-        let remaining = 50_000
-        while (stack.length && remaining-- > 0) {
-          const node = stack.pop()!
-          if ($isListItemNode(node) && $isChecklistItemNode(node) && !$getChecklistOccurrenceSummary(node)) {
-            // Nested list text belongs to its own row, not its parent's label.
-            const text = node
-              .getChildren()
-              .filter((child) => !($isElementNode(child) && child.getType() === 'list'))
-              .map((child) => child.getTextContent())
-              .join('')
-              .trim()
-            if (text) {
-              next.push({
-                key: node.getKey(),
-                todoId: $getChecklistTodoId(node),
-                text,
-                checked: $getChecklistCheckedForUser(node, selfUuid),
-                ticks: $getChecklistPersonalTicks(node),
-                perPerson: $isChecklistPerPerson(node),
-                ...$getChecklistFlags(node),
-              })
-            }
-          }
-          if ($isElementNode(node)) {
-            stack.push(...node.getChildren().reverse())
-          }
+        const selection = $getSelection()
+        if ($isRangeSelection(selection)) {
+          const anchor = $selectedTask(selection.anchor.getNode())
+          const focus = $selectedTask(selection.focus.getNode())
+          selectedKey.current = anchor && anchor.getKey() === focus?.getKey() ? anchor.getKey() : null
+        } else if (selection) {
+          selectedKey.current = null
         }
-        setRows(next)
+        // Toolbar focus can clear the range. Keep its last task until the caret
+        // moves elsewhere; remote deletion still clears the controls immediately.
+        const node = selectedKey.current ? $getNodeByKey(selectedKey.current) : null
+        if (!$isListItemNode(node) || !$isChecklistItemNode(node) || $getChecklistOccurrenceSummary(node)) {
+          setRow(null)
+          return
+        }
+        const text = node
+          .getChildren()
+          .filter((child) => !($isElementNode(child) && child.getType() === 'list'))
+          .map((child) => child.getTextContent())
+          .join('')
+          .trim()
+        setRow({
+          key: node.getKey(),
+          todoId: $getChecklistTodoId(node),
+          text: text || 'Untitled task',
+          checked: $getChecklistCheckedForUser(node, selfUuid),
+          ticks: $getChecklistPersonalTicks(node),
+          perPerson: $isChecklistPerPerson(node),
+          ...$getChecklistFlags(node),
+        })
       })
     refresh()
-    const stop = editor.registerUpdateListener(({ dirtyElements, dirtyLeaves }) => {
-      if (dirtyElements.size || dirtyLeaves.size) {
-        refresh()
-      }
-    })
+    const stop = editor.registerUpdateListener(refresh)
     const stopEditable = editor.registerEditableListener(setEditable)
     return () => {
       stop()
       stopEditable()
     }
   }, [editor, selfUuid])
-  const ordered = useMemo(
-    () =>
-      [...rows].sort(
-        (left, right) =>
-          Number(right.pinned) - Number(left.pinned) || priorityRank[left.priority] - priorityRank[right.priority],
-      ),
-    [rows],
-  )
   const change = (
     key: string,
     patch: { pinned?: boolean; priority?: ChecklistPriority; checked?: boolean; perPerson?: boolean },
@@ -171,80 +171,100 @@ export function ChecklistPanel({
     }
     return application?.contacts.findContact(userId)?.name || userId
   }
-  const controlClassName =
-    'border-border bg-default hover:bg-contrast focus-visible:ring-info rounded border px-2 py-1 text-xs focus-visible:ring-2 disabled:opacity-50'
+  const dropdownStyle = { button: '!min-w-0 !px-2 !py-1 !text-xs', wrapper: 'min-w-0 max-w-52' }
   return (
     <>
-      <section hidden={activeSection !== 'checklist'} aria-label="Checklist tasks" className="w-full p-2 text-sm">
-        <div className="mb-2 flex items-center justify-between gap-2">
-          <span className="font-medium">
-            Tasks · {rows.filter((row) => row.checked).length}/{rows.length} completed
-          </span>
-          <span className="text-passive-1 text-xs">Pinned first, then priority</span>
-        </div>
-        <p className="text-passive-1 mb-2 text-xs">
-          Choose Per person to let each collaborator complete a task independently. Counts show your completion.
-        </p>
-        <div className="max-h-48 space-y-1 overflow-y-auto">
-          {ordered.map((row) => (
-            <div key={row.key} className="border-border flex flex-wrap items-center gap-2 rounded border p-2">
-              <input
-                type="checkbox"
+      <section
+        hidden={activeSection !== 'checklist'}
+        aria-label="Checklist tasks"
+        className="super-toolbar-group bg-contrast flex flex-shrink-0 flex-col rounded-lg px-1 py-0.5 text-sm"
+      >
+        {row ? (
+          <div
+            className="flex flex-col items-start justify-center gap-0.5 md:min-h-[6.25rem]"
+            role="group"
+            aria-label="Selected checklist item"
+          >
+            <span className="text-passive-1 max-w-40 truncate text-xs" title={row.text}>
+              {row.text}
+            </span>
+            <div className="flex items-center gap-0.5">
+              <ToolbarButton
+                name={`Complete ${row.text}`}
                 aria-label={`Complete ${row.text}`}
-                checked={row.checked}
+                active={row.checked}
                 disabled={!editable || (row.perPerson && !selfUuid)}
-                onChange={(event) => change(row.key, { checked: event.target.checked })}
+                onSelect={() => change(row.key, { checked: !row.checked })}
+                aria-pressed={row.checked}
+              >
+                <Icon type="list-check" size="small" />
+                <span className="ml-1.5 text-xs">Completed</span>
+              </ToolbarButton>
+              <ToolbarButton
+                name={row.pinned ? 'Unpin item' : 'Pin item'}
+                aria-label={row.pinned ? 'Unpin item' : 'Pin item'}
+                iconName="pin-filled"
+                active={row.pinned}
+                aria-pressed={row.pinned}
+                disabled={!editable}
+                onSelect={() => change(row.key, { pinned: !row.pinned })}
               />
-              <span className={`min-w-24 flex-1 break-words ${row.checked ? 'line-through' : ''}`}>{row.text}</span>
-              <div className="flex shrink-0 flex-wrap items-center gap-2">
-                <select
-                  className={controlClassName}
-                  aria-label={`Completion mode for ${row.text}`}
-                  value={row.perPerson ? 'personal' : 'shared'}
-                  disabled={!editable}
-                  onChange={(event) => change(row.key, { perPerson: event.target.value === 'personal' })}
-                >
-                  <option value="shared">Single tick</option>
-                  <option value="personal">Per person (multi-tick)</option>
-                </select>
-                <button
-                  type="button"
-                  className={controlClassName}
-                  aria-pressed={row.pinned}
-                  disabled={!editable}
-                  onClick={() => change(row.key, { pinned: !row.pinned })}
-                >
-                  {row.pinned ? 'Unpin' : 'Pin'}
-                </button>
-                <select
-                  className={controlClassName}
-                  aria-label={`Priority for ${row.text}`}
-                  disabled={!editable}
-                  value={row.priority}
-                  onChange={(event) => change(row.key, { priority: event.target.value as ChecklistPriority })}
-                >
-                  <option value="high">⚑ High</option>
-                  <option value="normal">Normal</option>
-                  <option value="low">⚑ Low</option>
-                </select>
-                <button
-                  type="button"
-                  className={controlClassName}
-                  disabled={!row.todoId && !editable}
-                  onClick={() => showComments(row)}
-                >
-                  Comments
-                </button>
-              </div>
-              {row.perPerson && (
-                <span className="text-passive-1 w-full text-xs break-words" aria-label={`Ticks for ${row.text}`}>
-                  {row.ticks.length ? `Ticked by ${row.ticks.map(tickName).join(', ')}` : 'No one has ticked this yet'}
-                </span>
-              )}
+              <ToolbarButton
+                name="Item comments"
+                aria-label="Item comments"
+                iconName="comment"
+                disabled={!row.todoId && !editable}
+                onSelect={() => showComments(row)}
+              />
             </div>
-          ))}
-          {rows.length === 0 && <p className="text-passive-1 text-xs">Add a checklist to manage its tasks here.</p>}
-        </div>
+            <div className="flex items-center gap-1">
+              <Dropdown
+                portal
+                label={`Completion mode for ${row.text}`}
+                value={row.perPerson ? 'personal' : 'shared'}
+                disabled={!editable}
+                onChange={(value) => change(row.key, { perPerson: value === 'personal' })}
+                items={[
+                  { value: 'shared', label: 'Single tick' },
+                  { value: 'personal', label: 'Per person (multi-tick)' },
+                ]}
+                classNameOverride={dropdownStyle}
+                popoverPlacement="bottom-start"
+              />
+              <Dropdown
+                portal
+                label={`Priority for ${row.text}`}
+                value={row.priority}
+                disabled={!editable}
+                onChange={(value) => change(row.key, { priority: value as ChecklistPriority })}
+                items={[
+                  { value: 'high', label: '⚑ High' },
+                  { value: 'normal', label: 'Normal' },
+                  { value: 'low', label: '⚑ Low' },
+                ]}
+                classNameOverride={dropdownStyle}
+                popoverPlacement="bottom-start"
+              />
+            </div>
+            {row.perPerson && (
+              <span
+                className="text-passive-1 max-w-48 truncate text-xs"
+                title={row.ticks.map(tickName).join(', ')}
+                aria-label={`Ticks for ${row.text}`}
+              >
+                {row.ticks.length ? `Ticked by ${row.ticks.map(tickName).join(', ')}` : 'No one has ticked this yet'}
+              </span>
+            )}
+          </div>
+        ) : (
+          <p className="text-passive-1 text-xs">Place the cursor in a checklist item to change its settings.</p>
+        )}
+        <span
+          aria-hidden
+          className="text-passive-1 mt-px hidden truncate text-center text-[10px] leading-none font-medium tracking-wide uppercase select-none md:block"
+        >
+          Item settings
+        </span>
       </section>
     </>
   )
