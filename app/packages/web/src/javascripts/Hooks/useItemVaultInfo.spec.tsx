@@ -2,7 +2,7 @@
  * @jest-environment jsdom
  */
 import { useApplication } from '@/Components/ApplicationProvider'
-import { DecryptedItemInterface } from '@standardnotes/snjs'
+import { ContentType, DecryptedItemInterface } from '@standardnotes/snjs'
 import { act, createElement, useLayoutEffect } from 'react'
 import { Root, createRoot } from 'react-dom/client'
 import { useItemVaultInfo } from './useItemVaultInfo'
@@ -109,6 +109,68 @@ describe('useItemVaultInfo', () => {
     expect(result.lastEditedByContact).toBe(priorContact)
 
     act(() => root.render(createElement(Harness, { item: second, onResult: captureResult })))
+    expect(result.lastEditedByContact).toBeUndefined()
+  })
+
+  it('keeps confirmed attribution through dirty save gaps and reads each streamed replacement', () => {
+    const alice = { uuid: 'alice', name: 'Alice' },
+      bob = { uuid: 'bob', name: 'Bob' }
+    const first = {
+      uuid: 'note-1',
+      shared_vault_uuid: 'shared',
+      dirty: false,
+      last_edited_by_uuid: 'alice',
+    } as DecryptedItemInterface
+    application.vaultDisplayService.getItemVault.mockReturnValue({ uuid: 'vault-1' })
+    application.sharedVaults.getItemLastEditedBy.mockImplementation((item) =>
+      item.last_edited_by_uuid === 'alice' ? alice : item.last_edited_by_uuid === 'bob' ? bob : undefined,
+    )
+    act(() => root.render(createElement(Harness, { item: first, onResult: captureResult })))
+    const onNotes = application.items.streamItems.mock.calls.find(([type]) => type === ContentType.TYPES.Note)![1]
+    const emit = (note: DecryptedItemInterface) => act(() => onNotes({ changed: [note] }))
+    expect(result.lastEditedByContact).toBe(alice)
+    const pending = { ...first, dirty: true, last_edited_by_uuid: undefined } as DecryptedItemInterface
+    emit(pending)
+    expect(result.lastEditedByContact).toBe(alice)
+    const saved = { ...first, last_edited_by_uuid: 'bob' } as DecryptedItemInterface
+    emit(saved)
+    expect(application.sharedVaults.getItemLastEditedBy).toHaveBeenLastCalledWith(saved)
+    expect(result.lastEditedByContact).toBe(bob)
+    emit(pending)
+    expect(result.lastEditedByContact).toBe(bob)
+    emit({ ...pending, dirty: false } as DecryptedItemInterface)
+    expect(result.lastEditedByContact).toBeUndefined()
+  })
+
+  it('never carries attribution across vault or encryption changes, even during a pending save', () => {
+    const first = {
+      uuid: 'note-1',
+      shared_vault_uuid: 'shared',
+      key_system_identifier: 'key-1',
+      last_edited_by_uuid: 'alice',
+    } as DecryptedItemInterface
+    const contact = { uuid: 'alice', name: 'Alice' }
+    application.vaultDisplayService.getItemVault.mockReturnValue({ uuid: 'vault-1' })
+    application.sharedVaults.getItemLastEditedBy.mockImplementation((item) =>
+      item.last_edited_by_uuid ? contact : undefined,
+    )
+    act(() => root.render(createElement(Harness, { item: first, onResult: captureResult })))
+    expect(result.lastEditedByContact).toBe(contact)
+    const pending = {
+      ...first,
+      dirty: true,
+      last_edited_by_uuid: undefined,
+      key_system_identifier: 'key-2',
+    } as DecryptedItemInterface
+    act(() => root.render(createElement(Harness, { item: pending, onResult: captureResult })))
+    expect(result.lastEditedByContact).toBeUndefined()
+    act(() => root.render(createElement(Harness, { item: first, onResult: captureResult })))
+    const moved = {
+      ...pending,
+      key_system_identifier: 'key-1',
+      shared_vault_uuid: 'different',
+    } as DecryptedItemInterface
+    act(() => root.render(createElement(Harness, { item: moved, onResult: captureResult })))
     expect(result.lastEditedByContact).toBeUndefined()
   })
 })

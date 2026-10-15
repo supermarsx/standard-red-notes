@@ -25,7 +25,7 @@ const CollaborationInfoHUD: FunctionComponent<Props> = ({ item }) => {
   return (
     <div className="flex flex-wrap items-start gap-2">
       <VaultNameBadge vault={vault} />
-      {lastEditedByContact && <LastEditedByBadge contact={lastEditedByContact} />}
+      {(vault.sharing || lastEditedByContact) && <LastEditedByBadge contact={lastEditedByContact} />}
     </div>
   )
 }

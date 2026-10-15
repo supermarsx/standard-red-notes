@@ -225,7 +225,7 @@ const LinkedItemBubblesContainer = ({ item, linkingController, readonly = false,
         )}
       >
         {!!vault && <VaultNameBadge vault={vault} />}
-        {!!lastEditedByContact && <LastEditedByBadge contact={lastEditedByContact} />}
+        {(vault?.sharing || lastEditedByContact) && <LastEditedByBadge contact={lastEditedByContact} />}
         {noteFolder && (
           <button
             className={classNames(

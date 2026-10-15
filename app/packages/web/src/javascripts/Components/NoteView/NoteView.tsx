@@ -128,7 +128,6 @@ type State = {
   customEditorFont?: string
   editorFocused?: boolean
   paneGestureEnabled?: boolean
-  noteLastEditedByUuid?: string
   updateSavingIndicator?: boolean
   editorFeatureIdentifier?: string
   noteType?: NoteType
@@ -431,12 +430,6 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
 
     // A deferred adoption must not leave the input permanently diverged from the item.
     this.reconcileDeferredRemoteTitle()
-
-    if (note.last_edited_by_uuid !== this.state.noteLastEditedByUuid) {
-      this.setState({
-        noteLastEditedByUuid: note.last_edited_by_uuid,
-      })
-    }
 
     if (note.locked !== this.state.noteLocked) {
       this.setState({
