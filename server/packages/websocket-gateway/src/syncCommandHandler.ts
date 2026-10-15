@@ -1951,7 +1951,7 @@ export class SyncCommandHandler {
       return
     }
     if (!isAllowedRpcRequest(frame, adapter.operations())) {
-      // Only reads and two explicitly reviewed POST routes may cross the RPC
+      // Only reads and explicitly reviewed POST routes may cross the RPC
       // bridge. An idempotency key never turns an arbitrary mutation into an
       // allowed operation.
       this.options.metrics?.increment('rpc', 'mutating_route_unavailable')
@@ -2937,6 +2937,7 @@ function isAllowedRpcRequest(
   return (
     (pathname === '/v1/assistant/stream' && operations.includes('STREAM_ASSISTANT')) ||
     pathname === '/v1/collaboration/authorize' ||
+    pathname === '/v1/sessions/activity' ||
     pathname === '/v1/collaboration/save-fence'
   )
 }

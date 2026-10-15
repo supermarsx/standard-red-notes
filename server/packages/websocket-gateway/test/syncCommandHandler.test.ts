@@ -2171,6 +2171,56 @@ describe('SyncCommandHandler', () => {
     handler.disconnect()
   })
 
+  it('completes an exact keyed session heartbeat over the negotiated RPC protocol and rejects neighboring mutations', async () => {
+    const apiRpc: SyncApiRpcAdapter = {
+      idempotencyScope: 'shared-durable',
+      ready: () => true,
+      operations: () => ['API_RPC'],
+      execute: vi.fn(async () => ({ status: 200, body: { active: true, last_seen_at: '2026-10-15T00:00:00.000Z' } })),
+    }
+    const { handler, socket } = await authenticatedHandler({ apiRpc })
+    enqueue(
+      handler,
+      rpcFrame(1, {
+        method: 'POST',
+        path: '/v1/sessions/activity',
+        body: { device_id: 'routing-fixture' },
+        idempotencyKey: 'heartbeat-once',
+        stream: false,
+      }),
+    )
+    await vi.waitFor(() => expect(socket.frames.at(-1)?.type).toBe('RPC_END'))
+    expect(apiRpc.execute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: 'POST',
+        path: '/v1/sessions/activity',
+        body: { device_id: 'routing-fixture' },
+        idempotencyKey: 'heartbeat-once',
+        identity: expect.objectContaining({ userUuid: 'user-1' }),
+      }),
+      expect.anything(),
+    )
+    expect(socket.frames.some((frame) => frame.type === 'RPC_RESPONSE' && payloadOf(frame).status === 200)).toBe(true)
+    const rejected = [
+      rpcFrame(2, { method: 'POST', path: '/v1/sessions/activity' }),
+      rpcFrame(3, { method: 'POST', path: '/v1/sessions/activity/other', idempotencyKey: 'subtree' }),
+      rpcFrame(4, { method: 'POST', path: '/v1/sessions/refresh', idempotencyKey: 'refresh' }),
+      rpcFrame(5, { method: 'POST', path: '/v1/items', idempotencyKey: 'items' }),
+    ]
+    for (const [index, frame] of rejected.entries()) {
+      enqueue(handler, frame)
+      await vi.waitFor(() =>
+        expect(socket.frames.at(-1)?.payload).toEqual(
+          index === 0
+            ? { code: 'IDEMPOTENCY_KEY_REQUIRED', retryable: false }
+            : { code: 'OPERATION_UNAVAILABLE', retryable: true },
+        ),
+      )
+    }
+    expect(apiRpc.execute).toHaveBeenCalledTimes(1)
+    handler.disconnect()
+  })
+
   it('fails closed for unavailable adapters, file reads, unsupported verbs, and unkeyed reviewed writes', async () => {
     const unavailableAdapters: Array<SyncApiRpcAdapter | undefined> = [
       undefined,
