@@ -118,6 +118,7 @@ export type CollaborationRoomAccessState =
   | {
       status: 'disabled'
       reason: string
+      recovery?: 'transient' | 'terminal'
       /** True when a terminal denial stopped automatic recovery. */
       retriesExhausted?: true
     }
@@ -1099,6 +1100,7 @@ export function useCollaborationRoomAccess(
         available: false,
         sourceId,
         reason: recoveryAllowed.current && !denial ? `${reason} Live collaboration will retry automatically.` : reason,
+        recovery: recoveryAllowed.current ? 'transient' : 'terminal',
         ...(denial ? { denial } : {}),
         ...(!recoveryAllowed.current ? { retriesExhausted: true } : {}),
       }
@@ -1284,7 +1286,7 @@ export function useCollaborationRoomAccess(
               if (canonicalEditorSnapshot.current === snapshot) {
                 canonicalEditorSnapshot.current = undefined
               }
-              setPrepared({ ...preparedIdentity, result: unavailable(reason) })
+              setPrepared({ ...preparedIdentity, result: unavailable(reason, undefined, 'terminal') })
             },
             retryBootstrap: () => {
               snapshot.invalidate()
@@ -1345,6 +1347,7 @@ export function useCollaborationRoomAccess(
     return {
       status: 'disabled',
       reason: prepared.result.reason,
+      ...(prepared.result.recovery ? { recovery: prepared.result.recovery } : {}),
       ...(prepared.result.retriesExhausted ? { retriesExhausted: true } : {}),
     }
   }

@@ -523,6 +523,7 @@ export const SuperEditor: FunctionComponent<Props> = ({
     collaborationAccess.status === 'ready' && collaborationAccess.providerOwnsCanonicalState === true
   const collaborationUnavailableReason =
     collaborationAccess.status === 'disabled' ? collaborationAccess.reason : undefined
+  const collaborationRecovery = collaborationAccess.status === 'disabled' ? collaborationAccess.recovery : undefined
   const collaborationRetriesExhausted =
     collaborationAccess.status === 'disabled' && collaborationAccess.retriesExhausted === true
   const publishedCollaborationStatus = useMemo<CollaborationRoomStatus>(() => {
@@ -532,6 +533,7 @@ export const SuperEditor: FunctionComponent<Props> = ({
           kind: 'unavailable',
           readonly: true,
           reason: 'Live collaboration is read-only while the room is waiting for a socket saver.',
+          recovery: 'transient',
         }
       }
       return collaborationIsCanonical
@@ -542,6 +544,7 @@ export const SuperEditor: FunctionComponent<Props> = ({
       return {
         kind: 'unavailable',
         reason: collaborationUnavailableReason,
+        ...(collaborationRecovery ? { recovery: collaborationRecovery } : {}),
         ...(sharedCollaborationJoining ? { readonly: true } : {}),
         ...(collaborationRetriesExhausted ? { retriesExhausted: true } : {}),
       }
@@ -552,6 +555,7 @@ export const SuperEditor: FunctionComponent<Props> = ({
     collaborationIsCanonical,
     collaborationSaver?.paused,
     collaborationUnavailableReason,
+    collaborationRecovery,
     collaborationRetriesExhausted,
     sharedCollaborationJoining,
   ])

@@ -101,6 +101,8 @@ import CollaborationStatusIndicator, {
   COLLABORATION_INDICATOR_TEST_ID,
   PREPARING_QUIET_PERIOD_MS,
   PREPARING_STAND_DOWN_MS,
+  RECOVERY_QUIET_PERIOD_MS,
+  RECOVERY_PAUSED_PERIOD_MS,
 } from './CollaborationStatusIndicator'
 import { CollaboratorAvatarStack } from './CollaboratorAvatars'
 import CollaboratorsPopover from './CollaboratorsPopover'
@@ -155,9 +157,9 @@ const peers = (howMany: number): PresentPeer[] =>
     color: collaboratorColor(`peer-${index + 1}`),
   }))
 
-const render = async (): Promise<void> => {
+const render = async (shownNote = note): Promise<void> => {
   await act(async () => {
-    root.render(createElement(CollaborationStatusIndicator, { note }))
+    root.render(createElement(CollaborationStatusIndicator, { note: shownNote }))
   })
 }
 
@@ -299,7 +301,7 @@ describe('when collaboration does not apply', () => {
     await advance(PREPARING_STAND_DOWN_MS * 5)
 
     expect(chip()).toBeInstanceOf(Element)
-    expect(label()).toContain('Reconnecting')
+    expect(label()).toContain('paused')
   })
 })
 
@@ -348,14 +350,14 @@ describe('the session states, in the chip and at the top of the popup', () => {
     const failedLabel = label()
 
     expect(activeLabel).toContain('active')
-    expect(reconnectingLabel).toBe('Reconnecting encrypted collaboration. Your edits are still being saved.')
+    expect(reconnectingLabel).toBe('Restoring collaboration.')
     expect(failedLabel).toBe(
       'Encrypted collaboration unavailable. The collaboration room epoch changed while collaboration was reconnecting.',
     )
     expect(new Set([activeLabel, reconnectingLabel, failedLabel]).size).toBe(3)
   })
 
-  it('shows a reconnect immediately — a room that was live does not wait out the quiet period', async () => {
+  it('keeps a brief established-room recovery neutral instead of showing a warning immediately', async () => {
     CollaborationStatusRegistry.setStatus(ROOM, { kind: 'active' })
     await render()
 
@@ -364,8 +366,8 @@ describe('the session states, in the chip and at the top of the popup', () => {
     })
 
     expect(chip()).toBeInstanceOf(Element)
-    expect(label()).toContain('Reconnecting')
-    expect(dot()?.dataset.collaborationStatusDot).toBe('warning')
+    expect(label()).toContain('Restoring')
+    expect(dot()?.dataset.collaborationStatusDot).toBe('quiet')
   })
 
   it('puts a failure, with its reason, at the top of the popup once collaboration had been live', async () => {
@@ -405,8 +407,8 @@ describe('the session states, in the chip and at the top of the popup', () => {
     await click(chip())
 
     const session = popup()?.firstElementChild
-    expect(session?.textContent).toContain('Automatic retries have paused')
-    expect(session?.textContent).toContain('return to this tab or edit the note')
+    expect(session?.textContent).toContain('Check your access before retrying')
+    expect(session?.textContent).not.toContain('return to this tab or edit the note')
   })
 
   it("names the wait for a collaborator's copy and never stands that wait down", async () => {
@@ -584,10 +586,7 @@ describe('the collaborators beside the status', () => {
     expect(avatars().map((avatar) => avatar.className.includes('grayscale'))).toEqual([true, true])
     // Drained, never translucent: the discs overlap, and a see-through one shows its neighbour.
     expect(avatars().some((avatar) => /opacity-/.test(avatar.className))).toBe(false)
-    expect(label()).toBe(
-      'Reconnecting encrypted collaboration. Your edits are still being saved. ' +
-        '2 collaborators reconnecting: Person 1, Person 2.',
-    )
+    expect(label()).toBe('Restoring collaboration. ' + '2 collaborators reconnecting: Person 1, Person 2.')
 
     await click(chip())
     expect(statusOf('peer-1')).toBe('Reconnecting')
@@ -1174,5 +1173,144 @@ describe('drawn from finished data', () => {
     expect(statusOf('ada')).toBe('Typing')
     expect(row('grace')?.querySelector('[data-collaborator-typing]')).toBeNull()
     expect(statusOf('grace')).toBe('Viewing')
+  })
+})
+
+describe('bounded presentation grace for established rooms', () => {
+  const recover = async (kind: 'preparing' | 'saver' = 'preparing') => {
+    CollaborationStatusRegistry.setStatus(ROOM, { kind: 'active' })
+    await render()
+    await act(async () =>
+      CollaborationStatusRegistry.setStatus(
+        ROOM,
+        kind === 'preparing'
+          ? { kind: 'preparing', readonly: true }
+          : { kind: 'unavailable', readonly: true, recovery: 'transient', reason: 'Waiting for a socket saver.' },
+      ),
+    )
+  }
+
+  it.each(['preparing', 'saver'] as const)(
+    'recovers from short %s without a warning or an acknowledged-save claim',
+    async (kind) => {
+      await recover(kind)
+      const trigger = chip()
+      expect(dot()?.dataset.collaborationStatusDot).toBe('quiet')
+      expect(label()).toContain('Restoring')
+      expect(label()).not.toMatch(/active|saved|saving/i)
+      await advance(RECOVERY_QUIET_PERIOD_MS - 1)
+      await act(async () => CollaborationStatusRegistry.setStatus(ROOM, { kind: 'active' }))
+      expect(chip()).toBe(trigger)
+      expect(dot()?.dataset.collaborationStatusDot).toBe('live')
+      await advance(RECOVERY_PAUSED_PERIOD_MS * 2)
+      expect(dot()?.dataset.collaborationStatusDot).toBe('live')
+    },
+  )
+
+  it('shows a subtle reconnect after one second and an actionable pause after five continuous seconds', async () => {
+    await recover('saver')
+    await advance(RECOVERY_QUIET_PERIOD_MS)
+    expect(label()).toContain('Reconnecting')
+    expect(dot()?.dataset.collaborationStatusDot).toBe('busy')
+    expect(dot()?.querySelector('.animate-spin')).toBeNull()
+    // A retry phase change does not restart the continuous recovery grace.
+    await act(async () => CollaborationStatusRegistry.setStatus(ROOM, { kind: 'preparing', readonly: true }))
+    await advance(RECOVERY_PAUSED_PERIOD_MS - RECOVERY_QUIET_PERIOD_MS)
+    expect(label()).toContain('paused')
+    expect(dot()?.dataset.collaborationStatusDot).toBe('warning')
+    await click(chip())
+    expect(popup()?.textContent).toContain('Editing resumes when a socket saver is ready')
+    expect(popup()?.textContent).toContain('Check your connection')
+    expect(popup()?.textContent).not.toContain('saved as usual')
+  })
+
+  it('shows terminal permission denial immediately during a quiet recovery', async () => {
+    await recover()
+    await act(async () =>
+      CollaborationStatusRegistry.setStatus(ROOM, {
+        kind: 'unavailable',
+        readonly: true,
+        recovery: 'terminal',
+        reason: 'Edit permission was revoked.',
+      }),
+    )
+    expect(label()).toContain('permission was revoked')
+    expect(dot()?.dataset.collaborationStatusDot).toBe('warning')
+    await click(chip())
+    expect(popup()?.textContent).toContain('Check your access')
+    expect(popup()?.textContent).not.toContain('saved as usual')
+  })
+
+  it('does not apply established-room grace or false editability text to a first read-only join', async () => {
+    CollaborationStatusRegistry.setStatus(ROOM, { kind: 'preparing', readonly: true })
+    await render()
+    await advance(PREPARING_QUIET_PERIOD_MS)
+    expect(label()).toContain('Editing starts when a socket saver is ready')
+    expect(label()).not.toContain('You can keep editing')
+    await advance(PREPARING_STAND_DOWN_MS)
+    expect(chip()).toBeInstanceOf(Element)
+    expect(label()).toContain('paused')
+  })
+
+  it('cancels old-room recovery timers when switching notes', async () => {
+    const other = 'other-status-room'
+    await recover()
+    await advance(RECOVERY_QUIET_PERIOD_MS)
+    CollaborationStatusRegistry.setStatus(other, { kind: 'active' })
+    await render({ uuid: other } as never)
+    await advance(RECOVERY_PAUSED_PERIOD_MS * 2)
+    expect(label()).toContain('active')
+    expect(dot()?.dataset.collaborationStatusDot).toBe('live')
+    await act(async () => CollaborationStatusRegistry.clearRoom(other))
+  })
+
+  it('cancels recovery timers on unmount', async () => {
+    await recover()
+    const timers = jest.getTimerCount()
+    await act(async () => root.unmount())
+    expect(jest.getTimerCount()).toBeLessThan(timers)
+    await advance(RECOVERY_PAUSED_PERIOD_MS * 2)
+    expect(chip()).toBeNull()
+    root = createRoot(container)
+  })
+
+  it('does not hide a typed terminal permission denial on the first join', async () => {
+    CollaborationStatusRegistry.setStatus(ROOM, {
+      kind: 'unavailable',
+      recovery: 'terminal',
+      readonly: true,
+      reason: 'Edit permission is required.',
+    })
+    await render()
+    expect(chip()).toBeInstanceOf(Element)
+    expect(label()).toContain('Edit permission is required')
+    expect(dot()?.dataset.collaborationStatusDot).toBe('warning')
+  })
+
+  it('starts a fresh first-join clock after switching away from an already paused room', async () => {
+    const other = 'new-first-join-room'
+    await recover()
+    await advance(RECOVERY_PAUSED_PERIOD_MS)
+    CollaborationStatusRegistry.setStatus(other, { kind: 'preparing', readonly: true })
+    await render({ uuid: other } as never)
+    expect(chip()).toBeNull()
+    await advance(PREPARING_QUIET_PERIOD_MS)
+    expect(label()).toContain('Preparing encrypted collaboration')
+    expect(label()).not.toContain('Reconnecting')
+    await act(async () => CollaborationStatusRegistry.clearRoom(other))
+  })
+
+  it('explains an initial no-saver read-only state immediately instead of applying established-room grace', async () => {
+    CollaborationStatusRegistry.setStatus(ROOM, {
+      kind: 'unavailable',
+      recovery: 'transient',
+      readonly: true,
+      reason: 'Editing is read-only while waiting for a socket saver.',
+    })
+    await render()
+    expect(chip()).toBeInstanceOf(Element)
+    expect(label()).toContain('waiting for a socket saver')
+    expect(label()).not.toContain('Restoring')
+    expect(dot()?.dataset.collaborationStatusDot).not.toBe('live')
   })
 })

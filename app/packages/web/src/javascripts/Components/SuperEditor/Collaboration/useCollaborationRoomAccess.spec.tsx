@@ -230,6 +230,55 @@ describe('useCollaborationRoomAccess security transitions', () => {
     }
   })
 
+  it('keeps a mounted provider fatal failure terminal without automatically reserving or remounting another room', async () => {
+    jest.useFakeTimers({ doNotFake: ['queueMicrotask', 'nextTick'] })
+    try {
+      const sent: CollabFrame[] = []
+      let applicationObserver: ((event: ApplicationEvent) => Promise<void>) | undefined
+      mockedCreateChannel.mockReturnValue(createAutoLeaseChannel(sent).channel)
+      const note = { uuid: 'fatal-note', text: 'canonical', dirty: false, serverUpdatedAtTimestamp: 100 } as never
+      const application = {
+        items: { streamItems: () => jest.fn(), findItem: () => note },
+        sync: { sync: jest.fn().mockResolvedValue(undefined) },
+        vaultLocks: { addEventObserver: () => jest.fn() },
+        sockets: { addEventObserver: () => jest.fn(), isWebSocketConnectionOpen: () => true },
+        addEventObserver: (observer: (event: ApplicationEvent) => Promise<void>) => {
+          applicationObserver = observer
+          return jest.fn()
+        },
+      } as never
+      const View = () => {
+        latestAccess = useCollaborationRoomAccess(application, note, true)
+        return null
+      }
+      await act(async () => {
+        root.render(createElement(View))
+        await flushMicrotasks(30)
+      })
+      if (latestAccess?.status !== 'ready' || !latestAccess.editorLease) {
+        throw new Error('ready fixture missing')
+      }
+      const lease = latestAccess.editorLease
+      expect(lease.validateAttachment()).toBe(true)
+      const reserves = sent.filter((frame) => frame.t === 'room-reserve').length
+      await act(async () => {
+        lease.setProviderCanonicalOwnership?.(true)
+        lease.fail('The document exceeded the supported collaboration size.')
+        await flushMicrotasks(30)
+      })
+      expect(latestAccess).toMatchObject({ status: 'disabled', recovery: 'terminal', retriesExhausted: true })
+      await act(async () => {
+        jest.advanceTimersByTime(120_000)
+        await applicationObserver?.(ApplicationEvent.CompletedFullSync)
+        await flushMicrotasks(30)
+      })
+      expect(sent.filter((frame) => frame.t === 'room-reserve')).toHaveLength(reserves)
+      expect(sent.filter((frame) => frame.t === 'room-leave')).toHaveLength(1)
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
   it('backs persistent transient failures off to one bounded retry per thirty seconds', async () => {
     jest.useFakeTimers({ doNotFake: ['queueMicrotask', 'nextTick'] })
     const visibility = jest.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
@@ -1529,6 +1578,7 @@ describe('useCollaborationRoomAccess security transitions', () => {
     expect(latestAccess).toEqual({
       status: 'disabled',
       reason: 'Live collaboration could not establish a secure room. Live collaboration will retry automatically.',
+      recovery: 'transient',
     })
   })
 

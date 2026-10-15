@@ -31,7 +31,13 @@ export type CollaborationRoomStatus =
    * `retriesExhausted` marks a terminal denial awaiting an access or identity
    * change. Transient failures recover automatically with bounded cooldowns.
    */
-  | { kind: 'unavailable'; reason: string; retriesExhausted?: boolean; readonly?: boolean }
+  | {
+      kind: 'unavailable'
+      reason: string
+      retriesExhausted?: boolean
+      readonly?: boolean
+      recovery?: 'transient' | 'terminal'
+    }
 
 export type CollaborationRoomState = {
   status: CollaborationRoomStatus
@@ -50,7 +56,12 @@ function sameStatus(a: CollaborationRoomStatus, b: CollaborationRoomStatus): boo
     return false
   }
   if (a.kind === 'unavailable' && b.kind === 'unavailable') {
-    return a.reason === b.reason && a.retriesExhausted === b.retriesExhausted && a.readonly === b.readonly
+    return (
+      a.reason === b.reason &&
+      a.retriesExhausted === b.retriesExhausted &&
+      a.readonly === b.readonly &&
+      a.recovery === b.recovery
+    )
   }
   if (a.kind === 'preparing' && b.kind === 'preparing') {
     return a.awaitingPeerState === b.awaitingPeerState && a.readonly === b.readonly
@@ -83,6 +94,7 @@ class CollaborationStatusRegistryImpl {
             reason: String(status.reason ?? '').slice(0, MAX_REASON_LENGTH),
             ...(status.retriesExhausted === true ? { retriesExhausted: true } : {}),
             ...(status.readonly === true ? { readonly: true } : {}),
+            ...(status.recovery === 'transient' || status.recovery === 'terminal' ? { recovery: status.recovery } : {}),
           }
         : status.kind === 'preparing'
           ? {

@@ -20,3 +20,32 @@ it('publishes read-only transitions even when the preparation or retry reason st
     CollaborationStatusRegistry.clearRoom(room)
   }
 })
+
+it('publishes a terminal change even when the reason and read-only state are unchanged', () => {
+  const room = 'recovery-hint-test'
+  const listener = jest.fn()
+  const unsubscribe = CollaborationStatusRegistry.subscribe(room, listener)
+  try {
+    CollaborationStatusRegistry.setStatus(room, { kind: 'active' })
+    CollaborationStatusRegistry.setStatus(room, {
+      kind: 'unavailable',
+      reason: 'Waiting',
+      readonly: true,
+      recovery: 'transient',
+    })
+    CollaborationStatusRegistry.setStatus(room, {
+      kind: 'unavailable',
+      reason: 'Waiting',
+      readonly: true,
+      recovery: 'terminal',
+    })
+    expect(listener).toHaveBeenCalledTimes(3)
+    expect(CollaborationStatusRegistry.getState(room)).toMatchObject({
+      hasBeenActive: true,
+      status: { kind: 'unavailable', recovery: 'terminal' },
+    })
+  } finally {
+    unsubscribe()
+    CollaborationStatusRegistry.clearRoom(room)
+  }
+})

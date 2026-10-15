@@ -32,9 +32,9 @@ import { useVaultRoster } from './useVaultRoster'
  * where the collaboration gateway is not reachable it starts and fails within a
  * few hundred milliseconds, every single time. Rendering that would be exactly
  * the flicker the status row must not have, and the user learns nothing from it
- * because the editor is fully usable throughout. A room that has ALREADY been
- * live is different: dropping back to preparing means "reconnecting", which is
- * real information, so that case is shown immediately.
+ * because an ordinary editor is fully usable throughout. An established room
+ * uses its own short recovery grace instead; read-only first joins never claim
+ * that editing can continue.
  */
 export const PREPARING_QUIET_PERIOD_MS = 750
 
@@ -48,10 +48,12 @@ export const PREPARING_QUIET_PERIOD_MS = 750
  * spinner: it promises progress that is not happening and then sits in the
  * status bar forever. So it stands down and goes quiet instead.
  *
- * A room that HAS been live never stands down — "reconnecting" stays visible
- * for as long as it is true, because there the user really did lose something.
+ * An established room never disappears on this timer: its recovery presentation
+ * progresses from neutral to reconnecting to a persistent paused explanation.
  */
 export const PREPARING_STAND_DOWN_MS = 20_000
+export const RECOVERY_QUIET_PERIOD_MS = 1_000
+export const RECOVERY_PAUSED_PERIOD_MS = 5_000
 
 export const COLLABORATION_INDICATOR_TEST_ID = 'collaboration-status-indicator'
 
@@ -105,6 +107,10 @@ const CollaborationStatusIndicator: FunctionComponent<Props> = ({ note }) => {
   const isDesktopScreen = useMediaQuery(MediaQueryBreakpoints.md)
   const [firstPreparationPhase, setFirstPreparationPhase] = useState<FirstPreparationPhase>('quiet')
   const [now, setNow] = useState(() => Date.now())
+  const [recoveryPhase, setRecoveryPhase] = useState<{
+    room: string
+    phase: 'quiet' | 'retrying' | 'paused'
+  }>()
   const buttonRef = useRef<HTMLButtonElement>(null)
   const dialogRef = useRef<HTMLDivElement>(null)
   const wasOpen = useRef(false)
@@ -112,12 +118,43 @@ const CollaborationStatusIndicator: FunctionComponent<Props> = ({ note }) => {
 
   const isFirstPreparation = state?.status.kind === 'preparing' && !state.hasBeenActive
   const isAwaitingPeerState = state?.status.kind === 'preparing' && state.status.awaitingPeerState === true
+  const isTransientRecovery =
+    state?.hasBeenActive === true &&
+    (state.status.kind === 'preparing' ||
+      (state.status.kind === 'unavailable' &&
+        state.status.recovery === 'transient' &&
+        state.status.retriesExhausted !== true))
+
+  useEffect(() => {
+    if (!isTransientRecovery) {
+      setRecoveryPhase(undefined)
+      return
+    }
+    let cancelled = false
+    setRecoveryPhase({ room: noteUuid, phase: 'quiet' })
+    const show = setTimeout(() => {
+      if (!cancelled) {
+        setRecoveryPhase({ room: noteUuid, phase: 'retrying' })
+      }
+    }, RECOVERY_QUIET_PERIOD_MS)
+    const pause = setTimeout(() => {
+      if (!cancelled) {
+        setRecoveryPhase({ room: noteUuid, phase: 'paused' })
+      }
+    }, RECOVERY_PAUSED_PERIOD_MS)
+    return () => {
+      cancelled = true
+      clearTimeout(show)
+      clearTimeout(pause)
+    }
+  }, [isTransientRecovery, noteUuid])
 
   useEffect(() => {
     if (!isFirstPreparation) {
       setFirstPreparationPhase('quiet')
       return
     }
+    setFirstPreparationPhase('quiet')
     const show = setTimeout(() => setFirstPreparationPhase('visible'), PREPARING_QUIET_PERIOD_MS)
     const standDown = isAwaitingPeerState
       ? undefined
@@ -128,7 +165,7 @@ const CollaborationStatusIndicator: FunctionComponent<Props> = ({ note }) => {
         clearTimeout(standDown)
       }
     }
-  }, [isFirstPreparation, isAwaitingPeerState])
+  }, [isFirstPreparation, isAwaitingPeerState, noteUuid])
 
   // The registry says when a peer starts and stops typing, and when they act. The
   // one status it cannot announce is the absence of anything: somebody becoming
@@ -172,7 +209,15 @@ const CollaborationStatusIndicator: FunctionComponent<Props> = ({ note }) => {
   )
   const others = collaborators.filter((collaborator) => !collaborator.isSelf)
   const present = others.filter((collaborator) => collaborator.isPresent)
-  const isVisible = sessionSpeaksForItself(state, firstPreparationPhase) || others.length > 0
+  const isVisible =
+    sessionSpeaksForItself(state, firstPreparationPhase) ||
+    others.length > 0 ||
+    (state?.status.kind === 'unavailable' && state.status.recovery === 'terminal') ||
+    (state?.status.kind === 'unavailable' && state.status.readonly === true) ||
+    (isFirstPreparation &&
+      state?.status.kind === 'preparing' &&
+      state.status.readonly === true &&
+      firstPreparationPhase === 'stood-down')
 
   const toggle = useCallback(() => {
     setIsOpen((open) => !open)
@@ -266,7 +311,54 @@ const CollaborationStatusIndicator: FunctionComponent<Props> = ({ note }) => {
     return null
   }
 
-  const session = describeSession(state, firstPreparationPhase)
+  let session = describeSession(state, firstPreparationPhase)
+  if (isTransientRecovery) {
+    const phase = recoveryPhase?.room === noteUuid ? recoveryPhase.phase : 'quiet'
+    const reason = state?.status.kind === 'unavailable' ? state.status.reason : undefined
+    session = {
+      tone: phase === 'paused' ? 'warning' : phase === 'retrying' ? 'busy' : 'quiet',
+      icon: phase === 'paused' ? 'cloud-off' : 'user',
+      animateIcon: false,
+      summary:
+        phase === 'paused'
+          ? 'Live collaboration paused.'
+          : phase === 'retrying'
+            ? 'Reconnecting collaboration.'
+            : 'Restoring collaboration.',
+      heading:
+        phase === 'paused'
+          ? 'Live collaboration paused'
+          : phase === 'retrying'
+            ? 'Reconnecting collaboration'
+            : 'Restoring collaboration',
+      detail:
+        phase === 'paused'
+          ? `${reason ?? 'The encrypted room has not recovered yet.'} Editing resumes when a socket saver is ready. Check your connection if this continues.`
+          : 'The encrypted room is recovering. Editing resumes when a socket saver is ready; pending changes remain on this device.',
+    }
+  } else if (state?.status.kind === 'preparing' && state.status.readonly === true && !state.status.awaitingPeerState) {
+    session = {
+      ...session,
+      summary:
+        firstPreparationPhase === 'stood-down'
+          ? 'Live collaboration paused.'
+          : 'Preparing encrypted collaboration. Editing starts when a socket saver is ready.',
+      detail:
+        'Editing is read-only until the encrypted room and its socket saver are ready. Check your connection if preparation does not finish.',
+    }
+  } else if (
+    state?.status.kind === 'unavailable' &&
+    (state.status.recovery === 'terminal' || state.status.retriesExhausted === true)
+  ) {
+    session = {
+      tone: 'warning',
+      icon: 'cloud-off',
+      animateIcon: false,
+      summary: `Encrypted collaboration unavailable. ${state.status.reason}`,
+      heading: 'Encrypted collaboration unavailable',
+      detail: `${state.status.reason} Check your access before retrying.`,
+    }
+  }
   const attendance = describeAttendance(collaborators, state?.status.kind === 'active')
   const label = attendance ? `${session.summary} ${attendance}` : session.summary
   const showAvatars = isDesktopScreen && !collapsed && present.length > 0
