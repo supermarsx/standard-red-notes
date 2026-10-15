@@ -15,6 +15,14 @@ import {
 } from '../Lexical/Nodes/ChecklistItemNode'
 import { $applyChecklistItemChecked } from './ChecklistEditorMutations'
 import { useEditorControlsState } from '../EditorControlsContext'
+import { useApplicationOrNull } from '@/Components/ApplicationProvider'
+import {
+  $getChecklistPersonalTicks,
+  $setChecklistPersonalTick,
+  $isChecklistPerPerson,
+  $setChecklistPerPerson,
+  $getChecklistCheckedForUser,
+} from './checklistPersonalTicks'
 
 type Row = {
   key: string
@@ -23,6 +31,8 @@ type Row = {
   checked: boolean
   pinned: boolean
   priority: ChecklistPriority
+  ticks: string[]
+  perPerson: boolean
 }
 const priorityRank = { high: 0, normal: 1, low: 2 }
 
@@ -39,6 +49,8 @@ export function ChecklistPanel({
   flushChanges?: () => void
 }): ReactElement {
   const [editor] = useLexicalComposerContext()
+  const application = useApplicationOrNull()
+  const selfUuid = application?.sessions.getUser()?.uuid
   const [reviewVisited, setReviewVisited] = useState(activeSection === 'review')
   const [rows, setRows] = useState<Row[]>([])
   const [editable, setEditable] = useState(editor.isEditable())
@@ -66,7 +78,9 @@ export function ChecklistPanel({
                 key: node.getKey(),
                 todoId: $getChecklistTodoId(node),
                 text,
-                checked: node.getChecked() === true,
+                checked: $getChecklistCheckedForUser(node, selfUuid),
+                ticks: $getChecklistPersonalTicks(node),
+                perPerson: $isChecklistPerPerson(node),
                 ...$getChecklistFlags(node),
               })
             }
@@ -88,7 +102,7 @@ export function ChecklistPanel({
       stop()
       stopEditable()
     }
-  }, [editor])
+  }, [editor, selfUuid])
   useEffect(() => {
     if (activeSection === 'review') {
       setReviewVisited(true)
@@ -103,7 +117,10 @@ export function ChecklistPanel({
     [rows],
   )
   const selectedRow = selected ? rows.find((row) => row.todoId === selected) : undefined
-  const change = (key: string, patch: { pinned?: boolean; priority?: ChecklistPriority; checked?: boolean }) => {
+  const change = (
+    key: string,
+    patch: { pinned?: boolean; priority?: ChecklistPriority; checked?: boolean; perPerson?: boolean },
+  ) => {
     if (!editor.isEditable()) {
       return
     }
@@ -117,8 +134,18 @@ export function ChecklistPanel({
           return
         }
         $ensureChecklistTodoId(item)
+        if (patch.perPerson !== undefined) {
+          $setChecklistPerPerson(item, patch.perPerson)
+        }
         if (patch.checked !== undefined) {
-          $applyChecklistItemChecked(item, patch.checked)
+          if ($isChecklistPerPerson(item)) {
+            if (!selfUuid || application?.sessions.getUser()?.uuid !== selfUuid) {
+              return
+            }
+            $setChecklistPersonalTick(item, selfUuid, patch.checked)
+          } else {
+            $applyChecklistItemChecked(item, patch.checked)
+          }
         }
         $setChecklistFlags(item, patch)
       },
@@ -148,6 +175,12 @@ export function ChecklistPanel({
       { onUpdate: flushChanges },
     )
   }
+  const tickName = (userId: string) => {
+    if (userId === selfUuid) {
+      return 'You'
+    }
+    return application?.contacts.findContact(userId)?.name || userId
+  }
   const controlClassName =
     'border-border bg-default hover:bg-contrast focus-visible:ring-info rounded border px-2 py-1 text-xs focus-visible:ring-2 disabled:opacity-50'
   return (
@@ -159,6 +192,9 @@ export function ChecklistPanel({
           </span>
           <span className="text-passive-1 text-xs">Pinned first, then priority</span>
         </div>
+        <p className="text-passive-1 mb-2 text-xs">
+          Choose Per person to let each collaborator complete a task independently. Counts show your completion.
+        </p>
         <div className="max-h-48 space-y-1 overflow-y-auto">
           {ordered.map((row) => (
             <div key={row.key} className="border-border flex flex-wrap items-center gap-2 rounded border p-2">
@@ -166,11 +202,21 @@ export function ChecklistPanel({
                 type="checkbox"
                 aria-label={`Complete ${row.text}`}
                 checked={row.checked}
-                disabled={!editable}
+                disabled={!editable || (row.perPerson && !selfUuid)}
                 onChange={(event) => change(row.key, { checked: event.target.checked })}
               />
               <span className={`min-w-24 flex-1 break-words ${row.checked ? 'line-through' : ''}`}>{row.text}</span>
               <div className="flex shrink-0 flex-wrap items-center gap-2">
+                <select
+                  className={controlClassName}
+                  aria-label={`Completion mode for ${row.text}`}
+                  value={row.perPerson ? 'personal' : 'shared'}
+                  disabled={!editable}
+                  onChange={(event) => change(row.key, { perPerson: event.target.value === 'personal' })}
+                >
+                  <option value="shared">Single tick</option>
+                  <option value="personal">Per person (multi-tick)</option>
+                </select>
                 <button
                   type="button"
                   className={controlClassName}
@@ -200,6 +246,11 @@ export function ChecklistPanel({
                   Comments
                 </button>
               </div>
+              {row.perPerson && (
+                <span className="text-passive-1 w-full text-xs break-words" aria-label={`Ticks for ${row.text}`}>
+                  {row.ticks.length ? `Ticked by ${row.ticks.map(tickName).join(', ')}` : 'No one has ticked this yet'}
+                </span>
+              )}
             </div>
           ))}
           {rows.length === 0 && <p className="text-passive-1 text-xs">Add a checklist to manage its tasks here.</p>}

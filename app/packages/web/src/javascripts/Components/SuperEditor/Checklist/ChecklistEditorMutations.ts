@@ -15,6 +15,7 @@ import {
   normalizeChecklistTodoId,
 } from '../Lexical/Nodes/ChecklistItemNode'
 import { normalizeChecklistDueAt } from './checklistDueDate'
+import { $isChecklistPerPerson } from './checklistPersonalTicks'
 import {
   advanceChecklistDueAt,
   checklistRecurrenceChoice,
@@ -165,6 +166,10 @@ export function $applyChecklistItemChecked(
   now = Date.now(),
   options: ChecklistCompletionOptions = {},
 ): ChecklistCompletionOutcome {
+  // A shared/bulk completion must never silently finish another person's task.
+  if ($isChecklistPerPerson(item)) {
+    return { changed: false, advanced: false }
+  }
   if (!options.allowOccurrenceSummary && $isChecklistOccurrenceSummaryItem(item)) {
     // Identified by its node state, never by its wording: the copy is prose that
     // changes with locale and with editing, and a text match would start letting

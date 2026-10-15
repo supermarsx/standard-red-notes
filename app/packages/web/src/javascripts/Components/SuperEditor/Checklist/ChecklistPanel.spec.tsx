@@ -6,6 +6,8 @@ import { $createListItemNode, $createListNode, ListItemNode, ListNode } from '@l
 import { $createTextNode, $getRoot } from 'lexical'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
 import { ChecklistPanel } from './ChecklistPanel'
+import { useApplicationOrNull } from '@/Components/ApplicationProvider'
+import { $getChecklistPersonalTicks, $setChecklistPersonalTick, $isChecklistPerPerson } from './checklistPersonalTicks'
 import {
   $getChecklistFlags,
   $getChecklistTodoId,
@@ -14,6 +16,7 @@ import {
 } from '../Lexical/Nodes/ChecklistItemNode'
 
 jest.mock('@lexical/react/LexicalComposerContext', () => ({ useLexicalComposerContext: jest.fn() }))
+jest.mock('@/Components/ApplicationProvider', () => ({ useApplicationOrNull: jest.fn(() => undefined) }))
 jest.mock('@/Components/Comments/CommentsPanel', () => ({
   __esModule: true,
   default: ({ anchor }: { anchor?: { todoId: string } }) => (
@@ -22,6 +25,10 @@ jest.mock('@/Components/Comments/CommentsPanel', () => ({
 }))
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 const flushChanges = jest.fn()
+beforeEach(() => {
+  jest.mocked(useApplicationOrNull).mockReturnValue(undefined)
+  flushChanges.mockClear()
+})
 
 function Sections() {
   const [section, setSection] = useState<'checklist' | 'review'>('checklist')
@@ -106,7 +113,7 @@ it('shows a dedicated sorted task panel, pins without reordering the document, a
   document.body.append(container)
   const root = createRoot(container)
   await act(async () => root.render(<Sections />))
-  const selects = [...container.querySelectorAll('[aria-label="Checklist tasks"] select')]
+  const selects = [...container.querySelectorAll('[aria-label^="Priority for "]')]
   expect(selects.map((select) => select.getAttribute('aria-label'))).toEqual([
     'Priority for Important task',
     'Priority for First task',
@@ -136,4 +143,80 @@ it('shows a dedicated sorted task panel, pins without reordering the document, a
   ).toBe(true)
   await act(async () => root.unmount())
   container.remove()
+})
+
+it('shows every personal tick, lets you toggle only yours, and preserves shared completion', async () => {
+  let userUuid = 'alice'
+  jest.mocked(useApplicationOrNull).mockReturnValue({
+    sessions: { getUser: () => ({ uuid: userUuid }) },
+    contacts: {
+      findContact: (userId: string) => ({
+        name: userId === 'bob' ? 'Bob' : 'Alice',
+      }),
+    },
+  } as never)
+  const editor = createHeadlessEditor({
+    nodes: [ListNode, ListItemNode],
+    onError: (error) => {
+      throw error
+    },
+  })
+  editor.update(
+    () => {
+      const item = $createListItemNode(false).append($createTextNode('Review release'))
+      $setChecklistTodoId(item, 'todo-release')
+      $setChecklistPersonalTick(item, 'bob', true)
+      $getRoot().append($createListNode('check').append(item))
+    },
+    { discrete: true },
+  )
+  jest.mocked(useLexicalComposerContext).mockReturnValue([editor, {} as never])
+  const container = document.createElement('div')
+  document.body.append(container)
+  const root = createRoot(container)
+  try {
+    await act(async () => root.render(<Sections />))
+    const tick = () => container.querySelector<HTMLInputElement>('[aria-label="Complete Review release"]')!
+    const mode = container.querySelector<HTMLSelectElement>('[aria-label="Completion mode for Review release"]')!
+    expect(mode.value).toBe('shared')
+    expect(container.textContent).not.toContain('Ticked by Bob')
+    await act(async () => {
+      mode.value = 'personal'
+      mode.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    editor
+      .getEditorState()
+      .read(() =>
+        expect($isChecklistPerPerson(($getRoot().getFirstChild() as ListNode).getFirstChild() as ListItemNode)).toBe(
+          true,
+        ),
+      )
+    expect(container.textContent).toContain('Ticked by Bob')
+    flushChanges.mockClear()
+    await act(async () => tick().click())
+    expect(tick().checked).toBe(true)
+    expect(container.textContent).toContain('1/1 completed')
+    expect(container.textContent).toContain('Ticked by You, Bob')
+    expect(flushChanges).toHaveBeenCalledTimes(1)
+    await act(async () => tick().click())
+    editor.getEditorState().read(() => {
+      const item = ($getRoot().getFirstChild() as ListNode).getFirstChild() as ListItemNode
+      expect($getChecklistPersonalTicks(item)).toEqual(['bob'])
+      expect(item.getChecked()).toBe(false)
+    })
+    userUuid = 'different-account'
+    await act(async () => tick().click())
+    editor
+      .getEditorState()
+      .read(() =>
+        expect(
+          $getChecklistPersonalTicks(($getRoot().getFirstChild() as ListNode).getFirstChild() as ListItemNode),
+        ).toEqual(['bob']),
+      )
+    await act(async () => editor.setEditable(false))
+    expect(tick().disabled).toBe(true)
+  } finally {
+    await act(async () => root.unmount())
+    container.remove()
+  }
 })

@@ -81,6 +81,12 @@ import {
 import { resolveNoteEncryptionIdentity } from '../Collaboration/CollaborationKeyDerivation'
 import { canMutateSuperChecklistNote } from '../../TodoAggregate/todoAuthorization'
 import {
+  $getChecklistCheckedForUser,
+  $getChecklistPersonalTicks,
+  $isChecklistPerPerson,
+  $setChecklistPersonalTick,
+} from '../Checklist/checklistPersonalTicks'
+import {
   captureChecklistSessionPrincipal,
   checklistEncryptionIdentityMatches,
   checklistSessionPrincipalMatches,
@@ -464,10 +470,27 @@ export function CheckListPlugin({
             continue
           }
           liveElements.add(element)
+          const perPerson = $isChecklistPerPerson(item)
+          const checked = $getChecklistCheckedForUser(item, application.sessions?.getUser()?.uuid)
+          if (perPerson || element.hasAttribute('data-checklist-per-person')) {
+            element.classList.toggle('Lexical__listItemChecked', checked)
+            element.classList.toggle('Lexical__listItemUnchecked', !checked)
+            element.setAttribute('aria-checked', String(checked))
+            if (perPerson) {
+              element.setAttribute('data-checklist-per-person', 'true')
+              element.setAttribute(
+                'title',
+                `Per-person completion · ${$getChecklistPersonalTicks(item).length} ticked. See Checklist for who has ticked.`,
+              )
+            } else {
+              element.removeAttribute('data-checklist-per-person')
+              element.removeAttribute('title')
+            }
+          }
           syncChecklistDueShell(
             element,
             $getChecklistDueAt(item),
-            Boolean(item.getChecked()),
+            checked,
             editor.isEditable(),
             $getChecklistRecurrence(item),
           )
@@ -703,7 +726,7 @@ export function CheckListPlugin({
       editableDisposer()
       window.clearInterval(tick)
     }
-  }, [editor, flushChanges])
+  }, [application, editor, flushChanges])
 
   useEffect(() => {
     const primaryModifier = getPrimaryModifier(application.platform)
@@ -712,6 +735,14 @@ export function CheckListPlugin({
     const $toggleWithRapidCompletionGuard = (node: ListItemNode, repeatedKeyboardEvent = false): boolean => {
       const attemptedAt = Date.now()
       const todoId = $ensureChecklistTodoId(node)
+      if ($isChecklistPerPerson(node)) {
+        const selfUuid = application.sessions?.getUser()?.uuid
+        if (!selfUuid || repeatedKeyboardEvent) {
+          return false
+        }
+        $setChecklistPersonalTick(node, selfUuid, !$getChecklistCheckedForUser(node, selfUuid))
+        return true
+      }
       const dueAt = $getChecklistDueAt(node)
       const recurrence = $getChecklistRecurrence(node)
       const isRecurringCompletion = !node.getChecked() && Boolean(dueAt && recurrence)
@@ -876,7 +907,7 @@ export function CheckListPlugin({
                 // Opt-in (default off) so existing behavior is unchanged. Done
                 // here (on the toggle) rather than on every change so we never
                 // fight the caret while the user types.
-                if (changed && getChecklistAutoMoveEnabled()) {
+                if (changed && !$isChecklistPerPerson(node) && getChecklistAutoMoveEnabled()) {
                   $reorderCheckListForItem(node)
                 }
               },
@@ -923,7 +954,7 @@ export function CheckListPlugin({
           }
           $ensureChecklistTodoId(node)
           const changed = $toggleWithRapidCompletionGuard(node, event?.repeat === true)
-          if (changed && getChecklistAutoMoveEnabled()) {
+          if (changed && !$isChecklistPerPerson(node) && getChecklistAutoMoveEnabled()) {
             $reorderCheckListForItem(node)
           }
           return true
@@ -938,7 +969,7 @@ export function CheckListPlugin({
         description: 'Toggle checklist item',
       }),
     )
-  }, [application.keyboardService, application.platform, editor])
+  }, [application, editor])
 
   return null
 }

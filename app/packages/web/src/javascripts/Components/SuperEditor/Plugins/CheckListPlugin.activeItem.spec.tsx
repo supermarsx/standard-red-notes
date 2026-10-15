@@ -21,10 +21,16 @@ import { act, createElement, useEffect } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { CheckListPlugin } from './CheckListPlugin'
 import { CHECKLIST_ACTIVE_ITEM_ATTR, CHECKLIST_DUE_REVEAL_ATTR } from '../Checklist/ChecklistDueControls'
+import {
+  $getChecklistPersonalTicks,
+  $setChecklistPersonalTick,
+  $setChecklistPerPerson,
+} from '../Checklist/checklistPersonalTicks'
 
 jest.mock('../../ApplicationProvider', () => ({
   useApplication: () => ({
     platform: 'web',
+    sessions: { getUser: () => ({ uuid: 'alice' }) },
     keyboardService: {
       activeModifiers: new Set(),
       registerExternalKeyboardShortcutHelpItem: () => () => undefined,
@@ -137,6 +143,59 @@ describe('the schedule affordance follows the caret through the real plugin', ()
       .map(taskText)
 
   const revealedCount = () => container.querySelectorAll(`[${CHECKLIST_DUE_REVEAL_ATTR}='active']`).length
+
+  it('projects and toggles your own multi-tick checkbox without clearing another person or changing shared completion', async () => {
+    act(() =>
+      editor!.update(
+        () => {
+          const row = $getRoot().getFirstChild<ListNode>()!.getFirstChild<ListItemNode>()!
+          $setChecklistPerPerson(row, true)
+          $setChecklistPersonalTick(row, 'bob', true)
+        },
+        { discrete: true },
+      ),
+    )
+    const row = rows()[0]
+    expect(row.getAttribute('aria-checked')).toBe('false')
+    row.style.lineHeight = '20px'
+    jest.spyOn(row, 'getBoundingClientRect').mockReturnValue({ left: 0, right: 300, top: 0, bottom: 20 } as DOMRect)
+    const original = window.getComputedStyle.bind(window)
+    const styles = jest
+      .spyOn(window, 'getComputedStyle')
+      .mockImplementation((element: Element, pseudo?: string | null) => {
+        if (pseudo) return { width: '24px' } as CSSStyleDeclaration
+        const style = original(element)
+        const getPropertyValue = style.getPropertyValue.bind(style)
+        // jsdom does not implement CSS zoom's browser default of 1.
+        style.getPropertyValue = (property) => (property === 'zoom' ? '1' : getPropertyValue(property))
+        return style
+      })
+    try {
+      await act(async () => {
+        row.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 5, clientY: 5 }))
+      })
+      editor!.getEditorState().read(() => {
+        const task = $getRoot().getFirstChild<ListNode>()!.getFirstChild<ListItemNode>()!
+        expect($getChecklistPersonalTicks(task)).toEqual(['alice', 'bob'])
+        expect(task.getChecked()).toBe(false)
+      })
+      expect(row.getAttribute('aria-checked')).toBe('true')
+      expect(row.classList.contains('Lexical__listItemChecked')).toBe(true)
+      await act(async () => {
+        row.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 5, clientY: 5 }))
+      })
+      expect(row.getAttribute('aria-checked')).toBe('false')
+      editor!
+        .getEditorState()
+        .read(() =>
+          expect(
+            $getChecklistPersonalTicks($getRoot().getFirstChild<ListNode>()!.getFirstChild<ListItemNode>()!),
+          ).toEqual(['bob']),
+        )
+    } finally {
+      styles.mockRestore()
+    }
+  })
 
   it('triple-click selects the item text without the schedule controls or following row', () => {
     const row = rows()[1]
