@@ -474,6 +474,24 @@ describe('SyncWebSocketCommandAdapter', () => {
     },
   )
 
+  it.each([
+    { user: undefined },
+    { session: undefined },
+    { roles: undefined },
+    { roles: [null] },
+    { session: { uuid: 'session-1' } },
+    { roles: [{ name: 42 }] },
+  ])('keeps a signed but malformed authority token retryable (%j)', async (overrides) => {
+    const { adapter, durable } = build(overrides)
+    await expect(
+      adapter.authorize(
+        { identity, operation: 'COMMAND', commandId: 'command-1', digest: 'a'.repeat(64), payloadLength: 0 },
+        new AbortController().signal,
+      ),
+    ).rejects.toMatchObject({ name: 'SessionValidationError', kind: 'unavailable' })
+    expect(durable.sync).not.toHaveBeenCalled()
+  })
+
   it('treats an authority 503 as unavailable rather than requiring credential rotation', async () => {
     const { adapter, serviceProxy, durable } = build()
     ;(serviceProxy.validateSession as jest.Mock).mockResolvedValue({ status: 503, data: {}, headers: {} })

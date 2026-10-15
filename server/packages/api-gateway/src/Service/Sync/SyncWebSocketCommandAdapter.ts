@@ -572,6 +572,22 @@ export class SyncWebSocketCommandAdapter
         this.credentialVerdict({ reached: true, status: 200 }),
       )
     }
+    if (
+      !this.isJsonObject(token) ||
+      !this.isJsonObject(token.user) ||
+      typeof token.user.uuid !== 'string' ||
+      !this.isJsonObject(token.session) ||
+      typeof token.session.uuid !== 'string' ||
+      typeof token.session.readonly_access !== 'boolean' ||
+      !Array.isArray(token.roles) ||
+      token.roles.some((role) => !this.isJsonObject(role) || typeof role.name !== 'string')
+    ) {
+      throw new SessionValidationError(
+        'Sync session authority returned an invalid token shape.',
+        'unavailable',
+        'stale',
+      )
+    }
     const session = token.session
     if (token.user.uuid !== identity.userUuid || session?.uuid !== identity.sessionUuid) {
       throw new SessionValidationError(
