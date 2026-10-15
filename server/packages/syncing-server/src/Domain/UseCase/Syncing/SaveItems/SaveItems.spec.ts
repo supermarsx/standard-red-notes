@@ -23,6 +23,7 @@ import { SharedVaultAssociation } from '../../../SharedVault/SharedVaultAssociat
 import { CheckForContentLimit } from '../CheckForContentLimit/CheckForContentLimit'
 import { ItemHttpRepresentation } from '../../../../Mapping/Http/ItemHttpRepresentation'
 import { ConcurrentItemUpdateError } from '../../../Item/ConcurrentItemUpdateError'
+import { SQLCollaborationSaveFence } from '../../../../Infra/TypeORM/SQLCollaborationSaveFence'
 
 describe('SaveItems', () => {
   let itemSaveValidator: ItemSaveValidatorInterface
@@ -42,7 +43,7 @@ describe('SaveItems', () => {
   let websocketSyncPushMaxItems: number
   let websocketSyncPushMaxBytes: number
 
-  const createUseCase = () =>
+  const createUseCase = (fence?: SQLCollaborationSaveFence) =>
     new SaveItems(
       itemSaveValidator,
       itemRepository,
@@ -58,6 +59,7 @@ describe('SaveItems', () => {
       websocketSyncPushMaxItems,
       websocketSyncPushMaxBytes,
       logger,
+      fence,
     )
 
   beforeEach(() => {
@@ -137,6 +139,61 @@ describe('SaveItems', () => {
       updated_at: '2020-01-01T00:00:00.000Z',
       updated_at_timestamp: 123,
     }).getValue()
+  })
+
+  it('passes all item identities through the fence and guards note, omitted-type, and deletion candidates before writing', async () => {
+    const hashes = [
+      itemHash1,
+      ...[
+        { uuid: 'file-id', content_type: 'File', deleted: false },
+        { uuid: 'omitted-type', content_type: null, deleted: false },
+        { uuid: 'deleted-item', content_type: 'File', deleted: true },
+      ].map((patch) => ({ props: { ...itemHash1.props, ...patch } }) as ItemHash),
+    ]
+    const proof = { deviceId: 'device-1', proofs: [{ room: itemHash1.props.uuid, token: 'a'.repeat(64) }] }
+    const run = jest.fn(async (_user, _ids, _proof, execute) => execute())
+    const result = await createUseCase({ run } as never).execute({
+      itemHashes: hashes,
+      userUuid: 'user-uuid',
+      apiVersion: '1',
+      readOnlyAccess: false,
+      sessionUuid: 'session-uuid',
+      snjsVersion: '2.200.0',
+      isFreeUser: false,
+      hasContentLimit: false,
+      liveSyncEnabled: true,
+      collaborationSaveFence: proof,
+    })
+    expect(run).toHaveBeenCalledWith(
+      'user-uuid',
+      hashes.map((hash) => hash.props.uuid),
+      proof,
+      expect.any(Function),
+      [itemHash1.props.uuid, 'omitted-type', 'deleted-item'],
+    )
+    expect(result.isFailed()).toBe(false)
+    expect(saveNewItem.execute).toHaveBeenCalled()
+  })
+
+  it('never validates or writes items when the collaboration fence refuses the batch', async () => {
+    const refusal = new Error('fence refused')
+    const run = jest.fn().mockRejectedValue(refusal)
+    await expect(
+      createUseCase({ run } as never).execute({
+        itemHashes: [itemHash1],
+        userUuid: 'user-uuid',
+        apiVersion: '1',
+        readOnlyAccess: false,
+        sessionUuid: 'session-uuid',
+        snjsVersion: '2.200.0',
+        isFreeUser: false,
+        hasContentLimit: false,
+        liveSyncEnabled: true,
+      }),
+    ).rejects.toBe(refusal)
+    expect(itemSaveValidator.validate).not.toHaveBeenCalled()
+    expect(saveNewItem.execute).not.toHaveBeenCalled()
+    expect(updateExistingItem.execute).not.toHaveBeenCalled()
   })
 
   it('should save new items', async () => {
