@@ -34,7 +34,7 @@ export type CollaborationSaverState = {
   saveFence?: { room: string; token: string }
 }
 
-/** Locale-independent ordering, shared by every participant. Unknown clients never qualify. */
+/** Keep a healthy saver; use locale-independent ordering to settle new or competing claims. */
 export function electCollaborationSaver(participants: SaverParticipant[]): SaverParticipant | undefined {
   return participants
     .filter(
@@ -49,6 +49,14 @@ export function electCollaborationSaver(participants: SaverParticipant[]): Saver
         peer.leaseId.length <= 128,
     )
     .sort((a, b) => {
+      // A newcomer, recovering peer, or older client without `saving` must not
+      // displace an established saver on every awareness/eligibility refresh.
+      // That creates needless read-only handovers and can race the previous
+      // server-fence release. Eligibility above still withdraws an unhealthy
+      // incumbent; SQL remains authoritative for every claim and saved write.
+      if ((a.saving === true) !== (b.saving === true)) {
+        return a.saving === true ? -1 : 1
+      }
       if (a.userUuid !== b.userUuid) {
         return a.userUuid < b.userUuid ? -1 : 1
       }

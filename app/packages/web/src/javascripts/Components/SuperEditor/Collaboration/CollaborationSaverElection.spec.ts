@@ -53,6 +53,16 @@ describe('collaboration saver election', () => {
     expect(revisionStampCoversDocumentState(newStamp, documentStateOf(doc))).toBe(true)
     doc.destroy()
   })
+  it('retains a healthy active saver ahead of a newly eligible or older participant', () => {
+    const active = { ...participant('z', 'active'), saving: true }
+    const newcomer = participant('a', 'newcomer')
+    expect(electCollaborationSaver([newcomer, active])).toBe(active)
+    expect(electCollaborationSaver([active, newcomer])).toBe(active)
+    expect(electCollaborationSaver([{ ...active, canSaveOverSocket: false }, newcomer])).toBe(newcomer)
+    expect(electCollaborationSaver([{ ...active, canonicalReady: false }, newcomer])).toBe(newcomer)
+    const otherActive = { ...newcomer, saving: true }
+    expect(electCollaborationSaver([active, otherActive])).toBe(otherActive)
+  })
   describe('live lifecycle', () => {
     let doc: Y.Doc
     let awareness: Awareness
@@ -163,6 +173,8 @@ describe('collaboration saver election', () => {
     })
     it('waits for the elected peer to hold its server fence before enabling edits', async () => {
       await jest.advanceTimersByTimeAsync(2_000)
+      lane = { usable: false }
+      changeLane()
       awareness.getStates().set(999, { saver: { ...participant('0', 'peer'), saving: false } })
       awareness.emit('change', [])
       expect(CollaborationSaverRegistry.get('room')).toMatchObject({ isSaver: false, paused: true })
@@ -175,6 +187,38 @@ describe('collaboration saver election', () => {
         paused: false,
         saverLeaseId: 'peer',
       })
+    })
+    it('does not interrupt a healthy saver when an earlier peer changes eligibility every five seconds', async () => {
+      doc.getText('text').insert(0, 'saved')
+      const stamp = createCollaborationRevisionStamp('epoch', documentStateOf(doc), 'saved', Date.now())!
+      content = {
+        text: 'saved',
+        appData: {
+          'org.standardnotes.sn': {
+            collaborationRevision: stamp,
+            client_updated_at: new Date(stamp.at).toISOString(),
+          },
+        },
+      }
+      await jest.advanceTimersByTimeAsync(2_000)
+      const pauses: boolean[] = []
+      const unsubscribe = CollaborationSaverRegistry.subscribe('room', () => {
+        pauses.push(CollaborationSaverRegistry.get('room')?.paused === true)
+      })
+      try {
+        for (let tick = 0; tick < 8; tick++) {
+          awareness.getStates().set(999, { saver: participant('0', 'peer', tick % 2 === 0) })
+          awareness.emit('change', [])
+          await jest.advanceTimersByTimeAsync(5_000)
+        }
+        expect(pauses).not.toContain(true)
+        expect(CollaborationSaverRegistry.get('room')).toMatchObject({ isSaver: true, paused: false })
+        expect(claimCollaborationSaveFence).toHaveBeenCalledTimes(1)
+        expect(renewCollaborationSaveFence).toHaveBeenCalled()
+        expect(releaseCollaborationSaveFence).not.toHaveBeenCalled()
+      } finally {
+        unsubscribe()
+      }
     })
     it('losing the authoritative renewal immediately stops saving and editing', async () => {
       doc.getText('text').insert(0, 'saved')
@@ -309,6 +353,11 @@ describe('collaboration saver election', () => {
         await Promise.resolve()
       }
       expect(awareness.getLocalState()?.saver.canSaveOverSocket).toBe(true)
+      await jest.advanceTimersByTimeAsync(2_000)
+      expect(claimCollaborationSaveFence).toHaveBeenCalledTimes(claims)
+      expect(CollaborationSaverRegistry.get('room')?.saverLeaseId).toBe('peer')
+      awareness.getStates().delete(999)
+      awareness.emit('change', [])
       await jest.advanceTimersByTimeAsync(2_000)
       expect(claimCollaborationSaveFence).toHaveBeenCalledTimes(claims + 1)
       expect(CollaborationSaverRegistry.get('room')?.isSaver).toBe(true)

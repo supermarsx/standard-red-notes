@@ -100,6 +100,12 @@ allows normal tabs and devices while bounding per-account connection fan-out.
 WebSocket delivery is best-effort; encrypted item sync holds the durable record.
 A live Super note has one saving device, chosen from canonical-ready editors
 whose socket save lane works. That device holds a server lease for the note.
+An eligible active saver keeps that role when another editor joins or regains
+connectivity. A joining or older client without an active-saver announcement
+does not force a handover merely by sorting earlier in the election. If the
+saver loses its socket save lane or canonical room state, another eligible
+device can take over. Competing active announcements use a deterministic order;
+the server lease still decides who can persist the note.
 Other participants contribute through the encrypted relay without saving
 competing whole-note copies. A replacement obtains the lease and retrieves
 the current server revision before saving. The database serializes ownership
