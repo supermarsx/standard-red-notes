@@ -664,6 +664,8 @@ export class SyncTransportWorkerRuntime {
   private state: SyncTransportState = 'HTTP_ONLY'
   private socket?: SyncSocketLike
   private socketGeneration = 0
+  private connectionAttemptGeneration = 0
+  private connectionAcquisition?: Promise<void>
   private active?: ActiveRequest
   private authorization?: SyncTicket
   private sessionScope?: string
@@ -1225,7 +1227,20 @@ export class SyncTransportWorkerRuntime {
       await this.fallback('reconnect-gap')
       return
     }
-    if (await this.socketOwnedByAnotherTab(sessionScope)) {
+    const active = this.active
+    if (
+      this.shuttingDown ||
+      !active ||
+      active.clientRequestId !== clientRequestId ||
+      active.sessionScope !== sessionScope
+    ) {
+      return
+    }
+    const ownedByAnotherTab = await this.socketOwnedByAnotherTab(sessionScope)
+    if (this.shuttingDown || this.active !== active) {
+      return
+    }
+    if (ownedByAnotherTab) {
       await this.fallback('multi-tab-not-owner')
       return
     }
@@ -2213,6 +2228,45 @@ export class SyncTransportWorkerRuntime {
   }
 
   private async connect(clientRequestId: string, sessionScope: string, authorization: SyncTicket): Promise<void> {
+    const active = this.active
+    if (
+      this.shuttingDown ||
+      !active ||
+      active.clientRequestId !== clientRequestId ||
+      active.sessionScope !== sessionScope
+    ) {
+      return
+    }
+    const generation = ++this.connectionAttemptGeneration
+    // Serialize acquisition and stale-owner cleanup. All attempts use this runtime's
+    // owner ID, so releasing a stale acquisition must precede a successor acquiring it.
+    const previous = this.connectionAcquisition
+    const operation = (async () => {
+      if (previous) {
+        await previous.catch(() => undefined)
+      }
+      if (this.shuttingDown || this.active !== active || generation !== this.connectionAttemptGeneration) {
+        return
+      }
+      await this.connectCurrent(clientRequestId, sessionScope, authorization, active, generation)
+    })()
+    this.connectionAcquisition = operation
+    try {
+      await operation
+    } finally {
+      if (this.connectionAcquisition === operation) {
+        this.connectionAcquisition = undefined
+      }
+    }
+  }
+
+  private async connectCurrent(
+    clientRequestId: string,
+    sessionScope: string,
+    authorization: SyncTicket,
+    active: ActiveRequest,
+    generation: number,
+  ): Promise<void> {
     if (
       !this.active ||
       this.active.clientRequestId !== clientRequestId ||
@@ -2241,8 +2295,9 @@ export class SyncTransportWorkerRuntime {
 
     this.authorization = authorization
     this.sessionScope = sessionScope
-    this.transportScope = `${sessionScope}|${endpoint.origin}${endpoint.pathname}|${authorization.deviceId}`
-    this.lastTransportScope = this.transportScope
+    const transportScope = `${sessionScope}|${endpoint.origin}${endpoint.pathname}|${authorization.deviceId}`
+    this.transportScope = transportScope
+    this.lastTransportScope = transportScope
     try {
       const owner = await this.outbox.acquireOwner(
         this.transportScope,
@@ -2251,12 +2306,21 @@ export class SyncTransportWorkerRuntime {
         this.now(),
         OWNER_LEASE_TTL_MS,
       )
+      if (this.shuttingDown || this.active !== active || generation !== this.connectionAttemptGeneration) {
+        if (owner) {
+          await this.outbox.releaseOwner(transportScope, sessionScope, this.ownerId)
+        }
+        return
+      }
       if (!owner) {
         await this.fallback('multi-tab-not-owner')
         return
       }
       this.beginOwnerRenewal()
     } catch {
+      if (this.shuttingDown || this.active !== active || generation !== this.connectionAttemptGeneration) {
+        return
+      }
       await this.fallback('outbox-unavailable')
       return
     }
@@ -4715,10 +4779,20 @@ export class SyncTransportWorkerRuntime {
       if (!this.transportScope || !this.sessionScope) {
         return
       }
+      const socket = this.socket
+      const generation = this.socketGeneration
+      const transportScope = this.transportScope
+      const sessionScope = this.sessionScope
+      const stillCurrent = () =>
+        !this.shuttingDown &&
+        this.socket === socket &&
+        this.socketGeneration === generation &&
+        this.transportScope === transportScope &&
+        this.sessionScope === sessionScope
       void this.outbox
-        .renewOwner(this.transportScope, this.sessionScope, this.ownerId, this.now(), OWNER_LEASE_TTL_MS)
+        .renewOwner(transportScope, sessionScope, this.ownerId, this.now(), OWNER_LEASE_TTL_MS)
         .then((outcome) => {
-          if (outcome === 'renewed') {
+          if (!stillCurrent() || outcome === 'renewed') {
             return
           }
           /**
@@ -4743,7 +4817,11 @@ export class SyncTransportWorkerRuntime {
            */
           void this.surrenderOwnership(outcome === 'taken' ? 'multi-tab-not-owner' : 'reconnect-gap')
         })
-        .catch(() => this.surrenderOwnership('outbox-unavailable'))
+        .catch(() => {
+          if (stillCurrent()) {
+            return this.surrenderOwnership('outbox-unavailable')
+          }
+        })
     }, OWNER_RENEW_INTERVAL_MS)
   }
 
@@ -5020,6 +5098,7 @@ export class SyncTransportWorkerRuntime {
     redialling = false,
     reason,
   }: { redialling?: boolean; reason?: SyncFallbackReason } = {}): Promise<void> {
+    this.connectionAttemptGeneration += 1
     this.clearAckDeadline()
     this.cancelCommandRetry()
     this.clearHeartbeat()

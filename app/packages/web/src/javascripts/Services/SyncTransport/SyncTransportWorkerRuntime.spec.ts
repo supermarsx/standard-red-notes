@@ -3841,6 +3841,126 @@ describe('SyncTransportWorkerRuntime', () => {
       return command
     }
 
+    it('does not emit a ticket request after shutdown while ownership inspection was pending', async () => {
+      const harness = setup()
+      let resume!: (owned: boolean) => void
+      jest.spyOn(harness.outbox, 'sessionHeldByAnotherOwner').mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resume = resolve
+          }),
+      )
+      const starting = harness.runtime.handle({
+        type: 'KEEP_SOCKET_READY',
+        clientRequestId: 'ready',
+        sessionScope: SESSION_A,
+      })
+      await flush()
+      await harness.runtime.handle({ type: 'SHUTDOWN' })
+      const afterShutdown = harness.messages.length
+      resume(false)
+      await starting
+      expect(harness.messages.slice(afterShutdown)).toEqual([])
+    })
+
+    it('does not create a socket or retain an owner acquired after shutdown', async () => {
+      const harness = setup()
+      let resume!: () => void
+      const gate = new Promise<void>((resolve) => {
+        resume = resolve
+      })
+      const acquire = harness.outbox.acquireOwner.bind(harness.outbox)
+      jest.spyOn(harness.outbox, 'acquireOwner').mockImplementation(async (...args) => {
+        await gate
+        return acquire(...args)
+      })
+      await harness.runtime.handle({ type: 'KEEP_SOCKET_READY', clientRequestId: 'ready', sessionScope: SESSION_A })
+      const connecting = harness.runtime.handle({
+        type: 'CONNECT',
+        clientRequestId: 'ready',
+        sessionScope: SESSION_A,
+        authorization: {
+          endpoint: 'wss://sync.example.test/sockets/sync',
+          ticket: 't'.repeat(40),
+          expiresAt: Date.now() + 30_000,
+          deviceId: 'device-1',
+        },
+      })
+      await flush()
+      await harness.runtime.handle({ type: 'SHUTDOWN' })
+      const afterShutdown = harness.messages.length
+      resume()
+      await connecting
+      expect(harness.sockets).toHaveLength(0)
+      expect(harness.outbox.owners.size).toBe(0)
+      expect(harness.messages.slice(afterShutdown)).toEqual([])
+      expect(jest.getTimerCount()).toBe(0)
+    })
+
+    it('does not let a delayed renewal verdict close a replacement socket', async () => {
+      const harness = setup()
+      const first = await authorize(harness)
+      await settleCommand(harness, first)
+      let finishRenewal!: (outcome: OwnerRenewalOutcome) => void
+      jest.spyOn(harness.outbox, 'renewOwner').mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishRenewal = resolve
+          }),
+      )
+      jest.advanceTimersByTime(5_000)
+      await flush()
+      expect(finishRenewal).toBeDefined()
+      await harness.runtime.handle({ type: 'RELEASE_OWNER' })
+      const replacement = await authorize(harness)
+      const before = harness.messages.length
+      finishRenewal('lapsed')
+      await flush()
+      expect(replacement.readyState).toBe(1)
+      expect(harness.outbox.owners.has(TRANSPORT_SCOPE)).toBe(true)
+      expect(harness.messages.slice(before)).toEqual([])
+    })
+
+    it('does not let delayed bootstrap acquisition overwrite its command successor', async () => {
+      const harness = setup()
+      let resume!: () => void
+      const gate = new Promise<void>((resolve) => {
+        resume = resolve
+      })
+      const acquire = harness.outbox.acquireOwner.bind(harness.outbox)
+      jest.spyOn(harness.outbox, 'acquireOwner').mockImplementationOnce(async (...args) => {
+        await gate
+        return acquire(...args)
+      })
+      const authorization = {
+        endpoint: 'wss://sync.example.test/sockets/sync',
+        ticket: 't'.repeat(40),
+        expiresAt: Date.now() + 30_000,
+        deviceId: 'device-1',
+      }
+      await harness.runtime.handle({ type: 'KEEP_SOCKET_READY', clientRequestId: 'ready', sessionScope: SESSION_A })
+      const bootstrap = harness.runtime.handle({
+        type: 'CONNECT',
+        clientRequestId: 'ready',
+        sessionScope: SESSION_A,
+        authorization,
+      })
+      await flush()
+      await harness.runtime.handle({ type: 'EXECUTE', clientRequestId: 'save', body: body(), sessionScope: SESSION_A })
+      const successor = harness.runtime.handle({
+        type: 'CONNECT',
+        clientRequestId: 'save',
+        sessionScope: SESSION_A,
+        authorization,
+      })
+      resume()
+      await Promise.all([bootstrap, successor])
+      expect(harness.sockets).toHaveLength(1)
+      expect(harness.outbox.owners.has(TRANSPORT_SCOPE)).toBe(true)
+      harness.sockets[0].open()
+      expect(JSON.parse(harness.sockets[0].sent[0]).type).toBe('AUTH')
+    })
+
     it('P1: an outbox that cannot be opened sends the command to HTTP instead of demanding recovery', async () => {
       const harness = setup()
       harness.outbox.unopenable = true
