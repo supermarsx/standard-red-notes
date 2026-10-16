@@ -4,9 +4,31 @@ import {
   AssistantSyncedChats,
   mergeSyncedChats,
   normalizeSyncedChatRecord,
+  reconcileSyncedChatSnapshots,
   SyncedChatRecord,
 } from './assistantSyncedChats'
 const message = (id: string, text = id) => ({ id, kind: 'user' as const, text })
+
+it('reuses unchanged immutable chat snapshots and catalog arrays while preserving real changes', () => {
+  const first = {
+    tab: { id: 'one', title: 'First', userRenamed: false },
+    messages: [message('first')],
+    deniedToolNames: [],
+  }
+  const second = {
+    tab: { id: 'two', title: 'Second', userRenamed: false },
+    messages: [message('second')],
+    deniedToolNames: [],
+  }
+  const previous = [first, second]
+  expect(reconcileSyncedChatSnapshots(previous, JSON.parse(JSON.stringify(previous)))).toBe(previous)
+  const updated = { ...second, messages: [message('second', 'Remote update')] }
+  const merged = reconcileSyncedChatSnapshots(previous, [JSON.parse(JSON.stringify(first)), updated])
+  expect(merged[0]).toBe(first)
+  expect(merged[1]).toBe(updated)
+  expect(reconcileSyncedChatSnapshots(merged, [updated])).toEqual([updated])
+  expect(reconcileSyncedChatSnapshots(previous, [second, first])).toEqual([second, first])
+})
 const writer = (
   writerId: string,
   entries: SyncedChatRecord['entries'] = [],

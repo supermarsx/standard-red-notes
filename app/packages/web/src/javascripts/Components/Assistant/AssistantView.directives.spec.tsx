@@ -9,6 +9,7 @@ import ConversationPanel from './ConversationPanel'
 import AssistantView from './AssistantView'
 jest.mock('@standardnotes/toast', () => ({ addToast: jest.fn(), ToastType: { Error: 'error' } }))
 jest.mock('@/Assistant/assistantSyncedChats', () => ({
+  ...jest.requireActual('@/Assistant/assistantSyncedChats'),
   AssistantSyncedChats: class {
     async read() {
       return []

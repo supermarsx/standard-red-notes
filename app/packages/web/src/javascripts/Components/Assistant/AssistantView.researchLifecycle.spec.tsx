@@ -7,6 +7,7 @@ import { WebApplication } from '@/Application/WebApplication'
 import AssistantView from './AssistantView'
 const mockChatObservers = new Set<() => void>()
 jest.mock('@/Assistant/assistantSyncedChats', () => ({
+  ...jest.requireActual('@/Assistant/assistantSyncedChats'),
   AssistantSyncedChats: class {
     constructor(private application: WebApplication) {}
     private key() {

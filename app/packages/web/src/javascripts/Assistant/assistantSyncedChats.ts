@@ -41,6 +41,27 @@ export type SyncedChatRecord = {
   removedMessageIds?: string[]
 }
 export type SyncedChat = { tab: ChatTab; messages: PersistedAssistantMessage[]; deniedToolNames: string[] }
+const snapshotFingerprints = new WeakMap<SyncedChat, string>()
+const snapshotFingerprint = (chat: SyncedChat): string => {
+  let fingerprint = snapshotFingerprints.get(chat)
+  if (fingerprint === undefined) {
+    fingerprint = JSON.stringify(chat)
+    snapshotFingerprints.set(chat, fingerprint)
+  }
+  return fingerprint
+}
+
+/** Parsed chat snapshots are immutable. Reuse unchanged readers after catalog refreshes. */
+export function reconcileSyncedChatSnapshots(previous: SyncedChat[], next: readonly SyncedChat[]): SyncedChat[] {
+  const byId = new Map(previous.map((chat) => [chat.tab.id, chat]))
+  const reconciled = next.map((chat) => {
+    const old = byId.get(chat.tab.id)
+    return old && (old === chat || snapshotFingerprint(old) === snapshotFingerprint(chat)) ? old : chat
+  })
+  return reconciled.length === previous.length && reconciled.every((chat, index) => chat === previous[index])
+    ? previous
+    : reconciled
+}
 export type AssistantSharedChatBinding = {
   ready: boolean
   history?: SyncedChat

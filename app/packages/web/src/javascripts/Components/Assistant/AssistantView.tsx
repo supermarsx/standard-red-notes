@@ -24,7 +24,7 @@ import {
   readPersistedTabsResult,
 } from '@/Assistant/chatTabs'
 import ConversationPanel from './ConversationPanel'
-import { AssistantSyncedChats, type SyncedChat } from '@/Assistant/assistantSyncedChats'
+import { AssistantSyncedChats, reconcileSyncedChatSnapshots, type SyncedChat } from '@/Assistant/assistantSyncedChats'
 import { AssistantHistoryPanel, AssistantRecentChats, assistantWorkTabIcon } from './AssistantHistoryPanel'
 import {
   clearAssistantChatHistoryDeletionTombstone,
@@ -126,6 +126,9 @@ const AssistantView = forwardRef<HTMLDivElement, Props>((props, ref) => {
   const workspaceManifestChainRef = useRef(Promise.resolve(true))
   const [workspaceRevision, setWorkspaceRevision] = useState(0)
   const sharedStoreRef = useRef<AssistantSyncedChats | null>(null)
+  // Empty ordinary chats are local drafts. Metadata follows real history (or
+  // an explicit rename), rather than allocating a synced chat on every click.
+  const seededChatIdsRef = useRef(new Set<string>())
   const [sharedChats, setSharedChats] = useState<SyncedChat[]>([])
   const [sharedReady, setSharedReady] = useState(false)
   const metadataTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>())
@@ -135,7 +138,7 @@ const AssistantView = forwardRef<HTMLDivElement, Props>((props, ref) => {
     if (pending) {
       clearTimeout(pending)
     }
-    if (!store) {
+    if (!store || !seededChatIdsRef.current.has(tab.id)) {
       return
     }
     const timer = setTimeout(() => {
@@ -143,11 +146,20 @@ const AssistantView = forwardRef<HTMLDivElement, Props>((props, ref) => {
       if (sharedStoreRef.current !== store || workspaceLockedRef.current) {
         return
       }
-      void store.updateMetadata(tab).catch(() => {
-        if (sharedStoreRef.current === store && !workspaceLockedRef.current) {
-          setWorkspacePersistenceNotice('Chat details could not be synced. Try again when storage is available.')
-        }
-      })
+      void store
+        .updateMetadata(tab)
+        .then(() => {
+          if (sharedStoreRef.current === store && !workspaceLockedRef.current) {
+            setWorkspacePersistenceNotice((notice) => {
+              return notice === 'Chat details could not be synced. Try again when storage is available.' ? '' : notice
+            })
+          }
+        })
+        .catch(() => {
+          if (sharedStoreRef.current === store && !workspaceLockedRef.current) {
+            setWorkspacePersistenceNotice('Chat details could not be synced. Try again when storage is available.')
+          }
+        })
     }, 500)
     metadataTimers.current.set(tab.id, timer)
   }, [])
@@ -205,6 +217,7 @@ const AssistantView = forwardRef<HTMLDivElement, Props>((props, ref) => {
         workspaceLockedRef.current = true
         sharedStoreRef.current?.dispose()
         sharedStoreRef.current = null
+        seededChatIdsRef.current.clear()
         setSharedChats([])
         setSharedReady(false)
         clearAssistantDirectives()
@@ -261,6 +274,7 @@ const AssistantView = forwardRef<HTMLDivElement, Props>((props, ref) => {
     setLoadedChatAccountScope('')
     setSharedChats([])
     setSharedReady(false)
+    seededChatIdsRef.current.clear()
     setMountedTabIds([])
 
     const activate = async () => {
@@ -320,12 +334,21 @@ const AssistantView = forwardRef<HTMLDivElement, Props>((props, ref) => {
           }
           const restored = remote.length ? remote.map((chat) => chat.tab) : [createTab()]
           let known = new Set(remote.map((chat) => chat.tab.id))
-          const refresh = async () => {
+          let catalog = remote
+          let refreshing = false
+          let refreshRequested = false
+          const refreshOnce = async () => {
             try {
-              const next = await sharedStore!.read()
+              const read = await sharedStore!.read()
               if (cancelled || transition !== workspaceActivationRef.current) {
                 return
               }
+              const previousMetadata = new Map(catalog.map((chat) => [chat.tab.id, chat.tab]))
+              const next = reconcileSyncedChatSnapshots(catalog, read)
+              if (next === catalog) {
+                return
+              }
+              catalog = next
               const nextIds = new Set(next.map((chat) => chat.tab.id))
               const removed = new Set([...known].filter((chatId) => !nextIds.has(chatId)))
               const added = next.filter((chat) => !known.has(chat.tab.id)).map((chat) => chat.tab.id)
@@ -334,13 +357,22 @@ const AssistantView = forwardRef<HTMLDivElement, Props>((props, ref) => {
                 ? (tabsRef.current.find((tab) => !removed.has(tab.id)) ?? next[0]?.tab ?? createTab())
                 : undefined
               known = nextIds
+              nextIds.forEach((chatId) => seededChatIdsRef.current.add(chatId))
               setSharedChats(next)
               setTabs((previous) => {
                 const retained = previous.filter((tab) => !removed.has(tab.id))
                 const metadata = new Map(next.map((chat) => [chat.tab.id, chat.tab]))
                 const ids = new Set(retained.map((tab) => tab.id))
                 const merged = [
-                  ...retained.map((tab) => metadata.get(tab.id) ?? tab),
+                  ...retained.map((tab) => {
+                    const updated = metadata.get(tab.id)
+                    // A transcript-only update must not replace an unchanged
+                    // tab or undo an optimistic local title/mode selection.
+                    if (!updated || JSON.stringify(updated) === JSON.stringify(previousMetadata.get(tab.id))) {
+                      return tab
+                    }
+                    return JSON.stringify(updated) === JSON.stringify(tab) ? tab : updated
+                  }),
                   ...next.filter((chat) => !ids.has(chat.tab.id)).map((chat) => chat.tab),
                 ]
                 if (!merged.length) {
@@ -349,15 +381,22 @@ const AssistantView = forwardRef<HTMLDivElement, Props>((props, ref) => {
                 if (replacement) {
                   setActiveTabId(replacement.id)
                 }
-                return merged
+                return merged.length === previous.length && merged.every((tab, index) => tab === previous[index])
+                  ? previous
+                  : merged
               })
               // New remote chats appear in History without stealing focus.
-              setClosedTabIds((previous) => [
-                ...new Set([
-                  ...previous.filter((chatId) => !removed.has(chatId) && chatId !== replacement?.id),
-                  ...added.filter((chatId) => !visibleIds.has(chatId) && chatId !== replacement?.id),
-                ]),
-              ])
+              setClosedTabIds((previous) => {
+                const closed = [
+                  ...new Set([
+                    ...previous.filter((chatId) => !removed.has(chatId) && chatId !== replacement?.id),
+                    ...added.filter((chatId) => !visibleIds.has(chatId) && chatId !== replacement?.id),
+                  ]),
+                ]
+                return closed.length === previous.length && closed.every((id, index) => id === previous[index])
+                  ? previous
+                  : closed
+              })
             } catch {
               if (!cancelled && transition === workspaceActivationRef.current) {
                 setWorkspacePersistenceNotice(
@@ -366,11 +405,35 @@ const AssistantView = forwardRef<HTMLDivElement, Props>((props, ref) => {
               }
             }
           }
+          const refresh = () => {
+            refreshRequested = true
+            if (refreshing) {
+              return
+            }
+            refreshing = true
+            void (async () => {
+              while (refreshRequested) {
+                if (cancelled || transition !== workspaceActivationRef.current) {
+                  break
+                }
+                refreshRequested = false
+                await refreshOnce()
+              }
+            })().finally(() => {
+              refreshing = false
+              // An event can arrive after the drain's final condition but
+              // before this microtask. Do not lose that last invalidation.
+              if (refreshRequested && !cancelled && transition === workspaceActivationRef.current) {
+                refresh()
+              }
+            })
+          }
           stopShared = sharedStore.subscribe(() => {
-            void refresh()
+            refresh()
           })
-          void refresh()
+          refresh()
           setTabs(restored)
+          remote.forEach(({ tab }) => seededChatIdsRef.current.add(tab.id))
           setActiveTabId(restored[0].id)
           setClosedTabIds(restored.slice(1).map((tab) => tab.id))
           setSharedChats(remote)
@@ -857,14 +920,13 @@ const AssistantView = forwardRef<HTMLDivElement, Props>((props, ref) => {
   const autoNameTab = useCallback(
     (tabId: string, text: string) => {
       const current = tabsRef.current.find((tab) => tab.id === tabId)
-      if (current && !current.userRenamed) {
-        checkpointMetadata({ ...current, title: deriveTitleFromMessage(text) })
+      if (!current || current.userRenamed) {
+        return
       }
-      setTabs((prev) =>
-        prev.map((tab) => {
-          return tab.id === tabId && !tab.userRenamed ? { ...tab, title: deriveTitleFromMessage(text) } : tab
-        }),
-      )
+      const next = { ...current, title: deriveTitleFromMessage(text) }
+      checkpointMetadata(next)
+      tabsRef.current = tabsRef.current.map((tab) => (tab.id === tabId ? next : tab))
+      setTabs(tabsRef.current)
     },
     [checkpointMetadata],
   )
@@ -880,6 +942,7 @@ const AssistantView = forwardRef<HTMLDivElement, Props>((props, ref) => {
     const current = tabsRef.current.find((tab) => tab.id === tabId)
     const store = sharedStoreRef.current
     if (current && store) {
+      seededChatIdsRef.current.add(tabId)
       void store.updateMetadata({ ...current, title, userRenamed: true }).catch(() => {
         if (sharedStoreRef.current === store && !workspaceLockedRef.current) {
           setWorkspacePersistenceNotice(
@@ -1327,6 +1390,18 @@ const AssistantView = forwardRef<HTMLDivElement, Props>((props, ref) => {
                               ) {
                                 throw new Error('Synced chat storage is unavailable.')
                               }
+                              if (
+                                !seededChatIdsRef.current.has(tab.id) &&
+                                !messages.some(
+                                  (message) =>
+                                    message.text.trim().length > 0 ||
+                                    message.attachments?.length ||
+                                    message.activities?.length,
+                                )
+                              ) {
+                                return
+                              }
+                              seededChatIdsRef.current.add(tab.id)
                               await store.save(current, messages, deniedToolNames)
                               const canonical = await store.read()
                               if (
