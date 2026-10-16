@@ -918,6 +918,12 @@ Guide the assistant mid-task, line up messages, and watch it plan multi-step wor
 
 While the assistant works on a task you stay in control. You can nudge it, stop it, line up follow-ups, and watch how it breaks larger work into steps.
 
+Research mode searches through your server’s configured web service and reads up to three pages before writing a research note. Deep research can combine that web evidence with a bounded investigation of your own notes. Every search query and page URL requires approval before it is sent outside end-to-end encryption; retrieved text is sent to your configured AI provider. Only the topic you enter is used as the search query, not the contents of your notes. Reports link the web pages actually retrieved. If access is unavailable, declined, or returns no usable pages, the report says so instead of claiming live evidence.
+
+Chat, Research, and Deep research have separate named tabs, so you can keep several investigations open. Switching or closing a tab keeps its current work available in History; deleting it stops its run. Topic text names research tabs automatically until you rename them. Saved chat history can be reopened, but a page reload does not resume an in-flight research job or restore an unsaved research result; research notes you created remain ordinary saved notes.
+
+The assistant’s data-exposure reminder can be dismissed from its small close control. Choose once, 15 days, or never. Remembered choices apply to this account’s assistant workspace in this browser; hiding the reminder does not change approval requirements or where messages, note excerpts, and web queries are sent.
+
 - Steer: while the assistant is working, type a message and press Steer (or Enter) to inject guidance mid-task. It adjusts on its next step without restarting, and your steered message appears with a “↳ Steer” marker.
 - Interrupt: the Stop button aborts the current run and clears any pending steers and queued messages.
 - Queue: messages you enter while a run is active are lined up and run automatically, in order, when the current run finishes. Queued items are listed and can be removed.
