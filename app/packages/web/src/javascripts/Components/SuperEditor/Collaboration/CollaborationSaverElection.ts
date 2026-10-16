@@ -578,23 +578,53 @@ export function installCollaborationSaver(
     if (!target) {
       throw new Error('The collaboration document is not ready to persist.')
     }
-    if (CollaborationSaverRegistry.get(room)?.isSaver) {
-      await application.sync.sync({
-        queueStrategy: SyncQueueStrategy.ForceSpawnNew,
-        isUserInitiated: true,
-        awaitAll: false,
-        sourceDescription: 'Persisting the outgoing collaborative note over its socket saver',
-      })
+    const isAcknowledged = () => {
+      const note = application.items.findItem(room)
+      const stamp = note ? readCollaborationRevisionStamp(note.content) : undefined
+      return note?.dirty === false && stamp?.epoch === roomEpoch && revisionStampCoversDocumentState(stamp, target)
+    }
+    // A clean, exact CRDT acknowledgement needs no new network round trip.
+    if (isAcknowledged()) {
+      return
     }
     const deadline = Date.now() + SAVER_DURABILITY_TIMEOUT_MS
+    let nextRefreshAt = 0
     while (Date.now() < deadline) {
       if (disposed) {
         break
       }
-      const note = application.items.findItem(room)
-      const stamp = note ? readCollaborationRevisionStamp(note.content) : undefined
-      if (note?.dirty === false && stamp?.epoch === roomEpoch && revisionStampCoversDocumentState(stamp, target)) {
+      if (isAcknowledged()) {
         return
+      }
+      if (Date.now() >= nextRefreshAt) {
+        nextRefreshAt = Date.now() + 3_000
+        const isSaver = CollaborationSaverRegistry.get(room)?.isSaver === true
+        // A follower must retrieve the saver's committed item, rather than
+        // treating the absence of a local push notification as a failed save.
+        // Only the authoritative saver may upload the collaborative body.
+        const refresh = application.sync.sync({
+          ...(!isSaver ? { downloadOnly: true } : {}),
+          queueStrategy: SyncQueueStrategy.ForceSpawnNew,
+          isUserInitiated: true,
+          awaitAll: false,
+          sourceDescription: isSaver
+            ? 'Persisting the outgoing collaborative note over its socket saver'
+            : 'Confirming the collaboration saver acknowledgement',
+        })
+        // A dependency that never answers must not make this bounded durability
+        // check wait forever. Its late completion still updates the normal sync
+        // pipeline; it cannot satisfy this check without exact stamp coverage.
+        let timeout: ReturnType<typeof setTimeout> | undefined
+        await Promise.race([
+          refresh.catch(() => undefined),
+          new Promise<void>((resolve) => {
+            timeout = setTimeout(resolve, Math.max(0, deadline - Date.now()))
+          }),
+        ])
+        clearTimeout(timeout)
+        if (!disposed && isAcknowledged()) {
+          return
+        }
       }
       await new Promise<void>((resolve) => setTimeout(resolve, 100))
     }

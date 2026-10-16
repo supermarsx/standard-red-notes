@@ -648,6 +648,113 @@ describe('collaboration saver election', () => {
       }
       expect(CollaborationSaverRegistry.get('room')).toMatchObject({ isSaver: true, saveFence: { token: 'token' } })
     })
+    it('accepts an already clean exact acknowledgement without starting another sync', async () => {
+      doc.getText('text').insert(0, 'already acknowledged')
+      await jest.advanceTimersByTimeAsync(2_000)
+      const stamp = createCollaborationRevisionStamp('epoch', documentStateOf(doc), 'already acknowledged', Date.now())!
+      content = {
+        text: 'already acknowledged',
+        appData: {
+          'org.standardnotes.sn': { collaborationRevision: stamp, client_updated_at: new Date(stamp.at).toISOString() },
+        },
+      }
+      dirty = false
+      jest.mocked(application.sync.sync).mockClear()
+      await CollaborationSaverRegistry.awaitDurable('room')
+      expect(application.sync.sync).not.toHaveBeenCalled()
+    })
+
+    it('pulls a follower acknowledgement without uploading or relying on a push notification', async () => {
+      doc.getText('text').insert(0, 'committed by peer')
+      lane = { usable: false }
+      changeLane()
+      awareness.getStates().set(999, { saver: { ...participant('0', 'peer'), saving: true } })
+      awareness.emit('change', [])
+      jest.mocked(application.sync.sync).mockImplementationOnce(async () => {
+        const stamp = createCollaborationRevisionStamp('epoch', documentStateOf(doc), 'committed by peer', Date.now())!
+        content = {
+          text: 'committed by peer',
+          appData: {
+            'org.standardnotes.sn': {
+              collaborationRevision: stamp,
+              client_updated_at: new Date(stamp.at).toISOString(),
+            },
+          },
+        }
+        dirty = false
+      })
+      await CollaborationSaverRegistry.awaitDurable('room')
+      expect(application.sync.sync).toHaveBeenCalledWith(expect.objectContaining({ downloadOnly: true }))
+      expect(CollaborationSaverRegistry.get('room')?.isSaver).toBe(false)
+    })
+
+    it('rechecks authoritative saver ownership during a follower durability wait', async () => {
+      doc.getText('text').insert(0, 'waiting for takeover')
+      lane = { usable: false }
+      changeLane()
+      ;(application.sync.sync as jest.Mock).mockImplementation(async (options) => {
+        if (options?.downloadOnly) return { successful: true, downloadOnly: true }
+        const stamp = createCollaborationRevisionStamp(
+          'epoch',
+          documentStateOf(doc),
+          'waiting for takeover',
+          Date.now(),
+        )!
+        content = {
+          text: 'waiting for takeover',
+          appData: {
+            'org.standardnotes.sn': {
+              collaborationRevision: stamp,
+              client_updated_at: new Date(stamp.at).toISOString(),
+            },
+          },
+        }
+        dirty = false
+        return { successful: true }
+      })
+      const waiting = CollaborationSaverRegistry.awaitDurable('room')
+      await jest.advanceTimersByTimeAsync(100)
+      expect(application.sync.sync).toHaveBeenCalledWith(expect.objectContaining({ downloadOnly: true }))
+      lane = { usable: true }
+      changeLane()
+      await jest.advanceTimersByTimeAsync(3_500)
+      await waiting
+      expect(CollaborationSaverRegistry.get('room')?.isSaver).toBe(true)
+      expect(jest.mocked(application.sync.sync).mock.calls.some(([options]) => !options?.downloadOnly)).toBe(true)
+    })
+
+    it('never treats a completed pull or a matching plaintext body as acknowledgement of later CRDT edits', async () => {
+      doc.getText('text').insert(0, 'old state')
+      const stamp = createCollaborationRevisionStamp('epoch', documentStateOf(doc), 'same plaintext', Date.now())!
+      content = {
+        text: 'same plaintext',
+        appData: {
+          'org.standardnotes.sn': { collaborationRevision: stamp, client_updated_at: new Date(stamp.at).toISOString() },
+        },
+      }
+      doc.getText('text').insert(0, 'unacknowledged edit')
+      lane = { usable: false }
+      changeLane()
+      const waiting = CollaborationSaverRegistry.awaitDurable('room')
+      const rejected = expect(waiting).rejects.toThrow('has not acknowledged')
+      await jest.advanceTimersByTimeAsync(15_100)
+      await rejected
+      expect(application.sync.sync).toHaveBeenCalledWith(expect.objectContaining({ downloadOnly: true }))
+      expect(doc.getText('text').toString()).toContain('unacknowledged edit')
+    })
+
+    it('bounds a durability wait even if the acknowledgement pull never answers', async () => {
+      doc.getText('text').insert(0, 'pending')
+      lane = { usable: false }
+      changeLane()
+      jest.mocked(application.sync.sync).mockImplementationOnce(() => new Promise(() => undefined))
+      const waiting = CollaborationSaverRegistry.awaitDurable('room')
+      const rejected = expect(waiting).rejects.toThrow('has not acknowledged')
+      await jest.advanceTimersByTimeAsync(15_100)
+      await rejected
+      expect(application.sync.sync).toHaveBeenCalledTimes(1)
+    })
+
     it('a last participant note switch waits for remote durability before releasing its saver proof', async () => {
       doc.getText('text').insert(0, 'outgoing edit')
       await jest.advanceTimersByTimeAsync(2_000)
