@@ -64,6 +64,10 @@ describe('AssistantUsageMeter', () => {
     expect(el.textContent).toContain('Input context · 80 / 100 (80%)')
     expect(el.querySelector('[aria-label="Last call input context usage"]')?.getAttribute('aria-valuenow')).toBe('80')
     expect(el.querySelector('[aria-label="5-hour AI token usage"]')).not.toBeNull()
+    expect(el.querySelector('[aria-label="AI token limits"]')?.textContent).toBe('5h10%·WeeklyUnavailable')
+    expect(el.querySelector('[aria-label="5-hour AI token usage"]')?.getAttribute('aria-valuetext')).toContain(
+      '100 / 1k tokens (10%)',
+    )
   })
 
   it('shows missing latest token reports as unknown even when earlier chat totals exist', () => {
@@ -80,7 +84,7 @@ describe('AssistantUsageMeter', () => {
       fiveHour: window({ resetsAt: new Date(Date.now() - 60_000).toISOString() }),
       weekly: undefined,
     })
-    expect(el.textContent).not.toContain('resets')
+    expect(el.querySelector('[aria-label="5-hour AI token usage"]')?.getAttribute('title')).not.toContain('resets')
   })
 
   it('renders the "resets in …" hint for a still-open window', () => {
@@ -88,7 +92,8 @@ describe('AssistantUsageMeter', () => {
       fiveHour: window({ resetsAt: new Date(Date.now() + 45 * 60_000).toISOString() }),
       weekly: undefined,
     })
-    expect(el.textContent).toContain('resets in')
-    expect(el.textContent).not.toContain('resets in now')
+    const detail = el.querySelector('[aria-label="5-hour AI token usage"]')?.getAttribute('title')
+    expect(detail).toContain('resets in')
+    expect(detail).not.toContain('resets in now')
   })
 })
