@@ -168,6 +168,55 @@ function mountFoldableEditor(): MountedEditor {
 }
 
 describe('FoldablePlugin fold-toggle (no-hang regression)', () => {
+  it('retains a collapsed child across ancestor collapse and expansion, then removes obsolete controls', () => {
+    const mounted = mountFoldableEditor()
+    let outer: ListItemNode
+    let inner: ListItemNode
+    let outerList: ListNode
+    let innerList: ListNode
+    try {
+      act(() =>
+        mounted.editor.update(
+          () => {
+            outer = $createListItemNode(false).append($createTextNode('Outer'))
+            inner = $createListItemNode(false).append($createTextNode('Inner'))
+            innerList = $createListNode('check').append($createListItemNode(false).append($createTextNode('Leaf')))
+            inner.append(innerList)
+            outerList = $createListNode('check').append(inner)
+            outer.append(outerList)
+            $getRoot().clear().append($createListNode('check').append(outer))
+          },
+          { discrete: true },
+        ),
+      )
+      const outerElement = mounted.editor.getElementByKey(outer!.getKey())!
+      const innerElement = mounted.editor.getElementByKey(inner!.getKey())!
+      const outerNested = mounted.editor.getElementByKey(outerList!.getKey())!
+      const innerNested = mounted.editor.getElementByKey(innerList!.getKey())!
+      const toggle = (element: HTMLElement) =>
+        Array.from(element.children).find((child) => child.hasAttribute('data-fold-toggle')) as HTMLElement
+      act(() => toggle(innerElement).click())
+      expect(innerNested.classList.contains('Lexical__folded')).toBe(true)
+      expect(toggle(outerElement).parentElement).toBe(outerElement)
+      expect(outerElement.isConnected).toBe(true)
+      act(() => toggle(outerElement).click())
+      expect(toggle(outerElement).getAttribute('aria-expanded')).toBe('false')
+      expect(outerNested.classList.contains('Lexical__folded')).toBe(true)
+      expect(toggle(innerElement).getAttribute('aria-expanded')).toBe('false')
+      act(() => toggle(outerElement).click())
+      expect(outerNested.classList.contains('Lexical__folded')).toBe(false)
+      expect(innerNested.classList.contains('Lexical__folded')).toBe(true)
+      act(() => toggle(innerElement).click())
+      expect(innerNested.classList.contains('Lexical__folded')).toBe(false)
+      act(() => mounted.editor.update(() => innerList!.remove(), { discrete: true }))
+      expect(toggle(innerElement)).toBeUndefined()
+      expect(innerElement.classList.contains('Lexical__foldable')).toBe(false)
+      expect(toggle(outerElement)).toBeDefined()
+    } finally {
+      mounted.teardown()
+    }
+  })
+
   it('retains folds without rewriting controls on selection changes and updates controls after content edits', () => {
     const mounted = mountFoldableEditor()
     try {

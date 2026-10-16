@@ -1,6 +1,6 @@
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
 import { mergeRegister } from '@lexical/utils'
-import { $isListItemNode, $isListNode, ListItemNode } from '@lexical/list'
+import { $isListItemNode, $isListNode } from '@lexical/list'
 import { $isHeadingNode, HeadingNode } from '@lexical/rich-text'
 import { $getNodeByKey, $getRoot, LexicalNode, setDOMUnmanaged } from 'lexical'
 import { useEffect } from 'react'
@@ -112,7 +112,9 @@ export function syncFoldControl(
   kind: FoldControlKind | null,
   collapsed: boolean,
 ): HTMLElement | null {
-  const existing = element.querySelector<HTMLElement>(`:scope > [${TOGGLE_ATTR}]`)
+  const existing = Array.from(element.children).find(
+    (child): child is HTMLElement => child instanceof HTMLElement && child.hasAttribute(TOGGLE_ATTR),
+  )
 
   element.classList.remove(...Object.values(FOLDABLE_KIND_CLASSES))
   if (!kind) {
@@ -163,49 +165,39 @@ function $readBlocks(): FoldBlock[] {
     }))
 }
 
-/** Collect the nested-subtree keys of a single list item (the keys to hide). */
-function collectNestedKeys(item: ListItemNode): string[] {
-  const nestedList = item.getChildren().find($isListNode)
-  if (!nestedList) {
-    return []
-  }
-  const keys: string[] = [nestedList.getKey()]
-  const walk = (node: LexicalNode) => {
-    keys.push(node.getKey())
-    if ($isListItemNode(node) || $isListNode(node)) {
-      for (const child of node.getChildren()) {
-        walk(child)
-      }
-    }
-  }
-  for (const child of nestedList.getChildren()) {
-    walk(child)
-  }
-  return keys
-}
-
-/** Read every foldable list item (one that contains a nested list) as FoldListItems. */
+/** Read fold controls and disjoint hidden subtrees in one document traversal. */
 type FoldableListItem = FoldListItem & { kind: Extract<FoldControlKind, 'list' | 'checklist'> }
 
-function $readFoldableListItems(): FoldableListItem[] {
+export function $readFoldableListItems(collapsedItems: ReadonlySet<string>): FoldableListItem[] {
   const items: FoldableListItem[] = []
-  const walk = (node: LexicalNode) => {
-    if ($isListItemNode(node)) {
-      const childKeys = collectNestedKeys(node)
-      if (childKeys.length > 0) {
-        const parent = node.getParent()
-        const kind = $isListNode(parent) && parent.getListType() === 'check' ? 'checklist' : 'list'
-        items.push({ key: node.getKey(), childKeys, kind })
-      }
+  const stack: { node: LexicalNode; hiddenKeys?: string[] }[] = $getRoot()
+    .getChildren()
+    .reverse()
+    .map((node) => ({ node }))
+  while (stack.length) {
+    const { node, hiddenKeys } = stack.pop()!
+    hiddenKeys?.push(node.getKey())
+    if (!$isListItemNode(node) && !$isListNode(node)) {
+      continue
     }
-    if ($isListItemNode(node) || $isListNode(node)) {
-      for (const child of node.getChildren()) {
-        walk(child)
+    const children = node.getChildren()
+    const nestedList = $isListItemNode(node) ? children.find($isListNode) : undefined
+    let ownHiddenKeys: string[] | undefined
+    if (nestedList) {
+      const parent = node.getParent()
+      const kind = $isListNode(parent) && parent.getListType() === 'check' ? 'checklist' : 'list'
+      const childKeys: string[] = []
+      // Hidden descendants retain their controls/collapsed state, but the
+      // ancestor's collector already covers them. Expanded rows need no arrays.
+      if (!hiddenKeys && collapsedItems.has(node.getKey())) {
+        ownHiddenKeys = childKeys
       }
+      items.push({ key: node.getKey(), childKeys, kind })
     }
-  }
-  for (const child of $getRoot().getChildren()) {
-    walk(child)
+    for (let index = children.length - 1; index >= 0; index--) {
+      const child = children[index]
+      stack.push({ node: child, hiddenKeys: hiddenKeys ?? (child === nestedList ? ownHiddenKeys : undefined) })
+    }
   }
   return items
 }
@@ -234,7 +226,7 @@ export default function FoldablePlugin(): null {
       }
       editor.getEditorState().read(() => {
         const blocks = $readBlocks()
-        const listItems = $readFoldableListItems()
+        const listItems = $readFoldableListItems(collapsedItems)
 
         // Prune collapsed keys that no longer point at a foldable node (deleted
         // or converted) so stale keys can't hide unrelated content.
