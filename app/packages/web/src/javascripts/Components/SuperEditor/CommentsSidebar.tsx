@@ -109,7 +109,11 @@ export function CommentsSidebar({ note }: { note: SNNote }) {
             stack.push(...node.getChildren().reverse())
           }
         }
-        setTasks(next)
+        const counts = new Map<string, number>()
+        for (const row of next) {
+          counts.set(row.todoId, (counts.get(row.todoId) ?? 0) + 1)
+        }
+        setTasks(next.filter((row) => counts.get(row.todoId) === 1))
       })
     refresh()
     return editor.registerUpdateListener(({ dirtyElements, dirtyLeaves }) => {

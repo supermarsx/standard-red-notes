@@ -9,9 +9,13 @@ import { CommentsSidebar } from './CommentsSidebar'
 import { createEditorControlsState, EditorControlsProvider, useEditorControlsState } from './EditorControlsContext'
 import { $setChecklistTodoId } from './Lexical/Nodes/ChecklistItemNode'
 import { ContentType } from '@standardnotes/snjs'
+import type { CommentAnchor } from '@/Comments/comments'
+import * as CommentTargets from '@/Comments/CommentTargets'
 let mockCommentsFailure = false
 let mockPrivateComments = 0
 let mockSharedComments = 0
+let mockNavigate: ((anchor: CommentAnchor) => void) | undefined
+let mockValidateTarget: ((scope: 'private' | 'collaborative', replying: boolean) => void) | undefined
 const mockCommentUpdates = new Set<() => void>()
 type ItemChanges = {
   changed: { uuid: string; content_type: string }[]
@@ -63,7 +67,17 @@ beforeEach(() => {
 jest.mock('@lexical/react/LexicalComposerContext', () => ({ useLexicalComposerContext: jest.fn() }))
 jest.mock('@/Components/Comments/CommentsPanel', () => ({
   __esModule: true,
-  default: ({ anchor }: { anchor?: { todoId?: string } }) => {
+  default: ({
+    anchor,
+    onNavigate,
+    validateTarget,
+  }: {
+    anchor?: { todoId?: string }
+    onNavigate: typeof mockNavigate
+    validateTarget: typeof mockValidateTarget
+  }) => {
+    mockNavigate = onNavigate
+    mockValidateTarget = validateTarget
     const [value, setValue] = useState('')
     if (mockCommentsFailure) {
       throw new Error('comments unavailable')
@@ -217,6 +231,64 @@ it('does not reveal comments from a note the current account cannot render', asy
       ),
     )
     expect(element.querySelector('aside')).toBeNull()
+  } finally {
+    await act(async () => root.unmount())
+  }
+})
+
+it('refuses ambiguous checklist navigation and never turns a stale item target into a whole-note comment', async () => {
+  const editor = createHeadlessEditor({
+    nodes: [ListNode, ListItemNode],
+    onError: (error) => {
+      throw error
+    },
+  })
+  let uniqueKey = ''
+  editor.update(
+    () => {
+      const first = $createListItemNode(false).append($createTextNode('First'))
+      const second = $createListItemNode(false).append($createTextNode('Second'))
+      const unique = $createListItemNode(false).append($createTextNode('Unique'))
+      $setChecklistTodoId(first, 'duplicate')
+      $setChecklistTodoId(second, 'duplicate')
+      $setChecklistTodoId(unique, 'unique-todo')
+      uniqueKey = unique.getKey()
+      $getRoot().append($createListNode('check').append(first, second, unique))
+    },
+    { discrete: true },
+  )
+  jest.mocked(useLexicalComposerContext).mockReturnValue([editor, {} as never])
+  const target = document.createElement('div')
+  target.scrollIntoView = jest.fn()
+  const getElement = jest.spyOn(editor, 'getElementByKey').mockReturnValue(target)
+  jest.spyOn(CommentTargets, 'captureAssistantCommentTarget').mockReturnValue({ assertCurrent: jest.fn() })
+  let controls!: ReturnType<typeof createEditorControlsState>
+  function Harness() {
+    controls = useEditorControlsState()
+    return <CommentsSidebar note={{ uuid: 'note' } as never} />
+  }
+  const element = document.createElement('div')
+  const root = createRoot(element)
+  try {
+    await act(async () =>
+      root.render(
+        <EditorControlsProvider identity={{}}>
+          <Harness />
+        </EditorControlsProvider>,
+      ),
+    )
+    await act(async () => controls.openComments())
+    await act(async () => mockNavigate!({ kind: 'checklist', todoId: 'duplicate' }))
+    expect(getElement).not.toHaveBeenCalled()
+    expect(element.textContent).toContain('The commented text has moved or is no longer in this note.')
+    await act(async () => mockNavigate!({ kind: 'checklist', todoId: 'unique-todo' }))
+    expect(getElement).toHaveBeenCalledWith(uniqueKey)
+    expect(target.scrollIntoView).toHaveBeenCalledTimes(1)
+    await act(async () => controls.setCommentTarget('duplicate'))
+    expect(element.textContent).toContain('This task is no longer in the note.')
+    expect(element.querySelector('textarea')).toBeNull()
+    await act(async () => controls.setCommentTarget('unique-todo'))
+    expect(() => mockValidateTarget!('private', false)).not.toThrow()
   } finally {
     await act(async () => root.unmount())
   }

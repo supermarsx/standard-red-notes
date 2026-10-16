@@ -12,16 +12,28 @@ export function markCommentAnchors(editor: LexicalEditor, anchors: CommentAnchor
   }
   editor.getEditorState().read(() => {
     const root = $getRoot()
-    let exactBlocks: ReturnType<typeof lexicalCommentBlockRanges> | undefined
-    let exactUnavailable = false
+    const exactRanges: { start: number; end: number }[] = []
+    let rootText: string | undefined
+    const mark = (element: HTMLElement | null | undefined): void => {
+      if (element && !marked.has(element)) {
+        element.setAttribute('data-note-comment-indicator', 'true')
+        marked.add(element)
+      }
+    }
     const tasks = new Map<string, LexicalNode>()
+    const ambiguousTasks = new Set<string>()
     const stack = anchors.some((anchor) => anchor.kind === 'checklist') ? [...root.getChildren()] : []
     let remaining = 50_000
     while (stack.length && remaining-- > 0) {
       const node = stack.pop()!
       const todoId = $isChecklistItemNode(node) ? $getChecklistTodoId(node) : undefined
       if (todoId) {
-        tasks.set(todoId, node)
+        if (tasks.has(todoId)) {
+          tasks.delete(todoId)
+          ambiguousTasks.add(todoId)
+        } else if (!ambiguousTasks.has(todoId)) {
+          tasks.set(todoId, node)
+        }
       }
       if ($isElementNode(node)) {
         stack.push(...node.getChildren())
@@ -33,26 +45,13 @@ export function markCommentAnchors(editor: LexicalEditor, anchors: CommentAnchor
         node = tasks.get(anchor.todoId)
       } else if (anchor.kind === 'super') {
         if (anchor.exactRange) {
-          if (exactUnavailable || !canUseCommentRange(anchor)) {
+          if (!canUseCommentRange(anchor)) {
             continue
           }
           const range = anchor.exactRange
-          if (root.getTextContent().slice(range.start, range.end) === range.text) {
-            try {
-              exactBlocks ??= lexicalCommentBlockRanges()
-            } catch {
-              exactUnavailable = true
-              continue
-            }
-            for (const block of exactBlocks) {
-              if (block.start < range.end && block.end > range.start) {
-                const element = editor.getElementByKey(block.key)
-                if (element) {
-                  element.setAttribute('data-note-comment-indicator', 'true')
-                  marked.add(element)
-                }
-              }
-            }
+          rootText ??= root.getTextContent()
+          if (rootText.slice(range.start, range.end) === range.text) {
+            exactRanges.push({ start: range.start, end: range.end })
           }
           continue
         }
@@ -67,9 +66,41 @@ export function markCommentAnchors(editor: LexicalEditor, anchors: CommentAnchor
         }
       }
       const element = node && editor.getElementByKey(node.getKey())
-      if (element) {
-        element.setAttribute('data-note-comment-indicator', 'true')
-        marked.add(element)
+      mark(element)
+    }
+    if (exactRanges.length) {
+      // Validate every quote against this editor state, then mark the union in
+      // one ordered sweep. Many comments on the same section must not rescan
+      // every block or rewrite the same DOM attribute once per comment.
+      exactRanges.sort((left, right) => left.start - right.start || left.end - right.end)
+      const merged: typeof exactRanges = []
+      for (const range of exactRanges) {
+        const previous = merged.at(-1)
+        if (previous && range.start < previous.end) {
+          previous.end = Math.max(previous.end, range.end)
+        } else {
+          merged.push(range)
+        }
+      }
+      let blocks: ReturnType<typeof lexicalCommentBlockRanges>
+      try {
+        blocks = lexicalCommentBlockRanges()
+      } catch {
+        // Preserve ordinary anchors, but never guess unsupported projections.
+        return
+      }
+      let rangeIndex = 0
+      for (const block of blocks) {
+        while (rangeIndex < merged.length && merged[rangeIndex].end <= block.start) {
+          rangeIndex++
+        }
+        const range = merged[rangeIndex]
+        if (!range) {
+          break
+        }
+        if (block.start < range.end && block.end > range.start) {
+          mark(editor.getElementByKey(block.key))
+        }
       }
     }
   })

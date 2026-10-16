@@ -16,6 +16,146 @@ import { $createParagraphNode, $createTextNode, $getRoot, createEditor } from 'l
 import { $createListItemNode, $createListNode, ListItemNode, ListNode } from '@lexical/list'
 import { $setChecklistTodoId } from '../../Lexical/Nodes/ChecklistItemNode'
 import { markCommentAnchors } from './CommentIndicators'
+import { captureLexicalCommentTarget } from './LexicalCommentTargets'
+import * as LexicalTargets from './LexicalCommentTargets'
+
+it.each(['same', 'spread'] as const)('projects blocks once and bounds overlap work for %s-block comments', (mode) => {
+  const view = setup()
+  const originalProjection = LexicalTargets.lexicalCommentBlockRanges
+  let intervalReads = 0
+  let blockKey = ''
+  const starts: number[] = []
+  let offset = 0
+  try {
+    view.editor.update(
+      () => {
+        $getRoot().clear()
+        for (let index = 0; index < 400; index++) {
+          const block = $createParagraphNode().append($createTextNode(`Paragraph ${index}`))
+          starts.push(offset)
+          offset += `Paragraph ${index}`.length + 2
+          if (index === 0) blockKey = block.getKey()
+          $getRoot().append(block)
+        }
+      },
+      { discrete: true },
+    )
+    const projection = jest.spyOn(LexicalTargets, 'lexicalCommentBlockRanges').mockImplementation(() =>
+      originalProjection().map((block) => ({
+        key: block.key,
+        get start() {
+          intervalReads++
+          return block.start
+        },
+        get end() {
+          intervalReads++
+          return block.end
+        },
+      })),
+    )
+    const setAttribute = jest.spyOn(view.editor.getElementByKey(blockKey)!, 'setAttribute')
+    markCommentAnchors(
+      view.editor,
+      Array.from({ length: 80 }, (_, index) => ({
+        kind: 'super' as const,
+        blockKey,
+        target: 'selection' as const,
+        exactRange: {
+          start: starts[mode === 'same' ? 0 : index * 5],
+          end: starts[mode === 'same' ? 0 : index * 5] + 9,
+          text: 'Paragraph',
+        },
+      })),
+    )
+    expect(projection).toHaveBeenCalledTimes(1)
+    expect(intervalReads).toBeLessThanOrEqual(400 * 4 + 80 * 2)
+    expect(setAttribute.mock.calls.filter(([name]) => name === 'data-note-comment-indicator')).toHaveLength(1)
+    expect(view.root.querySelectorAll('[data-note-comment-indicator]')).toHaveLength(mode === 'same' ? 1 : 80)
+  } finally {
+    view.close()
+  }
+})
+
+it('marks the union of overlapping exact ranges and leaves a quote-mismatched block untouched', () => {
+  const view = setup()
+  const keys: string[] = []
+  try {
+    view.editor.update(
+      () => {
+        $getRoot().clear()
+        for (const text of ['ab', 'cd', 'ef', 'gh']) {
+          const block = $createParagraphNode().append($createTextNode(text))
+          keys.push(block.getKey())
+          $getRoot().append(block)
+        }
+      },
+      { discrete: true },
+    )
+    const clear = markCommentAnchors(view.editor, [
+      { kind: 'super', blockKey: 'old-key', exactRange: { start: 1, end: 5, text: 'b\n\nc' } },
+      { kind: 'super', blockKey: 'old-key', exactRange: { start: 4, end: 10, text: 'cd\n\nef' } },
+      { kind: 'super', blockKey: 'old-key', exactRange: { start: 12, end: 13, text: 'wrong' } },
+    ])
+    expect(keys.map((key) => view.editor.getElementByKey(key)?.dataset.noteCommentIndicator)).toEqual([
+      'true',
+      'true',
+      'true',
+      undefined,
+    ])
+    clear()
+    expect(view.root.querySelector('[data-note-comment-indicator]')).toBeNull()
+  } finally {
+    view.close()
+  }
+})
+
+it('does not mark an empty block merely because two valid ranges meet at its offset', () => {
+  const view = setup()
+  let emptyKey = ''
+  try {
+    view.editor.update(
+      () => {
+        const empty = $createParagraphNode()
+        emptyKey = empty.getKey()
+        $getRoot()
+          .clear()
+          .append(
+            $createParagraphNode().append($createTextNode('a')),
+            empty,
+            $createParagraphNode().append($createTextNode('b')),
+          )
+      },
+      { discrete: true },
+    )
+    markCommentAnchors(view.editor, [
+      { kind: 'super', blockKey: 'old', exactRange: { start: 0, end: 3, text: 'a\n\n' } },
+      { kind: 'super', blockKey: 'old', exactRange: { start: 3, end: 6, text: '\n\nb' } },
+    ])
+    expect(view.editor.getElementByKey(emptyKey)?.dataset.noteCommentIndicator).toBeUndefined()
+    expect(view.root.querySelectorAll('[data-note-comment-indicator]')).toHaveLength(2)
+  } finally {
+    view.close()
+  }
+})
+
+it('refuses ambiguous checklist anchors just as target capture does', () => {
+  const view = setup()
+  try {
+    view.editor.update(
+      () => {
+        const duplicate = $createListItemNode(false).append($createTextNode('Different duplicated task'))
+        $setChecklistTodoId(duplicate, 'todo-one')
+        $getRoot().append($createListNode('check').append(duplicate))
+      },
+      { discrete: true },
+    )
+    expect(() => captureLexicalCommentTarget(view.editor, 'checklist', 'todo-one')).toThrow('ambiguous')
+    markCommentAnchors(view.editor, [{ kind: 'checklist', todoId: 'todo-one' }])
+    expect(view.root.querySelector('[data-note-comment-indicator]')).toBeNull()
+  } finally {
+    view.close()
+  }
+})
 
 function setup() {
   const editor = createEditor({
