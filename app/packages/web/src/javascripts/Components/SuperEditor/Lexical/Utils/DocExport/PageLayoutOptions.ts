@@ -3,16 +3,18 @@
  * paginated generators (docx / odt / pdf). It is deliberately a plain data shape
  * (no functions) so it can cross the PDF comlink worker boundary, and it is
  * decoupled from the UI/localStorage `NoteLayout` — the only coupling is the
- * pure `noteLayoutToPageLayoutOptions` mapper below (types are import-erased).
+ * pure `noteLayoutToPageLayoutOptions` mapper below.
  *
  * `undefined` (or an all-absent object) means: no headers, no footers, no page
  * numbering — i.e. the generators emit exactly their pre-t48 baseline output.
  */
-import type {
-  HeaderFooterAlign,
-  HeaderFooterFontId,
-  NoteLayout,
-  PageNumberFormat,
+import {
+  type HeaderFooterAlign,
+  type HeaderFooterFontId,
+  type NoteLayout,
+  type PageNumberFormat,
+  resolveMargin,
+  resolvePageDimensionsMm,
 } from '../../../Layout/layoutSettings'
 
 /** Tokens a header/footer `text` may embed; substituted with live fields per generator. */
@@ -36,6 +38,8 @@ export type HeaderFooterStyle = {
 }
 
 export type PageLayoutOptions = {
+  /** Concrete, orientation-resolved physical page geometry. */
+  geometry?: { widthMm: number; heightMm: number; marginMm: number; columns: number }
   pageNumber?: {
     format: PageNumberFormat
     align: HeaderFooterAlign
@@ -94,12 +98,22 @@ const pickStyle = (band: HeaderFooterStyle): HeaderFooterStyle => {
 }
 
 /**
- * Pure mapper: NoteLayout → PageLayoutOptions. Returns `undefined` when nothing
- * is enabled so callers pass no options and the generators stay on their
- * baseline (back-compat) path.
+ * Pure mapper: NoteLayout → PageLayoutOptions. Paginated note exports opt into
+ * physical geometry. Existing band-only callers retain their absent-options
+ * baseline when no bands are enabled.
  */
-export const noteLayoutToPageLayoutOptions = (layout: NoteLayout): PageLayoutOptions | undefined => {
+export const noteLayoutToPageLayoutOptions = (
+  layout: NoteLayout,
+  includeGeometry = false,
+): PageLayoutOptions | undefined => {
   const options: PageLayoutOptions = {}
+  if (includeGeometry) {
+    options.geometry = validatedPageGeometry({
+      ...resolvePageDimensionsMm(layout),
+      marginMm: marginLengthToMm(resolveMargin(layout)),
+      columns: layout.columns,
+    })
+  }
   if (layout.pageNumbering.enabled) {
     options.pageNumber = {
       format: layout.pageNumbering.format,
@@ -114,7 +128,45 @@ export const noteLayoutToPageLayoutOptions = (layout: NoteLayout): PageLayoutOpt
   if (layout.footer.enabled) {
     options.footer = { text: layout.footer.text, align: layout.footer.align, ...pickStyle(layout.footer) }
   }
-  return options.pageNumber || options.header || options.footer ? options : undefined
+  return options.geometry || options.pageNumber || options.header || options.footer ? options : undefined
+}
+
+export const millimetersToPoints = (value: number): number => (value * 72) / 25.4
+
+/** Physical exports cannot resolve relative CSS lengths or margin shorthands. */
+export const marginLengthToMm = (value: string): number => {
+  const match = /^(\d+(?:\.\d+)?|\.\d+)\s*(mm|cm|in|pt|pc|px)?$/i.exec(value.trim())
+  const factors: Record<string, number> = { mm: 1, cm: 10, in: 25.4, pt: 25.4 / 72, pc: 25.4 / 6, px: 25.4 / 96 }
+  if (!match || (!match[2] && Number(match[1]) !== 0)) {
+    throw new Error(
+      'Document exports require one page margin in mm, cm, in, pt, pc or px. Update the Page margin setting.',
+    )
+  }
+  return Number(match[1]) * (factors[match[2]?.toLowerCase()] ?? 1)
+}
+
+export const validatedPageGeometry = (geometry: NonNullable<PageLayoutOptions['geometry']>) => {
+  const { widthMm, heightMm, marginMm, columns } = geometry
+  if (
+    ![widthMm, heightMm, marginMm].every(Number.isFinite) ||
+    widthMm < 10 ||
+    heightMm < 10 ||
+    widthMm > 2000 ||
+    heightMm > 2000 ||
+    marginMm < 0 ||
+    !Number.isInteger(columns) ||
+    columns < 1 ||
+    columns > 6
+  ) {
+    throw new Error('The document page geometry is invalid. Review the Page layout settings.')
+  }
+  if (marginMm * 2 >= Math.min(widthMm, heightMm)) {
+    throw new Error('Page margins leave no printable area. Reduce the margins or increase the page dimensions.')
+  }
+  if (widthMm - marginMm * 2 <= (columns - 1) * 5) {
+    throw new Error('Page columns leave no printable area. Reduce the columns or margins, or increase the page width.')
+  }
+  return geometry
 }
 
 /** True when at least one band (text or page-number) occupies the given location. */

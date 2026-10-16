@@ -41,6 +41,9 @@ export const PAGE_SIZE_OPTIONS: PageSizeOption[] = [
 ]
 
 export const DEFAULT_PAGE_SIZE_ID = 'a4'
+export const CUSTOM_PAGE_SIZE_ID = 'custom'
+export const MIN_PAGE_DIMENSION_MM = 10
+export const MAX_PAGE_DIMENSION_MM = 2000
 
 export type PageOrientation = 'portrait' | 'landscape'
 
@@ -151,6 +154,9 @@ export type NavigationSettings = {
 export type NoteLayout = {
   /** Id from PAGE_SIZE_OPTIONS. */
   pageSizeId: string
+  /** Portrait page dimensions in millimetres, used for the custom size. */
+  customPageWidthMm: number
+  customPageHeightMm: number
   orientation: PageOrientation
   /** Id from MARGIN_PRESETS, or CUSTOM_MARGIN_ID when `customMargin` is used. */
   marginId: string
@@ -178,6 +184,8 @@ export type NoteLayout = {
 
 export const DEFAULT_NOTE_LAYOUT: NoteLayout = {
   pageSizeId: DEFAULT_PAGE_SIZE_ID,
+  customPageWidthMm: 210,
+  customPageHeightMm: 297,
   orientation: 'portrait',
   marginId: DEFAULT_MARGIN_ID,
   customMargin: '1cm',
@@ -192,6 +200,8 @@ export const PAGE_NUMBER_FORMATS: PageNumberFormat[] = ['n', 'n-of-total', 'page
 export const HEADER_FOOTER_ALIGNS: HeaderFooterAlign[] = ['left', 'center', 'right']
 
 const STORAGE_KEY = 'standardnotes.note.layout.v1'
+const DEFAULTS_STORAGE_KEY = 'standardnotes.note.layout.defaults.v1'
+export const NOTE_LAYOUT_SETTINGS_CHANGED_EVENT = 'srn-note-layout-settings-changed'
 
 const clampInt = (value: unknown, min: number, max: number, fallback: number): number => {
   const n = typeof value === 'number' ? value : Number(value)
@@ -299,9 +309,11 @@ export function normalizeNoteLayout(raw: unknown): NoteLayout {
   }
   const candidate = raw as Partial<NoteLayout>
 
-  const pageSizeId = PAGE_SIZE_OPTIONS.some((option) => option.id === candidate.pageSizeId)
-    ? (candidate.pageSizeId as string)
-    : DEFAULT_NOTE_LAYOUT.pageSizeId
+  const pageSizeId =
+    candidate.pageSizeId === CUSTOM_PAGE_SIZE_ID ||
+    PAGE_SIZE_OPTIONS.some((option) => option.id === candidate.pageSizeId)
+      ? (candidate.pageSizeId as string)
+      : DEFAULT_NOTE_LAYOUT.pageSizeId
 
   const orientation: PageOrientation = candidate.orientation === 'landscape' ? 'landscape' : 'portrait'
 
@@ -311,6 +323,8 @@ export function normalizeNoteLayout(raw: unknown): NoteLayout {
 
   return {
     pageSizeId,
+    customPageWidthMm: normalizePageDimension(candidate.customPageWidthMm, DEFAULT_NOTE_LAYOUT.customPageWidthMm),
+    customPageHeightMm: normalizePageDimension(candidate.customPageHeightMm, DEFAULT_NOTE_LAYOUT.customPageHeightMm),
     orientation,
     marginId,
     customMargin: asString(candidate.customMargin, DEFAULT_NOTE_LAYOUT.customMargin),
@@ -347,10 +361,43 @@ function loadAllLayouts(): LayoutMap {
 /** Load a single note's layout (defaults when absent / unparseable). */
 export function loadNoteLayout(noteUuid: string | undefined): NoteLayout {
   if (!noteUuid) {
-    return DEFAULT_NOTE_LAYOUT
+    return loadLayoutDefaults()
   }
   const all = loadAllLayouts()
-  return all[noteUuid] ? normalizeNoteLayout(all[noteUuid]) : DEFAULT_NOTE_LAYOUT
+  return all[noteUuid] ? normalizeNoteLayout(all[noteUuid]) : loadLayoutDefaults()
+}
+
+/** Browser-local defaults apply only until a note receives its own layout. */
+export function loadLayoutDefaults(): NoteLayout {
+  try {
+    return normalizeNoteLayout(JSON.parse(localStorage.getItem(DEFAULTS_STORAGE_KEY) ?? 'null'))
+  } catch {
+    return normalizeNoteLayout(undefined)
+  }
+}
+
+export function saveLayoutDefaults(layout: NoteLayout): boolean {
+  try {
+    localStorage.setItem(DEFAULTS_STORAGE_KEY, JSON.stringify(normalizeNoteLayout(layout)))
+    window.dispatchEvent(new Event(NOTE_LAYOUT_SETTINGS_CHANGED_EVENT))
+    return true
+  } catch {
+    return false
+  }
+}
+
+export function resetNoteLayout(noteUuid: string | undefined): void {
+  if (!noteUuid) {
+    return
+  }
+  try {
+    const all = loadAllLayouts()
+    delete all[noteUuid]
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(all))
+    window.dispatchEvent(new Event(NOTE_LAYOUT_SETTINGS_CHANGED_EVENT))
+  } catch {
+    /* ignore quota / disabled storage */
+  }
 }
 
 /** Persist a single note's layout, merging into the shared map. */
@@ -369,7 +416,50 @@ export function saveNoteLayout(noteUuid: string | undefined, layout: NoteLayout)
 
 /** Resolve the CSS the print/export layout needs from a NoteLayout. */
 export function resolvePageSize(layout: NoteLayout): PageSizeOption {
+  if (layout.pageSizeId === CUSTOM_PAGE_SIZE_ID) {
+    const normalized = normalizeNoteLayout(layout)
+    return {
+      id: CUSTOM_PAGE_SIZE_ID,
+      label: 'Custom',
+      cssSize: `${normalized.customPageWidthMm}mm ${normalized.customPageHeightMm}mm`,
+    }
+  }
   return PAGE_SIZE_OPTIONS.find((option) => option.id === layout.pageSizeId) ?? PAGE_SIZE_OPTIONS[1]
+}
+
+function normalizePageDimension(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.round(Math.max(MIN_PAGE_DIMENSION_MM, Math.min(MAX_PAGE_DIMENSION_MM, value)) * 100) / 100
+    : fallback
+}
+
+/** Concrete oriented dimensions shared by print and paginated exports. */
+export function resolvePageDimensionsMm(layout: NoteLayout): { widthMm: number; heightMm: number } {
+  const sizes: Record<string, [number, number]> = {
+    a3: [297, 420],
+    a4: [210, 297],
+    a5: [148, 210],
+    a6: [105, 148],
+    letter: [215.9, 279.4],
+    legal: [215.9, 355.6],
+    tabloid: [279.4, 431.8],
+  }
+  const normalized = normalizeNoteLayout(layout)
+  const [width, height] =
+    normalized.pageSizeId === CUSTOM_PAGE_SIZE_ID
+      ? [normalized.customPageWidthMm, normalized.customPageHeightMm]
+      : (sizes[normalized.pageSizeId] ?? sizes.a4)
+  return normalized.orientation === 'landscape'
+    ? { widthMm: height, heightMm: width }
+    : { widthMm: width, heightMm: height }
+}
+
+export function resolvePageCssSize(layout: NoteLayout): string {
+  if (layout.pageSizeId === CUSTOM_PAGE_SIZE_ID || layout.pageSizeId === 'tabloid') {
+    const { widthMm, heightMm } = resolvePageDimensionsMm(layout)
+    return `${widthMm}mm ${heightMm}mm`
+  }
+  return `${resolvePageSize(layout).cssSize} ${layout.orientation}`
 }
 
 /** The CSS length applied as the page margin (preset value or custom text). */

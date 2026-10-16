@@ -14,6 +14,8 @@ import {
   hasBandAt,
   pageStartOffset,
   resolveFont,
+  millimetersToPoints,
+  validatedPageGeometry,
   type HeaderFooterStyle,
   type PageLayoutOptions,
 } from '../DocExport/PageLayoutOptions'
@@ -118,7 +120,8 @@ const renderHeaderFooterBand = (
   const section = location === 'header' ? options.header : options.footer
   const pageNumber = options.pageNumber && options.pageNumber.location === location ? options.pageNumber : undefined
   const offset = pageStartOffset(options)
-  const edge = location === 'header' ? { top: PDF_PAGE_PADDING / 2 } : { bottom: PDF_PAGE_PADDING / 2 }
+  const padding = options.geometry ? millimetersToPoints(options.geometry.marginMm) : PDF_PAGE_PADDING
+  const edge = location === 'header' ? { top: padding / 2 } : { bottom: padding / 2 }
   const children: ReactNode[] = []
 
   if (section) {
@@ -148,8 +151,8 @@ const renderHeaderFooterBand = (
       fixed: true,
       style: {
         position: 'absolute',
-        left: PDF_PAGE_PADDING,
-        right: PDF_PAGE_PADDING,
+        left: padding,
+        right: padding,
         ...edge,
         fontSize: PDF_HEADER_FOOTER_FONT_SIZE,
         color: PDF_HEADER_FOOTER_COLOR,
@@ -166,8 +169,24 @@ const createPDFDocument = (
   pageSize: PageProps['size'],
   options?: PageLayoutOptions,
 ) => {
+  const geometry = options?.geometry ? validatedPageGeometry(options.geometry) : undefined
+  if (geometry && geometry.columns > 1) {
+    throw new Error(
+      'PDF export does not support flowing text columns. Use DOCX, ODT or browser Print for a multi-column layout, or set Page columns to one.',
+    )
+  }
+  const padding = geometry ? millimetersToPoints(geometry.marginMm) : PDF_PAGE_PADDING
   const hasHeader = options != null && hasBandAt(options, 'header')
   const hasFooter = options != null && hasBandAt(options, 'footer')
+  if (
+    geometry &&
+    millimetersToPoints(geometry.heightMm) <=
+      2 * padding + (Number(hasHeader) + Number(hasFooter)) * PDF_HEADER_FOOTER_RESERVE
+  ) {
+    throw new Error(
+      'The page is too short for its margins and header/footer. Increase the page height or reduce the margins.',
+    )
+  }
   const pageChildren: ReactNode[] = []
 
   if (options) {
@@ -182,11 +201,13 @@ const createPDFDocument = (
     createElement(
       runtime.Page,
       {
-        size: pageSize,
+        size: geometry
+          ? { width: millimetersToPoints(geometry.widthMm), height: millimetersToPoints(geometry.heightMm) }
+          : pageSize,
         style: {
-          paddingTop: PDF_PAGE_PADDING + (hasHeader ? PDF_HEADER_FOOTER_RESERVE : 0),
-          paddingBottom: PDF_PAGE_PADDING + (hasFooter ? PDF_HEADER_FOOTER_RESERVE : 0),
-          paddingHorizontal: PDF_PAGE_PADDING,
+          paddingTop: padding + (hasHeader ? PDF_HEADER_FOOTER_RESERVE : 0),
+          paddingBottom: padding + (hasFooter ? PDF_HEADER_FOOTER_RESERVE : 0),
+          paddingHorizontal: padding,
           fontSize: PDF_BASE_FONT_SIZE,
           gap: PDF_BLOCK_GAP,
         },

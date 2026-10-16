@@ -442,15 +442,23 @@ Super is the most capable editor. Content is organized into blocks — paragraph
 
 > **Tip.** Super is the most robust place to use Mermaid diagrams. The legacy Markdown editors also render Mermaid in their preview on a best-effort basis.
 
+#### Table of contents
+
+In the Super editor, open Insert → Table of contents. Insert adds a live index to the note; Navigate headings opens a temporary outline without adding a block. Both follow heading changes automatically.
+
+Use Format to choose the inserted index's heading depth (levels 1–6), number its entries, or hide its title. When the note has several indexes, choose which one to format in the dropdown. These settings are saved with each index and shared with the note. Existing indexes retain their original appearance until you change them.
+
+#### Page layout and defaults
+
+Open Layout → Page size → Custom page size to enter page width and height in millimetres (10–2000 mm). Dimensions are entered before orientation: landscape swaps them for printing and export. The Layout ribbon also controls margins, columns, page numbering, running headers and footers, and the on-screen outline.
+
+Set defaults for every Layout option under Settings → General → Notes & editor → Page layout defaults. These settings are stored in this browser. They apply to notes without a saved Layout override; existing per-note layouts keep their settings. Layout → Page size → Reset note to defaults removes a note's override. Restore factory layout defaults resets the browser defaults without changing saved note layouts.
+
+Browser print, DOCX and ODT support multiple columns; PDF export currently requires one column and reports an error for a multicolumn layout. Paginated exports accept physical margin units (mm, cm, in, pt, pc, px) or zero. Headers, footers and page numbers apply to paginated exports; browser printing uses the browser's own header and footer options. The outline and bookmark settings affect only the editor view.
+
 Related: [editors/mermaid](#editors-mermaid), [editors/checklists](#editors-checklists), [editors/note-types](#editors-note-types)
 
 <a id="editors-markdown"></a>
-#### Table of contents
-
-In the Super editor, open **Insert → Table of contents**. **Insert** adds a live index to the note; **Navigate headings** opens a temporary outline without adding a block. Both follow heading changes automatically.
-
-Use **Format** to choose the inserted index's heading depth (levels 1–6), number its entries, or hide its title. When the note has several indexes, choose which one to format in the dropdown. These settings are saved with each index and shared with the note. Existing indexes retain their original appearance until you change them.
-
 ### Markdown editors
 
 Write in Markdown with a side-by-side or toggled preview.

@@ -22,7 +22,7 @@
  * DocxGenerator/OdtGenerator/PDFWorker); steer users there for real running
  * headers/footers and page numbers.
  */
-import { loadNoteLayout, resolveMargin, resolvePageSize } from './layoutSettings'
+import { loadNoteLayout, resolveMargin, resolvePageCssSize } from './layoutSettings'
 
 /** Stable id of the injected <style>, and the class the page-break node carries. */
 export const PRINT_LAYOUT_STYLE_ID = 'srn-print-layout-style'
@@ -31,7 +31,7 @@ export const PRINT_BODY_ID = 'srn-print-body'
 
 function buildPrintLayoutCss(noteUuid: string | undefined): string {
   const layout = loadNoteLayout(noteUuid)
-  const size = resolvePageSize(layout)
+  const size = resolvePageCssSize(layout)
   const margin = resolveMargin(layout)
   // `printActiveNote` renders an isolated, sanitized snapshot. Target that
   // snapshot rather than the live editor tree so layout settings cannot depend
@@ -46,7 +46,7 @@ function buildPrintLayoutCss(noteUuid: string | undefined): string {
       : ''
 
   return [
-    `@media print { @page { size: ${size.cssSize} ${layout.orientation}; margin: ${margin}; } }`,
+    `@media print { @page { size: ${size}; margin: ${margin}; } }`,
     columnRule,
     // The page-break node renders a divider on screen; for print/export it must
     // force a hard page break after itself (and never show its own chrome).

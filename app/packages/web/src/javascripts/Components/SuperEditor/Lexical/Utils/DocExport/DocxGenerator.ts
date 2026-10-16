@@ -14,6 +14,7 @@ import {
   PAGE_TOKEN,
   TOTAL_TOKEN,
   resolveFont,
+  validatedPageGeometry,
   type HeaderFooterStyle,
   type PageLayoutOptions,
 } from './PageLayoutOptions'
@@ -547,8 +548,31 @@ export const buildDocxBlob = async (blocks: DocBlock[], options?: PageLayoutOpti
     if (footerParagraphs.length > 0) {
       section.footers = { default: new docx.Footer({ children: footerParagraphs }) }
     }
-    if (options.pageNumber) {
-      section.properties = { page: { pageNumbers: { start: options.pageNumber.startAt } } }
+    if (options.pageNumber || options.geometry) {
+      const geometry = options.geometry ? validatedPageGeometry(options.geometry) : undefined
+      const twips = (mm: number) => Math.round((mm * 1440) / 25.4)
+      const landscape = geometry && geometry.widthMm > geometry.heightMm
+      section.properties = {
+        page: {
+          ...(options.pageNumber ? { pageNumbers: { start: options.pageNumber.startAt } } : {}),
+          ...(geometry
+            ? {
+                size: {
+                  width: twips(landscape ? geometry.heightMm : geometry.widthMm),
+                  height: twips(landscape ? geometry.widthMm : geometry.heightMm),
+                  orientation: landscape ? docx.PageOrientation.LANDSCAPE : docx.PageOrientation.PORTRAIT,
+                },
+                margin: {
+                  top: twips(geometry.marginMm),
+                  bottom: twips(geometry.marginMm),
+                  left: twips(geometry.marginMm),
+                  right: twips(geometry.marginMm),
+                },
+              }
+            : {}),
+        },
+        ...(geometry ? { column: { count: geometry.columns, equalWidth: true, space: twips(5) } } : {}),
+      }
     }
   }
 

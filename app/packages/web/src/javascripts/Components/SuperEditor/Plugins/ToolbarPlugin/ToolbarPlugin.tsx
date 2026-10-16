@@ -122,9 +122,14 @@ import {
   PAGE_SIZE_OPTIONS,
   PageNumberFormat,
   loadNoteLayout,
+  CUSTOM_PAGE_SIZE_ID,
+  NOTE_LAYOUT_SETTINGS_CHANGED_EVENT,
+  normalizeNoteLayout,
+  resetNoteLayout,
   resolvePageSize,
   saveNoteLayout,
 } from '../../Layout/layoutSettings'
+import { CustomPageSizeFields } from '../../Layout/PageLayoutFields'
 import { $reorderCheckList } from '../CheckListAutoMovePlugin/reorderCheckList'
 import { $getOwningCheckList, $uncheckAllInList } from '../CheckListAutoMovePlugin/bulkUncheck'
 import {
@@ -756,12 +761,19 @@ const ToolbarPlugin = ({
   const activeNoteUuid = noteUuid
   const [noteLayout, setNoteLayout] = useState<NoteLayout>(() => loadNoteLayout(activeNoteUuid))
   useEffect(() => {
-    setNoteLayout(loadNoteLayout(activeNoteUuid))
+    const reload = () => setNoteLayout(loadNoteLayout(activeNoteUuid))
+    reload()
+    window.addEventListener(NOTE_LAYOUT_SETTINGS_CHANGED_EVENT, reload)
+    window.addEventListener('storage', reload)
+    return () => {
+      window.removeEventListener(NOTE_LAYOUT_SETTINGS_CHANGED_EVENT, reload)
+      window.removeEventListener('storage', reload)
+    }
   }, [activeNoteUuid])
   const updateNoteLayout = useCallback(
     (patch: Partial<NoteLayout>) => {
       setNoteLayout((prev) => {
-        const next = { ...prev, ...patch }
+        const next = normalizeNoteLayout({ ...prev, ...patch })
         saveNoteLayout(activeNoteUuid, next)
         return next
       })
@@ -4775,6 +4787,30 @@ const ToolbarPlugin = ({
             )
           })}
         </Menu>
+        <div
+          className="border-border flex min-w-64 flex-col gap-3 border-t px-3 py-2"
+          onMouseDown={(event) => event.stopPropagation()}
+        >
+          <button
+            type="button"
+            aria-pressed={noteLayout.pageSizeId === CUSTOM_PAGE_SIZE_ID}
+            className="hover:bg-contrast rounded px-2 py-1 text-left text-sm"
+            onClick={() => updateNoteLayout({ pageSizeId: CUSTOM_PAGE_SIZE_ID })}
+          >
+            Custom page size
+          </button>
+          {noteLayout.pageSizeId === CUSTOM_PAGE_SIZE_ID && (
+            <CustomPageSizeFields layout={noteLayout} onChange={updateNoteLayout} />
+          )}
+          <button
+            type="button"
+            className="text-info rounded px-2 py-1 text-left text-xs"
+            disabled={!activeNoteUuid}
+            onClick={() => resetNoteLayout(activeNoteUuid)}
+          >
+            Reset note to defaults
+          </button>
+        </div>
       </Popover>
       {/* Standard Red Notes — Margins dropdown (presets + custom value). */}
       <Popover

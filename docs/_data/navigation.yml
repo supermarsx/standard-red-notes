@@ -207,6 +207,11 @@
               url: /app-guide.html#editors-note-types
             - title: Super block editor
               url: /app-guide.html#editors-super
+              items:
+                - title: Table of contents
+                  url: /app-guide.html#table-of-contents
+                - title: Page layout and defaults
+                  url: /app-guide.html#page-layout-and-defaults
             - title: Markdown editors
               url: /app-guide.html#editors-markdown
             - title: Code editor

@@ -6,7 +6,12 @@ import Icon from '@/Components/Icon/Icon'
 import { useApplication } from '@/Components/ApplicationProvider'
 import { useMediaQuery, MutuallyExclusiveMediaQueryBreakpoints } from '@/Hooks/useMediaQuery'
 import { DEFAULT_BOOKMARK_ICON, getNoteBookmarks } from '@/Bookmarks/bookmarks'
-import { NavigationSettings, loadNoteLayout, saveNoteLayout } from '../../Layout/layoutSettings'
+import {
+  NavigationSettings,
+  loadNoteLayout,
+  saveNoteLayout,
+  NOTE_LAYOUT_SETTINGS_CHANGED_EVENT,
+} from '../../Layout/layoutSettings'
 import { bookmarkAnchorDomId } from '../../Lexical/Nodes/BookmarkAnchorNode'
 import { $buildDocumentOutline, DocumentOutline } from './outline'
 
@@ -46,7 +51,14 @@ const NavigationSidebar = () => {
   // via the popover's DOM-event bridge and re-read when the active note changes.
   const [navigation, setNavigation] = useState<NavigationSettings>(() => loadNoteLayout(activeNoteUuid).navigation)
   useEffect(() => {
-    setNavigation(loadNoteLayout(activeNoteUuid).navigation)
+    const reload = () => setNavigation(loadNoteLayout(activeNoteUuid).navigation)
+    reload()
+    window.addEventListener(NOTE_LAYOUT_SETTINGS_CHANGED_EVENT, reload)
+    window.addEventListener('storage', reload)
+    return () => {
+      window.removeEventListener(NOTE_LAYOUT_SETTINGS_CHANGED_EVENT, reload)
+      window.removeEventListener('storage', reload)
+    }
   }, [activeNoteUuid])
 
   // Live outline of the document (headings + bookmark anchors), throttled so

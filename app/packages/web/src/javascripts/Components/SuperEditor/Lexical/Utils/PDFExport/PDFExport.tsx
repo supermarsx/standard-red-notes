@@ -42,7 +42,7 @@ import {
   getFontFamiliesFromLexicalNode,
 } from './FontConfig'
 import { getPDFColorForCodeHighlight } from './CodeHighlightColors'
-import type { PageLayoutOptions } from '../DocExport/PageLayoutOptions'
+import { millimetersToPoints, validatedPageGeometry, type PageLayoutOptions } from '../DocExport/PageLayoutOptions'
 import {
   PDF_BASE_FONT_SIZE,
   PDF_BLOCK_GAP,
@@ -812,7 +812,10 @@ export function $generatePDFFromNodes(
           const root = $getRoot()
           const nodes = root.getChildren()
           const fontFamilies: FontFamily[] = []
-          const contentWidth = getPDFContentWidth(pageSize)
+          const geometry = options?.geometry ? validatedPageGeometry(options.geometry) : undefined
+          const contentWidth = geometry
+            ? millimetersToPoints(geometry.widthMm - 2 * geometry.marginMm)
+            : getPDFContentWidth(pageSize)
           const pdfDataNodes = getPDFDataNodesFromLexicalNodes(nodes, fontFamilies, useCustomFonts, now)
           const imageSources = collectPDFImageSources(pdfDataNodes)
 

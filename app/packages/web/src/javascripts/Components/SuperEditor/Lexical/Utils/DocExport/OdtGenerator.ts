@@ -16,6 +16,7 @@ import {
   PAGE_TOKEN,
   TOTAL_TOKEN,
   resolveFont,
+  validatedPageGeometry,
   type HeaderFooterStyle,
   type PageLayoutOptions,
 } from './PageLayoutOptions'
@@ -561,9 +562,13 @@ const odfHeaderFooter = (location: 'header' | 'footer', options: PageLayoutOptio
  * on every page. Absent options ⇒ this is never called ⇒ styles.xml is unchanged.
  */
 const buildPageStylesInsertion = (options: PageLayoutOptions): string => {
+  const geometry = options.geometry ? validatedPageGeometry(options.geometry) : undefined
+  const properties = geometry
+    ? `<style:page-layout-properties fo:page-width="${geometry.widthMm}mm" fo:page-height="${geometry.heightMm}mm" fo:margin="${geometry.marginMm}mm" style:print-orientation="${geometry.widthMm > geometry.heightMm ? 'landscape' : 'portrait'}"><style:columns fo:column-count="${geometry.columns}" fo:column-gap="5mm"/></style:page-layout-properties>`
+    : '<style:page-layout-properties/>'
   const pageLayout =
     '<style:page-layout style:name="SRNpm1">' +
-    '<style:page-layout-properties/>' +
+    properties +
     '<style:header-style><style:header-footer-properties fo:min-height="0.4cm" fo:margin-bottom="0.2cm"/></style:header-style>' +
     '<style:footer-style><style:header-footer-properties fo:min-height="0.4cm" fo:margin-top="0.2cm"/></style:footer-style>' +
     '</style:page-layout>'

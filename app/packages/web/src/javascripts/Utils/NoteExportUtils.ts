@@ -136,10 +136,12 @@ export const getNoteBlob = async (
     return await getBase64FromBlob(fileBlob)
   }
 
-  // Per-note page numbering / headers / footers come from the note's Page layout
-  // (toolbar Page group). Undefined when nothing is enabled ⇒ generators stay on
-  // their baseline output.
-  const pageLayoutOptions = noteLayoutToPageLayoutOptions(loadNoteLayout(note.uuid))
+  // Paginated formats honor the resolved per-note Page geometry and bands.
+  // Text/data exports do not depend on physical page margins or dimensions.
+  const pageLayoutOptions = noteLayoutToPageLayoutOptions(
+    loadNoteLayout(note.uuid),
+    ['docx', 'odt', 'pdf'].includes(format),
+  )
 
   // Structured DOCX / ODT: build the shared DocModel (a real Lexical-tree walk)
   // and emit genuine OOXML / ODF — replacing the old Word-only altChunk hack, so
