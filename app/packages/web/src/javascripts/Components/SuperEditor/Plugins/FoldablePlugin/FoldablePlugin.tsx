@@ -229,6 +229,9 @@ export default function FoldablePlugin(): null {
      * classes. Runs inside an editorState.read().
      */
     const applyFolds = () => {
+      if (!editor.getRootElement()) {
+        return
+      }
       editor.getEditorState().read(() => {
         const blocks = $readBlocks()
         const listItems = $readFoldableListItems()
@@ -358,9 +361,11 @@ export default function FoldablePlugin(): null {
     }
 
     const cleanup = mergeRegister(
-      // Recompute on every change so edits keep folds consistent.
-      editor.registerUpdateListener(() => {
-        applyFolds()
+      // Selection-only updates do not change fold structure or hidden blocks.
+      editor.registerUpdateListener(({ dirtyElements, dirtyLeaves }) => {
+        if (dirtyElements.size > 0 || dirtyLeaves.size > 0) {
+          applyFolds()
+        }
       }),
       // (Re)bind the control's handlers whenever the root element changes.
       editor.registerRootListener((nextRoot, prevRoot) => {

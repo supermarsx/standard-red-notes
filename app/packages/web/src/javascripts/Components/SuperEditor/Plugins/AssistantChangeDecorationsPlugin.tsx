@@ -30,11 +30,12 @@ function serializedIdentifier(node: LexicalNode): string | undefined {
 function collectNodeRecords(): NodeRecord[] {
   const records: NodeRecord[] = []
   const visit = (node: LexicalNode, path: number[]): void => {
+    const nodeUuid = serializedIdentifier(node)
     records.push({
       node,
       path,
       ...($isListItemNode(node) && $getChecklistTodoId(node) ? { todoId: $getChecklistTodoId(node) } : {}),
-      ...(serializedIdentifier(node) ? { nodeUuid: serializedIdentifier(node) } : {}),
+      ...(nodeUuid ? { nodeUuid } : {}),
     })
     if ($isElementNode(node)) {
       node.getChildren().forEach((child, index) => visit(child, [...path, index]))
@@ -84,11 +85,10 @@ export function resolveAssistantChangeNodeKeys(
   currentNote?: SNNote,
 ): string[] {
   const keys = new Set<string>()
-  const editorText = JSON.stringify(editor.getEditorState().toJSON())
   const allowUnstableFallback =
     Boolean(currentNote && currentNote.uuid === record.noteUuid) &&
     Boolean(currentNote && assistantNoteSnapshotMatches(currentNote, record.undo.after)) &&
-    editorText === record.undo.after.text
+    JSON.stringify(editor.getEditorState().toJSON()) === record.undo.after.text
   editor.getEditorState().read(() => {
     const nodes = collectNodeRecords()
     for (const operation of record.operations) {
@@ -184,7 +184,7 @@ export function AssistantChangeDecorationsPlugin({ noteUuid }: { noteUuid: strin
       decorated.clear()
     }
     const decorate = (): void => {
-      if (!active) {
+      if (!active || !editor.getRootElement()) {
         return
       }
       for (const element of getAssistantChangeElements(editor, record, note)) {
@@ -203,7 +203,11 @@ export function AssistantChangeDecorationsPlugin({ noteUuid }: { noteUuid: strin
     }
 
     decorate()
-    unregisterUpdate = editor.registerUpdateListener(decorate)
+    unregisterUpdate = editor.registerUpdateListener(({ dirtyElements, dirtyLeaves }) => {
+      if (dirtyElements.size > 0 || dirtyLeaves.size > 0) {
+        decorate()
+      }
+    })
     const retryTimer = globalThis.setTimeout(decorate, 0)
     const clearTimer = globalThis.setTimeout(() => {
       stopUpdates()

@@ -90,10 +90,24 @@ export function CommentsPlugin({ note }: { note?: SNNote }): null {
     }
     readComments()
     const stopRoot = editor.registerRootListener(refresh)
-    const stopEditor = editor.registerUpdateListener(refresh)
-    const stopItems = application.items.streamItems(
+    const stopEditor = editor.registerUpdateListener(({ dirtyElements, dirtyLeaves }) => {
+      if (dirtyElements.size > 0 || dirtyLeaves.size > 0) {
+        refresh()
+      }
+    })
+    // The initial read above already covers this note. Avoid streaming every
+    // note at registration, and ignore changes to unrelated note payloads.
+    const stopItems = application.items.addObserver(
       [ContentType.TYPES.Note, ContentType.TYPES.UserPrefs, ContentType.TYPES.TrustedContact],
-      readComments,
+      ({ changed, inserted, removed }) => {
+        if (
+          [...changed, ...inserted, ...removed].some(
+            (item) => item.uuid === noteUuid || item.content_type !== ContentType.TYPES.Note,
+          )
+        ) {
+          readComments()
+        }
+      },
     )
     const stopPrefs = application.addEventObserver(async () => readComments(), ApplicationEvent.PreferencesChanged)
     return () => {

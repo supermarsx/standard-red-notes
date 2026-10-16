@@ -63,8 +63,11 @@ const NavigationSidebar = () => {
 
   // Live outline of the document (headings + bookmark anchors), throttled so
   // large-doc typing doesn't churn.
-  const [outline, setOutline] = useState<DocumentOutline>(() => editor.getEditorState().read($buildDocumentOutline))
+  const [outline, setOutline] = useState<DocumentOutline>({ headings: [], bookmarks: [] })
   useEffect(() => {
+    if (!navigation.visible || isMobile) {
+      return
+    }
     setOutline(editor.getEditorState().read($buildDocumentOutline))
 
     let timeout: ReturnType<typeof setTimeout> | undefined
@@ -86,14 +89,18 @@ const NavigationSidebar = () => {
         }
       }, OUTLINE_THROTTLE_MS)
     }
-    const unregister = editor.registerUpdateListener(() => schedule())
+    const unregister = editor.registerUpdateListener(({ dirtyElements, dirtyLeaves }) => {
+      if (dirtyElements.size > 0 || dirtyLeaves.size > 0) {
+        schedule()
+      }
+    })
     return () => {
       unregister()
       if (timeout) {
         clearTimeout(timeout)
       }
     }
-  }, [editor])
+  }, [editor, isMobile, navigation.visible])
 
   // Listen for the Layout popover's toggle changes (popover → sidebar).
   useEffect(() => {

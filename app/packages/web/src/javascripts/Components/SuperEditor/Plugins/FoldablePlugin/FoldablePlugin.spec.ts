@@ -168,6 +168,34 @@ function mountFoldableEditor(): MountedEditor {
 }
 
 describe('FoldablePlugin fold-toggle (no-hang regression)', () => {
+  it('retains folds without rewriting controls on selection changes and updates controls after content edits', () => {
+    const mounted = mountFoldableEditor()
+    try {
+      const toggle = mounted.container.querySelector<HTMLElement>('[data-fold-kind="heading"]')!
+      act(() => toggle.click())
+      const body = mounted.container.querySelector('p')!
+      expect(body.classList.contains('Lexical__folded')).toBe(true)
+      const setAttribute = jest.spyOn(toggle, 'setAttribute')
+      act(() => {
+        mounted.editor.update(() => $getRoot().getFirstChild()?.selectEnd(), { discrete: true })
+      })
+      expect(setAttribute).not.toHaveBeenCalled()
+      expect(body.classList.contains('Lexical__folded')).toBe(true)
+      act(() => {
+        mounted.editor.update(
+          () => $getRoot().append($createHeadingNode('h1').append($createTextNode('New section'))),
+          { discrete: true },
+        )
+      })
+      expect(setAttribute).toHaveBeenCalled()
+      expect(body.classList.contains('Lexical__folded')).toBe(true)
+      expect(mounted.container.querySelectorAll('[data-fold-kind="heading"]')).toHaveLength(3)
+      setAttribute.mockRestore()
+    } finally {
+      mounted.teardown()
+    }
+  })
+
   it('marks the injected toggle as Lexical-unmanaged so the MutationObserver ignores it', () => {
     const toggle = createFoldToggle()
     expect(isDOMUnmanaged(toggle)).toBe(true)

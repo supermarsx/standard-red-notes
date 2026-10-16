@@ -133,6 +133,7 @@ describe('assistant editor change decorations', () => {
       { discrete: true },
     )
 
+    const serialize = jest.spyOn(editor.getEditorState(), 'toJSON')
     expect(
       resolveAssistantChangeNodeKeys(
         editor,
@@ -144,6 +145,8 @@ describe('assistant editor change decorations', () => {
         }),
       ),
     ).toEqual([itemKey])
+    expect(serialize).not.toHaveBeenCalled()
+    serialize.mockRestore()
   })
 
   it('keeps the visible marker accessible and disables motion for reduced-motion users', () => {

@@ -27,6 +27,7 @@ import { STYLED_BLOCK_NODE_OVERRIDES } from '../../Lexical/Nodes/StyledBlockNode
 import { BookmarkAnchorNode, $createBookmarkAnchorNode } from '../../Lexical/Nodes/BookmarkAnchorNode'
 import { DEFAULT_NOTE_LAYOUT, saveNoteLayout } from '../../Layout/layoutSettings'
 import NavigationSidebar, { NAVIGATION_LAYOUT_CHANGED_EVENT } from './NavigationSidebarPlugin'
+import * as outlineBuilder from './outline'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -158,8 +159,54 @@ function mount() {
 
 describe('NavigationSidebar', () => {
   it('renders nothing when navigation.visible is false (default)', () => {
+    const buildOutline = jest.spyOn(outlineBuilder, '$buildDocumentOutline')
     mount()
     expect(container.querySelector('[data-navigation-sidebar]')).toBeNull()
+    expect(buildOutline).not.toHaveBeenCalled()
+    act(() => {
+      capturedEditor.update(
+        () => $getRoot().append($createHeadingNode('h3').append($createTextNode('Added while hidden'))),
+        { discrete: true },
+      )
+    })
+    expect(buildOutline).not.toHaveBeenCalled()
+    act(() => {
+      capturedEditor
+        .getRootElement()
+        ?.dispatchEvent(
+          new CustomEvent(NAVIGATION_LAYOUT_CHANGED_EVENT, { detail: { visible: true, showBookmarks: true } }),
+        )
+    })
+    expect(container.querySelector('[data-navigation-sidebar]')?.textContent).toContain('Added while hidden')
+    buildOutline.mockClear()
+    act(() => {
+      capturedEditor.update(() => $getRoot().getFirstChild()?.selectEnd(), { discrete: true })
+    })
+    expect(buildOutline).not.toHaveBeenCalled()
+    act(() => {
+      capturedEditor
+        .getRootElement()
+        ?.dispatchEvent(
+          new CustomEvent(NAVIGATION_LAYOUT_CHANGED_EVENT, { detail: { visible: false, showBookmarks: true } }),
+        )
+    })
+    buildOutline.mockClear()
+    act(() => {
+      capturedEditor.update(
+        () => $getRoot().append($createHeadingNode('h3').append($createTextNode('After hiding again'))),
+        { discrete: true },
+      )
+    })
+    expect(buildOutline).not.toHaveBeenCalled()
+    act(() => {
+      capturedEditor
+        .getRootElement()
+        ?.dispatchEvent(
+          new CustomEvent(NAVIGATION_LAYOUT_CHANGED_EVENT, { detail: { visible: true, showBookmarks: true } }),
+        )
+    })
+    expect(container.querySelector('[data-navigation-sidebar]')?.textContent).toContain('After hiding again')
+    buildOutline.mockRestore()
   })
 
   it('renders the heading outline (indented by level) and a Bookmarks section when visible', () => {
