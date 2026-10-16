@@ -1,4 +1,5 @@
 import * as icons from '@standardnotes/icons'
+import { CollapseNotesPaneIcon, CollapseTopicsPaneIcon, ExpandNotesPaneIcon, ExpandTopicsPaneIcon } from './PaneIcons'
 import {
   AssistantIcon,
   CalendarIcon,
@@ -18,6 +19,10 @@ import {
 } from './MediaIcons'
 
 export const LexicalIconNameToSvgMapping = {
+  'topics-pane-expand': ExpandTopicsPaneIcon,
+  'topics-pane-collapse': CollapseTopicsPaneIcon,
+  'notes-pane-expand': ExpandNotesPaneIcon,
+  'notes-pane-collapse': CollapseNotesPaneIcon,
   assistant: AssistantIcon,
   play: PlayIcon,
   pause: PauseIcon,

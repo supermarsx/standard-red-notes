@@ -87,7 +87,7 @@ const PanelToggleButtons = () => {
           tNavigation('collapseTagsPanel'),
           TAGS_PANEL_HIDDEN_BY_FOCUS_MODE,
         )}
-        icon={navigationHidden ? 'menu-variant' : 'menu-close'}
+        icon={navigationHidden ? 'topics-pane-expand' : 'topics-pane-collapse'}
         expanded={!navigationHidden}
         unavailable={navigationStatus === SidebarPaneStatus.HiddenByFocusMode}
       />
@@ -99,7 +99,7 @@ const PanelToggleButtons = () => {
           tNotes('collapseNotesPanel'),
           NOTES_PANEL_HIDDEN_BY_FOCUS_MODE,
         )}
-        icon={listHidden ? 'chevron-right' : 'chevron-left'}
+        icon={listHidden ? 'notes-pane-expand' : 'notes-pane-collapse'}
         expanded={!listHidden}
         unavailable={listStatus === SidebarPaneStatus.HiddenByFocusMode}
       />

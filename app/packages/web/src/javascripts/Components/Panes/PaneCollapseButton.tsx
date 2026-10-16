@@ -2,12 +2,13 @@ import { IconType } from '@standardnotes/snjs'
 import { classNames } from '@standardnotes/utils'
 import { observer } from 'mobx-react-lite'
 import Icon from '../Icon/Icon'
+import type { LexicalIconName } from '../Icon/LexicalIcons'
 import StyledTooltip from '../StyledTooltip/StyledTooltip'
 
 type Props = {
   onClick: () => void
   label: string
-  icon: IconType
+  icon: IconType | LexicalIconName
   /**
    * Whether the pane this button controls is currently expanded (shown). Used for
    * the `aria-expanded` attribute so assistive technology announces the state.
