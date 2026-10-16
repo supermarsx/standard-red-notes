@@ -52,6 +52,13 @@ const decodeCollection = (value: string): CollectionSelection | undefined => {
   return undefined
 }
 
+const compactDropdown = {
+  wrapper: 'min-w-0 max-w-full',
+  button:
+    'min-w-0! w-auto! gap-1 px-2! py-1! text-xs! [&_.text-base]:text-xs [&_.mr-2]:mr-1 [&>svg]:h-3.5 [&>svg]:w-3.5',
+  popover: 'min-w-56 max-w-[calc(100vw-2rem)]',
+}
+
 function ContextSelectorImpl({ application, selection, onChange, disabled }: Props) {
   const [pickingNotes, setPickingNotes] = useState(false)
 
@@ -123,9 +130,9 @@ function ContextSelectorImpl({ application, selection, onChange, disabled }: Pro
   }
 
   return (
-    <div className="border-border bg-contrast flex flex-col gap-2 border-b px-3 py-2">
-      <div className="flex items-center gap-2">
-        <span className="text-passive-1 flex-shrink-0 text-xs font-semibold tracking-wide uppercase">Context</span>
+    <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+      <div className="flex min-w-0 items-center gap-1.5">
+        <span className="text-passive-1 shrink-0 text-[11px] font-medium">Context</span>
         <Dropdown
           label="Assistant context scope"
           items={scopeItems}
@@ -133,6 +140,7 @@ function ContextSelectorImpl({ application, selection, onChange, disabled }: Pro
           onChange={handleScopeChange}
           disabled={disabled}
           popoverPlacement="bottom"
+          classNameOverride={compactDropdown}
         />
       </div>
 
@@ -144,12 +152,12 @@ function ContextSelectorImpl({ application, selection, onChange, disabled }: Pro
           disabled={disabled}
           placeholder="Search notes by title or preview (e.g. taxes 2025)…"
           aria-label="Topic search query"
-          className="border-border bg-default text-text focus:border-info w-full rounded border px-2 py-1 text-xs focus:outline-none"
+          className="border-border bg-default text-text focus:border-info min-w-0 flex-1 basis-40 rounded border px-2 py-1 text-xs focus:outline-none"
         />
       )}
 
       {selection.scope === 'collection' && (
-        <div className="flex flex-col gap-2">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
           <Dropdown
             label="Collection source"
             items={collectionItems}
@@ -161,10 +169,11 @@ function ContextSelectorImpl({ application, selection, onChange, disabled }: Pro
             onChange={handleCollectionChange}
             disabled={disabled}
             popoverPlacement="bottom"
+            classNameOverride={compactDropdown}
           />
 
           {(pickingNotes || selection.collection?.type === 'notes') && (
-            <div className="border-border bg-default max-h-48 overflow-y-auto rounded border p-1">
+            <div className="border-border bg-default max-h-40 w-full overflow-y-auto rounded border p-1">
               {notes.length === 0 && <div className="text-passive-0 px-2 py-1 text-xs">No notes to choose from.</div>}
               {notes.map((note) => {
                 const checked = selectedNoteUuids.has(note.uuid)

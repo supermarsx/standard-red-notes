@@ -1373,44 +1373,12 @@ function ConversationPanelImpl({
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      <ContextSelector
-        application={application}
-        selection={contextSelection}
-        onChange={handleContextChange}
-        disabled={isRunning}
-      />
       {historyPersistenceFailed && (
         <div className="border-warning bg-warning-faded text-text border-b px-3 py-2 text-xs">
           Saved chat history could not be read safely. This conversation is temporarily in-memory and will not overwrite
           the saved copy.
         </div>
       )}
-      <label className="border-border bg-contrast flex items-center justify-between gap-2 border-b px-3 py-2 text-xs">
-        <span className="text-passive-1 font-semibold tracking-wide uppercase">Tool permissions</span>
-        <select
-          className="border-border bg-default text-text rounded border px-2 py-1 text-xs"
-          value={toolPermissionMode}
-          onChange={(event) => {
-            const next = event.target.value as typeof toolPermissionMode
-            sessionToolDecisionsRef.current.clear()
-            historyCheckpointRef.current?.schedule()
-            toolPermissionModeRef.current = next
-            void Promise.all([
-              application.setPreference(PrefKey.AssistantToolPermissionMode, next),
-              // Every richer mode fails safe on older clients, which understand
-              // only the legacy ask-before-write boolean.
-              application.setPreference(PrefKey.AssistantConfirmBeforeWrite, legacyConfirmBeforeWriteForMode(next)),
-            ])
-          }}
-          aria-label="Assistant tool permissions"
-        >
-          <option value="ask">Ask before every action</option>
-          <option value="allow-read">Allow reads; ask before changes</option>
-          <option value="allow-safe">Allow safe changes</option>
-          <option value="allow-all">Allow all with a safety check</option>
-          <option value="bypass">Bypass confirmations</option>
-        </select>
-      </label>
       {todos.length > 0 && (
         <div className="border-border bg-default border-b px-4 py-2">
           <div className="text-passive-1 mb-1 text-xs font-semibold tracking-wide uppercase">Plan</div>
@@ -1443,7 +1411,7 @@ function ConversationPanelImpl({
         </div>
       )}
 
-      <div ref={scrollRef} className="flex-grow overflow-y-auto px-4 py-4">
+      <div ref={scrollRef} className="min-h-0 flex-grow overflow-y-auto px-3 py-3">
         {!noticeDismissed && (
           <div className="border-warning bg-warning-faded mb-4 rounded border border-solid p-3">
             <div className="flex items-start justify-between gap-2">
@@ -1479,7 +1447,7 @@ function ConversationPanelImpl({
             Ask the assistant to find, summarize, create, or organize your notes.
           </div>
         )}
-        <div className="flex flex-col gap-4">
+        <div className="flex flex-col gap-2.5">
           {messages.map((message) => (
             <MessageBubble
               key={message.id}
@@ -1504,14 +1472,41 @@ function ConversationPanelImpl({
         </div>
       </div>
 
-      <div className="border-border bg-contrast border-t p-3">
-        {tokenWindows && (
-          <AssistantUsageMeter
-            fiveHour={tokenWindows.fiveHour}
-            weekly={tokenWindows.weekly}
-            className="border-border mb-2 border-b pb-2"
+      <div className="border-border bg-contrast shrink-0 border-t px-3 py-2">
+        <div className="mb-2 flex flex-col gap-1.5">
+          <ContextSelector
+            application={application}
+            selection={contextSelection}
+            onChange={handleContextChange}
+            disabled={isRunning}
           />
-        )}
+          <label className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+            <span className="text-passive-1 shrink-0 text-[11px] font-medium">Tool permissions</span>
+            <select
+              className="border-border bg-default text-text max-w-full min-w-0 rounded border px-2 py-1 text-xs"
+              value={toolPermissionMode}
+              onChange={(event) => {
+                const next = event.target.value as typeof toolPermissionMode
+                sessionToolDecisionsRef.current.clear()
+                historyCheckpointRef.current?.schedule()
+                toolPermissionModeRef.current = next
+                void Promise.all([
+                  application.setPreference(PrefKey.AssistantToolPermissionMode, next),
+                  // Every richer mode fails safe on older clients, which understand
+                  // only the legacy ask-before-write boolean.
+                  application.setPreference(PrefKey.AssistantConfirmBeforeWrite, legacyConfirmBeforeWriteForMode(next)),
+                ])
+              }}
+              aria-label="Assistant tool permissions"
+            >
+              <option value="ask">Ask before every action</option>
+              <option value="allow-read">Allow reads; ask before changes</option>
+              <option value="allow-safe">Allow safe changes</option>
+              <option value="allow-all">Allow all with a safety check</option>
+              <option value="bypass">Bypass confirmations</option>
+            </select>
+          </label>
+        </div>
         <div className="text-warning mb-2 text-xs">
           Messages and note content the assistant reads are sent to your configured AI provider. Web access always asks
           before contacting your server&rsquo;s configured search service. {contextSummary}
@@ -1567,6 +1562,13 @@ function ConversationPanelImpl({
             <Button primary label="Send" onClick={handleSend} disabled={!input.trim() || !isConfigured} />
           )}
         </div>
+        {tokenWindows && (
+          <AssistantUsageMeter
+            fiveHour={tokenWindows.fiveHour}
+            weekly={tokenWindows.weekly}
+            className="border-border mt-2 border-t pt-2"
+          />
+        )}
       </div>
     </div>
   )
@@ -1586,7 +1588,7 @@ export const MessageBubble = ({
     return (
       <AssistantMessageActions message={message} onRemoveMessage={onRemoveMessage}>
         {(messageTextRef) => (
-          <div className="bg-info text-info-contrast min-w-0 rounded-lg px-3 py-2 text-sm">
+          <div className="bg-info text-info-contrast min-w-0 rounded-lg px-2.5 py-1.5 text-sm leading-5">
             {message.steered && <div className="mb-0.5 text-xs font-semibold opacity-80">↳ Steer</div>}
             {directive ? (
               <div ref={messageTextRef} className="flex flex-col gap-2">
@@ -1614,7 +1616,7 @@ export const MessageBubble = ({
         {(messageTextRef) => (
           <div
             ref={messageTextRef}
-            className="border-danger bg-default text-danger rounded-lg border px-3 py-2 text-sm"
+            className="border-danger bg-default text-danger rounded-lg border px-2.5 py-1.5 text-sm leading-5"
           >
             {message.text}
           </div>
@@ -1637,7 +1639,7 @@ export const MessageBubble = ({
           {(message.text || message.streaming) && (
             <div
               ref={messageTextRef}
-              className="bg-contrast text-text rounded-lg px-3 py-2 text-sm whitespace-pre-wrap"
+              className="bg-contrast text-text rounded-lg px-2.5 py-1.5 text-sm leading-5 whitespace-pre-wrap"
             >
               {message.text}
               {message.streaming && <span className="ml-0.5 animate-pulse">▍</span>}
