@@ -5042,9 +5042,9 @@ describe('SyncTransportWorkerRuntime', () => {
     const framesOf = (socket: FakeSocket, type: string) =>
       socket.sent.map((entry) => JSON.parse(entry) as SentFrame).filter((frame) => frame.type === type)
     /** The gateway's `sendError(frame.requestId, …)`: the ERROR answers the frame it refuses. */
-    const answer = (socket: FakeSocket, frame: SentFrame, code: string) =>
+    const answer = (socket: FakeSocket, frame: SentFrame, code: string, details: Record<string, unknown> = {}) =>
       socket.receive({
-        ...serverFrame('ERROR', frame.commandId, { code, retryable: false }, frame.digest),
+        ...serverFrame('ERROR', frame.commandId, { ...details, code, retryable: false }, frame.digest),
         requestId: frame.requestId,
       })
     const httpFallbacks = (harness: ReturnType<typeof setup>) =>
@@ -5103,6 +5103,62 @@ describe('SyncTransportWorkerRuntime', () => {
         reason: 'socket-save-refused',
       })
       expect(socket.readyState).toBe(1)
+    })
+
+    it('isolates a refused collaborative upload and immediately sends an unrelated save on the same socket', async () => {
+      const harness = setup()
+      const denied = { ...body(), collaboration_save_fences: [{ room: 'note-a', token: 'old-proof' }] }
+      const socket = await authorize(harness, denied, 't'.repeat(40), SESSION_A, ['SYNC_ITEMS'], { socketOnly: true })
+      answer(socket, framesOf(socket, 'COMMAND')[0], 'NOT_AUTHORIZED')
+      await flush()
+      expect(harness.messages).toContainEqual({
+        type: 'SAVE_ITEMS_REFUSED',
+        items: [{ uuid: 'note-a', fenceToken: 'old-proof' }],
+        holdForMilliseconds: 30_000,
+      })
+      expect(harness.messages.some((message) => message.type === 'SAVE_LANE')).toBe(false)
+      await executeAgain(harness, 'unrelated-save')
+      expect(framesOf(socket, 'COMMAND')).toHaveLength(2)
+      expect(httpFallbacks(harness)).toEqual([])
+    })
+
+    it('protects a server-fenced note discovered during ordinary startup sync without holding unrelated saves', async () => {
+      const harness = setup()
+      const socket = await authorize(harness, { ...body(), items: [...body().items, { uuid: 'unrelated' }] })
+      const command = framesOf(socket, 'COMMAND')[0]
+      expect(harness.outbox.records.get(command.commandId)?.socketOnly).not.toBe(true)
+      answer(socket, command, 'NOT_AUTHORIZED', {
+        refusalScope: 'collaboration-save-fence',
+        refusedItems: ['note-a'],
+      })
+      await flush()
+      expect(harness.messages).toContainEqual({
+        type: 'SAVE_ITEMS_REFUSED',
+        protectItems: true,
+        items: [{ uuid: 'note-a' }],
+        holdForMilliseconds: 30_000,
+      })
+      expect(harness.messages.some((message) => message.type === 'SAVE_LANE')).toBe(false)
+      expect(harness.outbox.records.has(command.commandId)).toBe(false)
+      await executeAgain(harness, 'unrelated-save')
+      expect(framesOf(socket, 'COMMAND')).toHaveLength(2)
+      expect(httpFallbacks(harness)).toEqual([])
+    })
+
+    it('does not persist foreign item identifiers supplied in refusal metadata', async () => {
+      const harness = setup()
+      const socket = await authorize(harness, body())
+      answer(socket, framesOf(socket, 'COMMAND')[0], 'NOT_AUTHORIZED', {
+        refusalScope: 'collaboration-save-fence',
+        refusedItems: ['foreign'],
+      })
+      await flush()
+      expect(harness.messages).toContainEqual({
+        type: 'SAVE_ITEMS_REFUSED',
+        items: [{ uuid: 'note-a' }],
+        holdForMilliseconds: 30_000,
+      })
+      expect(httpFallbacks(harness)).toEqual([])
     })
 
     it('stops a command whose local saver permission changed before dispatch', async () => {

@@ -235,6 +235,25 @@ describe('BaseItemsController durable sync commands', () => {
     expect(setHeader).toHaveBeenCalledWith('Retry-After', '1')
   })
 
+  it('returns the fenced item with a proven unexecuted command refusal', async () => {
+    const logicalBody = { api: '20240226', items: [{ uuid: 'note-1' }] }
+    executeSyncCommand.execute.mockRejectedValueOnce(
+      new SyncCommandProtocolError('collaboration_save_fence_lost', 'fence lost', 409, 'note-1'),
+    )
+    const result = await createController().sync(
+      request(logicalBody, {
+        'x-sync-command-id': 'command-1',
+        'x-sync-command-digest': computeSyncCommandDigest(logicalBody),
+      }),
+      response(),
+    )
+    expect(result.statusCode).toBe(409)
+    expect((result as results.JsonResult).json).toEqual({
+      error: { code: 'collaboration_save_fence_lost', item_uuid: 'note-1', message: 'fence lost', retryable: false },
+    })
+    expect(syncItems.execute).not.toHaveBeenCalled()
+  })
+
   it('returns scope-safe status through the dedicated route use case', async () => {
     getSyncCommandStatus.execute.mockResolvedValue({ command: { id: 'command-1', status: 'unknown' } })
     const statusRequest = request({}, { 'x-sync-command-digest': 'a'.repeat(64) })

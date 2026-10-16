@@ -96,24 +96,30 @@ const collaborationInput = {
 }
 
 describe('SyncWebSocketCommandAdapter', () => {
-  it('distinguishes a rolled-back save-fence refusal from an uncertain backend error', async () => {
-    const { adapter, durable } = build()
-    ;(durable.sync as jest.Mock).mockResolvedValueOnce({
-      status: 409,
-      data: { error: { code: 'collaboration_save_fence_lost' } },
-    })
-    await expect(
-      adapter.execute(
-        {
-          identity,
-          commandId: 'old-fence',
-          digest: 'a'.repeat(64),
-          payload: { command: 'SYNC_ITEMS', body: { api: '20240226', items: [] } },
-        },
-        new AbortController().signal,
-      ),
-    ).rejects.toMatchObject({ name: 'SyncCommandBackendRefusalError' })
-  })
+  it.each(['note-1', 'foreign', undefined])(
+    'scopes a rolled-back fence refusal only to an uploaded item (%s)',
+    async (itemUuid) => {
+      const { adapter, durable } = build()
+      ;(durable.sync as jest.Mock).mockResolvedValueOnce({
+        status: 409,
+        data: { error: { code: 'collaboration_save_fence_lost', item_uuid: itemUuid } },
+      })
+      await expect(
+        adapter.execute(
+          {
+            identity,
+            commandId: 'old-fence',
+            digest: 'a'.repeat(64),
+            payload: { command: 'SYNC_ITEMS', body: { api: '20240226', items: [{ uuid: 'note-1' }] } },
+          },
+          new AbortController().signal,
+        ),
+      ).rejects.toMatchObject({
+        name: 'SyncCommandBackendRefusalError',
+        itemUuid: itemUuid === 'note-1' ? itemUuid : undefined,
+      })
+    },
+  )
   // ---------------------------------------------------------------------------
   // Session readiness vs durable readiness are two independent questions on one
   // object. While a single `ready()` answered both, an unbound gRPC proxy -- or
@@ -308,19 +314,34 @@ describe('SyncWebSocketCommandAdapter', () => {
     const { adapter, durable } = build({ session: { uuid: 'session-1', readonly_access: 0 } })
     const digest = 'a'.repeat(64)
     const payload = { command: 'SYNC_ITEMS', body: { api: '20200115', items: [] } }
-    await expect(adapter.authorize({ identity, operation: 'COMMAND', commandId: 'tinyint-write', digest, payloadLength: 1, payload }, new AbortController().signal)).resolves.toMatchObject({ authorized: true })
+    await expect(
+      adapter.authorize(
+        { identity, operation: 'COMMAND', commandId: 'tinyint-write', digest, payloadLength: 1, payload },
+        new AbortController().signal,
+      ),
+    ).resolves.toMatchObject({ authorized: true })
     await adapter.execute({ identity, commandId: 'tinyint-write', digest, payload }, new AbortController().signal)
-    const response = (durable.sync as jest.Mock).mock.calls[0][1] as { locals: { session: { readonly_access: unknown }; readOnlyAccess: unknown } }
+    const response = (durable.sync as jest.Mock).mock.calls[0][1] as {
+      locals: { session: { readonly_access: unknown }; readOnlyAccess: unknown }
+    }
     expect(response.locals.session.readonly_access).toBe(false)
     expect(response.locals.readOnlyAccess).toBe(false)
   })
 
-  it.each([undefined, null, -1, 2, '0', '1', 'false'])('rejects a signed malformed access-policy representation: %s', async (value) => {
-    const { adapter, durable } = build({ session: { uuid: 'session-1', readonly_access: value } })
-    await expect(adapter.authorize({ identity, operation: 'STATUS', commandId: 'invalid-policy', digest: 'a'.repeat(64), payloadLength: 0 }, new AbortController().signal)).rejects.toThrow('invalid token shape')
-    expect(durable.sync).not.toHaveBeenCalled()
-    expect(durable.getSyncCommandStatus).not.toHaveBeenCalled()
-  })
+  it.each([undefined, null, -1, 2, '0', '1', 'false'])(
+    'rejects a signed malformed access-policy representation: %s',
+    async (value) => {
+      const { adapter, durable } = build({ session: { uuid: 'session-1', readonly_access: value } })
+      await expect(
+        adapter.authorize(
+          { identity, operation: 'STATUS', commandId: 'invalid-policy', digest: 'a'.repeat(64), payloadLength: 0 },
+          new AbortController().signal,
+        ),
+      ).rejects.toThrow('invalid token shape')
+      expect(durable.sync).not.toHaveBeenCalled()
+      expect(durable.getSyncCommandStatus).not.toHaveBeenCalled()
+    },
+  )
 
   // The token's `belongs_to_shared_vaults` is built from auth's event-replicated
   // copy of the membership table, which can miss rows the syncing server has.

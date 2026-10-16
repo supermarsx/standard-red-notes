@@ -1258,6 +1258,14 @@ export type SyncWorkerToMainMessage =
       code?: SyncCommandRefusalCode | 'LIVE_SYNC_DISABLED'
       holdForMilliseconds?: number
     }
+  /** A proven unexecuted collaborative command; unrelated rooms remain usable. */
+  | {
+      type: 'SAVE_ITEMS_REFUSED'
+      items: Array<{ uuid: string; fenceToken?: string }>
+      /** The server identified the live-fenced note before this tab opened it. */
+      protectItems?: boolean
+      holdForMilliseconds: number
+    }
   /** The hold elapsed; the next request dials again. The counterpart line. */
   | { type: 'DIAL_HOLD_ENDED' }
   /**

@@ -144,6 +144,10 @@ describe('SQL collaboration save fence commit boundary', () => {
       }),
     ).rejects.toMatchObject({ code: 'collaboration_save_fence_lost' })
     expect(oldWriteRan).toBe(false)
+    await expect(fence.run(BOB, [ROOM], undefined, () => write('unfenced-startup-write'))).rejects.toMatchObject({
+      code: 'collaboration_save_fence_lost',
+      itemUuid: ROOM,
+    })
     await fence.run(BOB, [ROOM], proof(leaseB.token!, BOB), () => write('bob-current'))
     expect((await source.query('SELECT content FROM test_notes'))[0].content).toBe('bob-current')
   })

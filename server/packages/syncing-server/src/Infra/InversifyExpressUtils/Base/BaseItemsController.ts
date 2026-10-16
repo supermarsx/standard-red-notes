@@ -667,6 +667,7 @@ export class BaseItemsController extends BaseHttpController {
       {
         error: {
           code: error.code,
+          ...(error.code === 'collaboration_save_fence_lost' && error.itemUuid ? { item_uuid: error.itemUuid } : {}),
           message: error.message,
           retryable: error.code === 'sync_command_pending' || error.code === 'sync_command_execution_failed',
         },

@@ -27,11 +27,12 @@ type FenceRow = {
 }
 export const COLLABORATION_SAVE_FENCE_TTL_MS = 20_000
 
-const lost = () =>
+const lost = (itemUuid?: string) =>
   new SyncCommandProtocolError(
     'collaboration_save_fence_lost',
     'The collaboration saver no longer owns this note.',
     409,
+    itemUuid,
   )
 const bounded = (value: unknown): value is string =>
   typeof value === 'string' && value.length > 0 && value.length <= 128
@@ -141,7 +142,7 @@ export class SQLCollaborationSaveFence {
         }
       }
       if (!sameOwner || row.token !== request.token || !active) {
-        throw lost()
+        throw lost(request.room)
       }
       const expiresAt = request.action === 'release' ? 0 : now + COLLABORATION_SAVE_FENCE_TTL_MS
       await manager.query('UPDATE collaboration_save_fences SET expires_at=?,token=? WHERE room_uuid=?', [
@@ -195,11 +196,11 @@ export class SQLCollaborationSaveFence {
             row.owner_device_id !== proof?.deviceId ||
             Number(row.expires_at) <= Date.now()
           ) {
-            throw lost()
+            throw lost(room)
           }
         } else if (Number(row.expires_at) > Date.now()) {
           // Ordinary HTTP writes and other devices cannot bypass a live room.
-          throw lost()
+          throw lost(room)
         }
       }
       return execute()

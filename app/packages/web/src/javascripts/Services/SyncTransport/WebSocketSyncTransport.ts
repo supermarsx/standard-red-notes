@@ -563,6 +563,8 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
   private saveLaneTimer?: ReturnType<typeof setTimeout>
   private publishedSaveLane?: SyncSaveLane
   private readonly saveLaneListeners = new Set<(lane: SyncSaveLane) => void>()
+  private readonly refusedItems = new Map<string, { fenceToken?: string; until: number }>()
+  private readonly saveRefusalListeners = new Set<(room: string, fenceToken: string | undefined) => void>()
 
   constructor(private readonly options: WebSocketSyncTransportOptions) {
     try {
@@ -719,6 +721,11 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     this.publishSaveLane()
   }
 
+  subscribeSaveRefusals(listener: (room: string, fenceToken: string | undefined) => void): () => void {
+    this.saveRefusalListeners.add(listener)
+    return () => this.saveRefusalListeners.delete(listener)
+  }
+
   /**
    * One lane standing down on its own, with the socket — if there is one — left
    * exactly as it was.
@@ -866,7 +873,21 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     this.worker?.postMessage({ type: 'SET_COLLABORATION_SAVER', room, canSave })
   }
 
+  private isCollaborativeSaveRefused(uuid: string): boolean {
+    const refused = this.refusedItems.get(uuid)
+    if (refused) {
+      if (refused.until > Date.now() && this.options.getCollaborationSaveFence?.(uuid)?.token === refused.fenceToken) {
+        return true
+      }
+      this.refusedItems.delete(uuid)
+    }
+    return false
+  }
+
   isCollaborativeItemUploadAllowed(uuid: string): boolean {
+    if (this.isCollaborativeSaveRefused(uuid)) {
+      return false
+    }
     if (!this.socketOnlyItems.has(uuid)) {
       return true
     }
@@ -1548,6 +1569,8 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     // A deliberate shutdown is not a fallback and must not leave one reported.
     this.setTransportState('HTTP_ONLY', undefined)
     this.saveLaneListeners.clear()
+    this.saveRefusalListeners.clear()
+    this.refusedItems.clear()
     if (this.saveLaneTimer !== undefined) {
       clearTimeout(this.saveLaneTimer)
       this.saveLaneTimer = undefined
@@ -1673,7 +1696,8 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
         (item) =>
           typeof item === 'object' &&
           item !== null &&
-          this.options.canSaveCollaborativeItem?.((item as { uuid: string }).uuid) === false,
+          (this.options.canSaveCollaborativeItem?.((item as { uuid: string }).uuid) === false ||
+            this.isCollaborativeSaveRefused((item as { uuid: string }).uuid)),
       )
     ) {
       throw transportError('Only the elected collaboration saver may dispatch this note.')
@@ -1855,6 +1879,7 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     this.negotiated = undefined
     // The hold lived in that worker; the next one starts without it.
     this.saveLaneHold = undefined
+    this.refusedItems.clear()
     worker?.terminate()
     this.publishSaveLane()
   }
@@ -2114,6 +2139,26 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     }
     if (message.type === 'SAVE_LANE') {
       this.applySaveLaneMessage(message)
+      return
+    }
+    if (message.type === 'SAVE_ITEMS_REFUSED') {
+      const until = Date.now() + message.holdForMilliseconds
+      for (const item of message.items) {
+        this.refusedItems.set(item.uuid, { fenceToken: item.fenceToken, until })
+        if (message.protectItems) {
+          this.socketOnlyItems.add(item.uuid)
+        }
+        for (const listener of [...this.saveRefusalListeners]) {
+          try {
+            listener(item.uuid, item.fenceToken)
+          } catch (error) {
+            console.error('[sync-transport] A save-refusal observer threw.', error)
+          }
+        }
+      }
+      if (message.protectItems) {
+        this.persistSocketOnlyItems()
+      }
       return
     }
     if (message.type === 'STATE') {

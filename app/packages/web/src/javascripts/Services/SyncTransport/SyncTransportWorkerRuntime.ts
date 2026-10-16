@@ -2665,7 +2665,14 @@ export class SyncTransportWorkerRuntime {
         // HTTP takes it now and the socket stays up. Routing it to the default below
         // closed the socket, re-dialled, asked STATUS, got UNKNOWN and replayed over
         // HTTP anyway — once per keystroke, reported as `server-kill`.
-        if (this.sendRefusedSaveOverHttp(frame.requestId, frame.payload.code)) {
+        if (
+          this.sendRefusedSaveOverHttp(
+            frame.requestId,
+            frame.payload.code,
+            frame.payload.refusalScope,
+            frame.payload.refusedItems,
+          )
+        ) {
           break
         }
         // ERROR RESULT_TOO_LARGE now means only "your COMMAND frame was too large
@@ -4136,7 +4143,12 @@ export class SyncTransportWorkerRuntime {
    * stand-down and says the refusal's code. Synchronous for the reason given on
    * `retryRefusedCommand`.
    */
-  private sendRefusedSaveOverHttp(requestId: string, code: unknown): boolean {
+  private sendRefusedSaveOverHttp(
+    requestId: string,
+    code: unknown,
+    refusalScope?: unknown,
+    refusedItems?: unknown,
+  ): boolean {
     const active = this.active
     const record = this.outboxRecord
     if (
@@ -4153,14 +4165,55 @@ export class SyncTransportWorkerRuntime {
     }
     this.clearAckDeadline()
     this.cancelCommandRetry()
-    this.saveRefusals += 1
+    const serverFenceRefusal = code === 'NOT_AUTHORIZED' && refusalScope === 'collaboration-save-fence'
+    const itemRefusal = code === 'NOT_AUTHORIZED' && (record.socketOnly || serverFenceRefusal)
+    if (!itemRefusal) {
+      this.saveRefusals += 1
+    }
     const holdForMilliseconds = Math.min(
-      SAVE_REFUSAL_HOLD_BASE_MS * 2 ** Math.min(this.saveRefusals - 1, 10),
+      SAVE_REFUSAL_HOLD_BASE_MS * 2 ** (itemRefusal ? 0 : Math.min(this.saveRefusals - 1, 10)),
       SAVE_REFUSAL_HOLD_MAX_MS,
     )
-    this.saveRefusalHeldUntil = this.now() + holdForMilliseconds
-    this.dependencies.postMessage({ type: 'SAVE_LANE', held: true, code, holdForMilliseconds })
-    if (record.socketOnly) {
+    if (itemRefusal) {
+      // A stale room fence is deliberately reported as NOT_AUTHORIZED. It is
+      // evidence about this command, not every room using the connection. Keep
+      // its uploads pending; a fresh server-issued proof may retry immediately.
+      const body = parseStoredBody(record) ?? active.body
+      const scopedItems =
+        serverFenceRefusal &&
+        Array.isArray(refusedItems) &&
+        refusedItems.length > 0 &&
+        refusedItems.length <= 32 &&
+        refusedItems.every(
+          (uuid) =>
+            typeof uuid === 'string' &&
+            body.items.some(
+              (item) => typeof item === 'object' && item !== null && (item as { uuid?: unknown }).uuid === uuid,
+            ),
+        )
+          ? new Set<string>(refusedItems)
+          : undefined
+      this.dependencies.postMessage({
+        type: 'SAVE_ITEMS_REFUSED',
+        ...(scopedItems ? { protectItems: true } : {}),
+        items: body.items.flatMap((item) => {
+          if (typeof item !== 'object' || item === null || typeof (item as { uuid?: unknown }).uuid !== 'string') {
+            return []
+          }
+          const uuid = (item as { uuid: string }).uuid
+          if (scopedItems && !scopedItems.has(uuid)) {
+            return []
+          }
+          const proof = body.collaboration_save_fences?.find((candidate) => candidate.room === uuid)
+          return [{ uuid, ...(proof ? { fenceToken: proof.token } : {}) }]
+        }),
+        holdForMilliseconds,
+      })
+    } else {
+      this.saveRefusalHeldUntil = this.now() + holdForMilliseconds
+      this.dependencies.postMessage({ type: 'SAVE_LANE', held: true, code, holdForMilliseconds })
+    }
+    if (record.socketOnly || itemRefusal) {
       // This ERROR proves the command never executed. Drop that identity so a
       // healthy elected saver can persist the merged document with its own base.
       const cleanup = {

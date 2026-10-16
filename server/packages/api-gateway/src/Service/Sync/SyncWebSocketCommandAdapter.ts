@@ -284,7 +284,14 @@ export class SyncWebSocketCommandAdapter
       this.isJsonObject(result.data.error) &&
       result.data.error.code === 'collaboration_save_fence_lost'
     ) {
-      throw new SyncCommandBackendRefusalError()
+      const refusedItem = result.data.error.item_uuid
+      throw new SyncCommandBackendRefusalError(
+        typeof refusedItem === 'string' &&
+          Array.isArray(body.items) &&
+          body.items.some((item: unknown) => this.isJsonObject(item) && item.uuid === refusedItem)
+          ? refusedItem
+          : undefined,
+      )
     }
     if (result.status < 200 || result.status >= 300 || !this.isJsonObject(result.data)) {
       throw new Error('Durable sync command failed.')
@@ -589,7 +596,10 @@ export class SyncWebSocketCommandAdapter
       )
     }
     // Existing signed authority tokens may still carry the driver's tinyint representation.
-    const session = { ...token.session, readonly_access: token.session.readonly_access === true || (token.session.readonly_access as unknown) === 1 }
+    const session = {
+      ...token.session,
+      readonly_access: token.session.readonly_access === true || (token.session.readonly_access as unknown) === 1,
+    }
     if (token.user.uuid !== identity.userUuid || session?.uuid !== identity.sessionUuid) {
       throw new SessionValidationError(
         'Sync session identity changed.',

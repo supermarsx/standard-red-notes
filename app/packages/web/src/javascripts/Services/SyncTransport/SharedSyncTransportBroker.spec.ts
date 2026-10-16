@@ -69,6 +69,20 @@ describe('shared authenticated socket broker', () => {
     expect(last(a)).toMatchObject({ type: 'CHECKPOINT_CLEARED', requestId: 'checkpoint' })
   })
 
+  it('delivers scoped save refusals to every attached tab without caching them as a lane outage', async () => {
+    const refusal = {
+      type: 'SAVE_ITEMS_REFUSED',
+      items: [{ uuid: 'room', fenceToken: 'old-proof' }],
+      holdForMilliseconds: 30_000,
+    } as const
+    broker.publish({ ...refusal, items: [...refusal.items] })
+    expect(last(a)).toEqual(refusal)
+    expect(last(b)).toEqual(refusal)
+    const newcomer = { postMessage: jest.fn() }
+    await broker.receive('c', newcomer, { type: 'BROKER_ATTACH', sessionScope: scope, revision: 'build' })
+    expect(newcomer.postMessage.mock.calls.some(([message]) => message.type === 'SAVE_ITEMS_REFUSED')).toBe(false)
+  })
+
   it('binds RPC proof ownership to the port and detaches completed work with that identity', async () => {
     runtime.registerBrokerRpcOwner = jest.fn()
     await send('a', {

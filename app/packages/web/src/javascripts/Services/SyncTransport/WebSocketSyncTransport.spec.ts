@@ -223,6 +223,47 @@ describe('WebSocketSyncTransport', () => {
     expect(transport.workerBuild).toEqual({ state: 'reported', revision: '' })
   })
 
+  it('holds only refused item proofs and accepts a fresh server proof without pausing the save lane', async () => {
+    let token: string | undefined
+    const transport = createTransport({
+      getCollaborationSaveFence: (room) => (token ? { room, token } : undefined),
+    })
+    const observe = jest.fn()
+    transport.subscribeSaveRefusals(observe)
+    void transport.execute(request(), jest.fn()).catch(() => undefined)
+    await flush()
+    worker.emit({ type: 'STATE', state: 'READY' })
+    worker.emit({
+      type: 'NEGOTIATED',
+      sessionScope: SESSION_A,
+      protocolVersion: 1,
+      endpoint: '/sockets/sync',
+      operations: ['SYNC_ITEMS'],
+    })
+    worker.emit({
+      type: 'SAVE_ITEMS_REFUSED',
+      protectItems: true,
+      items: [{ uuid: 'retained' }],
+      holdForMilliseconds: 30_000,
+    })
+    expect(JSON.parse(localStorage.getItem('standardnotes-collaboration-socket-only:device-1')!)).toContain('retained')
+    expect(transport.saveLane.usable).toBe(true)
+    expect(transport.isCollaborativeItemUploadAllowed('retained')).toBe(false)
+    expect(transport.isCollaborativeItemUploadAllowed('unrelated')).toBe(true)
+    expect(observe).toHaveBeenCalledWith('retained', undefined)
+    token = 'fresh-server-proof'
+    expect(transport.isCollaborativeItemUploadAllowed('retained')).toBe(true)
+    worker.emit({
+      type: 'SAVE_ITEMS_REFUSED',
+      items: [{ uuid: 'retained', fenceToken: token }],
+      holdForMilliseconds: 30_000,
+    })
+    expect(transport.isCollaborativeItemUploadAllowed('retained')).toBe(false)
+    token = 'replacement-server-proof'
+    expect(transport.isCollaborativeItemUploadAllowed('retained')).toBe(true)
+    transport.deinit()
+  })
+
   it('negotiates capability/ticket, returns a committed result, and acknowledges only after local checkpoint', async () => {
     const transport = createTransport()
     const fallback = jest.fn().mockResolvedValue(response('http'))

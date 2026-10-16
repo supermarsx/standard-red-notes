@@ -72,6 +72,7 @@ describe('collaboration saver election', () => {
     let stop: () => void
     let stopDocument: () => void
     let changeLane: () => void
+    let refuseSave: (room: string, token: string | undefined) => void
     let lane: { usable: boolean }
     let dirty: boolean
     let content: unknown
@@ -101,6 +102,10 @@ describe('collaboration saver election', () => {
         setCollaborationSaver: jest.fn(),
         subscribeSyncSaveLane: (listener: () => void) => {
           changeLane = listener
+          return jest.fn()
+        },
+        subscribeCollaborationSaveRefusals: (listener: typeof refuseSave) => {
+          refuseSave = listener
           return jest.fn()
         },
         items: { findItem: () => ({ dirty, content }) },
@@ -149,6 +154,27 @@ describe('collaboration saver election', () => {
       await jest.advanceTimersByTimeAsync(1_000)
       expect(claimCollaborationSaveFence).toHaveBeenCalledTimes(2)
       expect(CollaborationSaverRegistry.get('room')).toMatchObject({ paused: false, isSaver: true })
+    })
+    it('reclaims only its exact refused fence promptly, ignoring unrelated or superseded refusals', async () => {
+      await jest.advanceTimersByTimeAsync(500)
+      expect(CollaborationSaverRegistry.get('room')?.isSaver).toBe(true)
+      refuseSave('another-room', 'token')
+      refuseSave('room', undefined)
+      refuseSave('room', 'older-token')
+      expect(CollaborationSaverRegistry.get('room')?.isSaver).toBe(true)
+      jest
+        .mocked(claimCollaborationSaveFence)
+        .mockResolvedValueOnce({ room: 'room', token: 'fresh-token', expiresAt: Date.now() + 30_000 })
+      refuseSave('room', 'token')
+      expect(CollaborationSaverRegistry.get('room')?.isSaver).toBe(false)
+      await jest.advanceTimersByTimeAsync(500)
+      expect(CollaborationSaverRegistry.get('room')).toMatchObject({
+        isSaver: true,
+        saveFence: { token: 'fresh-token' },
+      })
+      refuseSave('room', 'token')
+      expect(CollaborationSaverRegistry.get('room')?.isSaver).toBe(true)
+      expect(claimCollaborationSaveFence).toHaveBeenCalledTimes(2)
     })
     it('does not wait forever for an eligible peer which never obtains a save proof', async () => {
       awareness.getStates().set(999, { saver: participant('0', 'stuck-peer') })

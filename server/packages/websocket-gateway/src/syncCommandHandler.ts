@@ -417,7 +417,7 @@ export interface SyncCommandBackendAdapter {
 
 /** A trusted backend proved that the transaction made no item writes. */
 export class SyncCommandBackendRefusalError extends Error {
-  constructor() {
+  constructor(readonly itemUuid?: string) {
     super('The collaboration save fence refused this command before writing items.')
     this.name = 'SyncCommandBackendRefusalError'
   }
@@ -2400,7 +2400,12 @@ export class SyncCommandHandler {
       )
       if (error instanceof Error && error.name === 'SyncCommandBackendRefusalError') {
         this.options.metrics?.increment('authorization', 'NOT_AUTHORIZED')
-        this.sendError(frame.requestId, frame.commandId, 'NOT_AUTHORIZED')
+        this.sendError(frame.requestId, frame.commandId, 'NOT_AUTHORIZED', {
+          refusalScope: 'collaboration-save-fence',
+          ...(typeof (error as SyncCommandBackendRefusalError).itemUuid === 'string'
+            ? { refusedItems: [(error as SyncCommandBackendRefusalError).itemUuid!] }
+            : {}),
+        })
         return
       }
       const leaseLost = error instanceof SyncLeaseLostError || controller.signal.reason instanceof SyncLeaseLostError
@@ -2589,7 +2594,7 @@ export class SyncCommandHandler {
     }
   }
 
-  private sendError(requestId: string, commandId: string, code: string): boolean {
+  private sendError(requestId: string, commandId: string, code: string, details: JsonObject = {}): boolean {
     if (this.closed || this.serverSequence >= MAX_SYNC_SEQUENCE) {
       return false
     }
@@ -2598,7 +2603,7 @@ export class SyncCommandHandler {
       requestId,
       commandId,
       sequence: this.serverSequence + 1,
-      payload: { code, retryable: isRetryableError(code) },
+      payload: { ...details, code, retryable: isRetryableError(code) },
     })
     const serialized = JSON.stringify(frame)
     const bytes = Buffer.byteLength(serialized, 'utf8')

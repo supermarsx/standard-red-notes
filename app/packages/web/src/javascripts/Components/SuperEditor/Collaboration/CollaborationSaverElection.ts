@@ -538,6 +538,26 @@ export function installCollaborationSaver(
     advertise()
   })
   const stopCanonical = provider.onCanonicalReadyChange(advertise)
+  const stopRefusals = application.subscribeCollaborationSaveRefusals?.((refusedRoom, token) => {
+    if (disposed || refusedRoom !== room || !token || saveFence?.token !== token) {
+      return
+    }
+    // A delayed refusal must never revoke a replacement proof. Only the exact
+    // refused token is retired; SQL arbitrates the next claim as usual.
+    generation += 1
+    clearTimeout(initializationTimer)
+    initializationTimer = undefined
+    clearTimeout(settleTimer)
+    settleTimer = undefined
+    releaseFence()
+    electedLease = undefined
+    settledLease = undefined
+    renewing = false
+    stalled = false
+    quarantineUntil = 0
+    publishRegistry()
+    advertise()
+  })
   const stopIdentity = provider.onActiveEditorLeaseChange(rebindIdentity)
   CollaborationSaverRegistry.setFlusher(room, () => provider.flush())
   CollaborationSaverRegistry.setPendingReader(room, () => {
@@ -648,6 +668,7 @@ export function installCollaborationSaver(
       clearTimeout(settleTimer)
     }
     stopLane()
+    stopRefusals?.()
     stopCanonical()
     stopIdentity()
     awareness.off('change', elect)

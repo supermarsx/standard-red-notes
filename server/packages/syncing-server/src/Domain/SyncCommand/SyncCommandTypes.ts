@@ -24,6 +24,7 @@ export class SyncCommandProtocolError extends Error {
     readonly code: string,
     message: string,
     readonly httpStatus = 400,
+    readonly itemUuid?: string,
   ) {
     super(message)
     this.name = 'SyncCommandProtocolError'

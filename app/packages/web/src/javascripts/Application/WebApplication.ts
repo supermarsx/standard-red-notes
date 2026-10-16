@@ -487,6 +487,12 @@ export class WebApplication extends SNApplication implements WebApplicationInter
     return this._webSocketSyncTransport?.subscribeSaveLane(listener) ?? (() => undefined)
   }
 
+  public subscribeCollaborationSaveRefusals(
+    listener: (room: string, fenceToken: string | undefined) => void,
+  ): () => void {
+    return this._webSocketSyncTransport?.subscribeSaveRefusals(listener) ?? (() => undefined)
+  }
+
   public requireSocketSavesForItem(uuid: string): boolean {
     return this._webSocketSyncTransport?.requireSocketSavesForItem(uuid) ?? false
   }
@@ -586,9 +592,8 @@ export class WebApplication extends SNApplication implements WebApplicationInter
     /**
      * Answer other tabs that ask where this one stands on the socket lane.
      *
-     * One tab per account holds the socket and the rest stand by. A tab that is
-     * standing by cannot tell an ordinary sibling from an owner that has gone
-     * away — unless the tabs can ask each other, which is all this is: two closed
+     * Same-build tabs can share a worker; independent workers have their own
+     * sockets. The census remains useful for older tabs standing by and reports two closed
      * facts about this tab, read at the moment of the question. See TabCensus.
      */
     this.disposers.push(
