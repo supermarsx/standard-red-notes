@@ -946,7 +946,7 @@ The assistant’s data-exposure reminder can be dismissed from its small close c
 - Delegate: for a large task the assistant can hand a focused subtask to a sub-agent that has the same tools, then continue using the sub-agent’s summary. Sub-agents cannot delegate further.
 - Plan / todos: for multi-step tasks the assistant writes a short todo list, shown as a live “Plan” checklist (○ pending, ◐ in-progress, ✓ done), and updates it as it works.
 
-New, unsent chats remain drafts in the current Assistant view. Their selected mode and title are saved with the first message instead of creating empty synced history entries. A storage error while saving a real conversation remains visible so you can retry when storage is available.
+After Send, your message appears locally with Preparing… while note and shared-chat checks complete. The provider request starts after the turn is saved. New, unsent chats remain drafts in the current Assistant view. Their selected mode and title are saved with the first message instead of creating empty synced history entries. A storage error while saving a real conversation remains visible so you can retry when storage is available.
 
 > **Tip.** You do not have to wait for the assistant to finish. Steer it to correct course right away, or queue your next request so it runs automatically.
 

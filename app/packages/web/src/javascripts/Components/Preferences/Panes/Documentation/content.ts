@@ -1345,7 +1345,7 @@ export const DOC_CATEGORIES: DocCategory[] = [
           },
           {
             type: 'paragraph',
-            text: 'New, unsent chats remain drafts in the current Assistant view. Their selected mode and title are saved with the first message instead of creating empty synced history entries. A storage error while saving a real conversation remains visible so you can retry when storage is available.',
+            text: 'After Send, your message appears locally with Preparing… while note and shared-chat checks complete. The provider request starts after the turn is saved. New, unsent chats remain drafts in the current Assistant view. Their selected mode and title are saved with the first message instead of creating empty synced history entries. A storage error while saving a real conversation remains visible so you can retry when storage is available.',
           },
           {
             type: 'callout',

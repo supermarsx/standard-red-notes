@@ -312,6 +312,8 @@ function ConversationPanelImpl({
   const [input, setInput] = useState('')
   const [isRunning, setIsRunning] = useState(false)
   const [isStopping, setIsStopping] = useState(false)
+  // Local presentation only: unleased prompts must never enter synced history.
+  const [preparingPrompt, setPreparingPrompt] = useState<Extract<UIMessage, { kind: 'user' }> | null>(null)
   // Per-user rolling-window TOKEN usage (5h + weekly) for the in-chat meter.
   const [tokenWindows, setTokenWindows] = useState<{
     fiveHour?: TokenWindowUsage
@@ -1035,6 +1037,7 @@ function ConversationPanelImpl({
             setTokenWindows(null)
             // Account changes and root-key changes are hard privacy boundaries.
             sessionEpochRef.current += 1
+            setPreparingPrompt(null)
             queueRef.current = []
             steerQueueRef.current = []
             setQueue([])
@@ -1179,7 +1182,7 @@ function ConversationPanelImpl({
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
-  }, [messages])
+  }, [messages, preparingPrompt])
 
   const newId = () => Math.random().toString(36).slice(2)
 
@@ -1290,125 +1293,169 @@ function ConversationPanelImpl({
         ])
         return
       }
-      try {
-        for (const noteUuid of resolvedNoteUuids) {
-          await flushAssistantNoteEditors(application, noteUuid)
-        }
-      } catch {
-        setMessagesSynced((prev) => [
-          ...prev,
-          {
-            kind: 'error',
-            id: newId(),
-            text: 'The assistant could not safely flush the selected note context. Save the note and try again.',
-          },
-        ])
-        return
-      }
-      if (!isSessionCurrent()) {
-        return
-      }
-      const expectedNoteSnapshots = new Map<string, ReturnType<typeof captureAssistantNoteSnapshot>>()
-      for (const noteUuid of resolvedNoteUuids) {
-        const selected = application.items.findItem<SNNote>(noteUuid)
-        if (selected && isNote(selected) && application.isAuthorizedToRenderItem(selected)) {
-          expectedNoteSnapshots.set(noteUuid, captureAssistantNoteSnapshot(selected))
-        }
-      }
-      // Editor directives authorize disclosure of the visible selection only.
-      // The source UUID validates that attachment but does not grant a model
-      // permission to read or mutate the rest of the note through tools.
-      const selectedNoteUuids =
-        request.directive || activeContextSelection.scope === 'selection' ? new Set<string>() : resolvedNoteUuids
-      // A selection directive visibly attaches only the selected excerpt. Its
-      // note UUID validates the source only; it grants neither model context nor
-      // tool access to the rest of that note.
-      let builtContext = request.directive
-        ? buildContextForSelection(application, {
-            scope: 'collection',
-            collection: { type: 'notes', uuids: [] },
-          })
-        : buildContextForSelection(application, activeContextSelection)
-
-      // Achievements: one validated user message sent to the AI assistant (web-local).
-      achievements.increment(METRICS.aiAssistantMessages)
-      runIntentRef.current = promptText
-
       const controller = new AbortController()
       abortRef.current = controller
       setIsStopping(false)
       setIsRunning(true)
+      const pendingUserMessage: Extract<UIMessage, { kind: 'user' }> = {
+        kind: 'user',
+        id: newId(),
+        text: promptText,
+        ...(request.attachments?.length ? { attachments: request.attachments } : {}),
+      }
+      setPreparingPrompt(pendingUserMessage)
+      const expectedNoteSnapshots = new Map<string, ReturnType<typeof captureAssistantNoteSnapshot>>()
+      const selectedNoteUuids =
+        request.directive || activeContextSelection.scope === 'selection' ? new Set<string>() : resolvedNoteUuids
+      let builtContext: ReturnType<typeof buildContextForSelection>
       const shared = sharedChatRef.current
-      if (shared) {
+      let prepared = false
+      try {
         try {
-          if (!shared.ready) {
-            throw new Error('Your encrypted chat history is still loading. Try again shortly.')
-          }
-          const guard = await acquireAssistantChatRun(application, tabId, controller)
-          runLeaseRef.current = guard
-          const canonical = await shared.refresh()
-          if (shared.history && !canonical) {
-            throw new Error('This chat was deleted on another device.')
-          }
-          for (const noteUuid of resolvedNoteUuids) {
-            await flushAssistantNoteEditors(application, noteUuid)
-          }
-          const freshScope = new Set(resolveContextNoteUuids(application, activeContextSelection))
-          if (
-            !isSessionCurrent() ||
-            freshScope.size !== resolvedNoteUuids.size ||
-            [...freshScope].some((uuid) => !resolvedNoteUuids.has(uuid))
-          ) {
-            throw new Error(
-              'The selected note context changed while this chat was connecting. Review the context and send again.',
-            )
-          }
-          expectedNoteSnapshots.clear()
-          for (const noteUuid of freshScope) {
-            const selected = application.items.findItem<SNNote>(noteUuid)
-            if (selected && isNote(selected) && application.isAuthorizedToRenderItem(selected)) {
-              expectedNoteSnapshots.set(noteUuid, captureAssistantNoteSnapshot(selected))
+          if (!shared) {
+            for (const noteUuid of resolvedNoteUuids) {
+              await flushAssistantNoteEditors(application, noteUuid)
             }
           }
-          builtContext = request.directive
-            ? buildContextForSelection(application, { scope: 'collection', collection: { type: 'notes', uuids: [] } })
-            : buildContextForSelection(application, activeContextSelection)
-          confirmBeforeWrite = application.getPreference(PrefKey.AssistantConfirmBeforeWrite, true)
-          if (canonical && isSessionCurrent()) {
-            const restored = hydrateAssistantHistory(canonical.messages)
-            messagesRef.current = restored
-            setMessages(restored)
-            for (const name of canonical.deniedToolNames) {
-              sessionToolDecisionsRef.current.set(name, false)
-            }
-          }
+        } catch {
           if (!isSessionCurrent() || controller.signal.aborted) {
-            await guard.release()
-            runLeaseRef.current = null
-            if (abortRef.current === controller) {
-              abortRef.current = null
-            }
-            setIsRunning(false)
             return
           }
-        } catch (error) {
+          setMessagesSynced((prev) => [
+            ...prev,
+            {
+              kind: 'error',
+              id: newId(),
+              text: 'The assistant could not safely flush the selected note context. Save the note and try again.',
+            },
+          ])
+          return
+        }
+        if (!isSessionCurrent() || controller.signal.aborted) {
+          return
+        }
+        for (const noteUuid of resolvedNoteUuids) {
+          const selected = application.items.findItem<SNNote>(noteUuid)
+          if (selected && isNote(selected) && application.isAuthorizedToRenderItem(selected)) {
+            expectedNoteSnapshots.set(noteUuid, captureAssistantNoteSnapshot(selected))
+          }
+        }
+        // Editor directives authorize disclosure of the visible selection only.
+        // The source UUID validates that attachment but does not grant a model
+        // permission to read or mutate the rest of the note through tools.
+        // A selection directive visibly attaches only the selected excerpt. Its
+        // note UUID validates the source only; it grants neither model context nor
+        // tool access to the rest of that note.
+        builtContext = request.directive
+          ? buildContextForSelection(application, {
+              scope: 'collection',
+              collection: { type: 'notes', uuids: [] },
+            })
+          : buildContextForSelection(application, activeContextSelection)
+
+        // Achievements: one validated user message sent to the AI assistant (web-local).
+        achievements.increment(METRICS.aiAssistantMessages)
+        runIntentRef.current = promptText
+
+        if (shared) {
+          try {
+            if (!shared.ready) {
+              throw new Error('Your encrypted chat history is still loading. Try again shortly.')
+            }
+            const guard = await acquireAssistantChatRun(application, tabId, controller)
+            runLeaseRef.current = guard
+            if (!isSessionCurrent() || controller.signal.aborted) {
+              return
+            }
+            const canonical = await shared.refresh()
+            if (!isSessionCurrent() || controller.signal.aborted) {
+              return
+            }
+            if (shared.history && !canonical) {
+              throw new Error('This chat was deleted on another device.')
+            }
+            for (const noteUuid of resolvedNoteUuids) {
+              await flushAssistantNoteEditors(application, noteUuid)
+            }
+            const freshScope = new Set(resolveContextNoteUuids(application, activeContextSelection))
+            if (
+              !isSessionCurrent() ||
+              freshScope.size !== resolvedNoteUuids.size ||
+              [...freshScope].some((uuid) => !resolvedNoteUuids.has(uuid))
+            ) {
+              throw new Error(
+                'The selected note context changed while this chat was connecting. Review the context and send again.',
+              )
+            }
+            expectedNoteSnapshots.clear()
+            for (const noteUuid of freshScope) {
+              const selected = application.items.findItem<SNNote>(noteUuid)
+              if (selected && isNote(selected) && application.isAuthorizedToRenderItem(selected)) {
+                expectedNoteSnapshots.set(noteUuid, captureAssistantNoteSnapshot(selected))
+              }
+            }
+            builtContext = request.directive
+              ? buildContextForSelection(application, { scope: 'collection', collection: { type: 'notes', uuids: [] } })
+              : buildContextForSelection(application, activeContextSelection)
+            confirmBeforeWrite = application.getPreference(PrefKey.AssistantConfirmBeforeWrite, true)
+            if (canonical && isSessionCurrent()) {
+              const restored = hydrateAssistantHistory(canonical.messages)
+              messagesRef.current = restored
+              setMessages(restored)
+              for (const name of canonical.deniedToolNames) {
+                sessionToolDecisionsRef.current.set(name, false)
+              }
+            }
+            if (!isSessionCurrent() || controller.signal.aborted) {
+              return
+            }
+          } catch (error) {
+            if (isSessionCurrent() && !controller.signal.aborted) {
+              setMessagesSynced((previous) => [
+                ...previous,
+                {
+                  kind: 'error',
+                  id: newId(),
+                  text: error instanceof Error ? error.message : 'Could not reserve this chat.',
+                },
+              ])
+            }
+            return
+          }
+        }
+        prepared = true
+      } catch (error) {
+        if (isSessionCurrent() && !controller.signal.aborted) {
+          setMessagesSynced((previous) => [
+            ...previous,
+            {
+              kind: 'error',
+              id: newId(),
+              text: error instanceof Error ? error.message : 'Could not prepare this request.',
+            },
+          ])
+        }
+        return
+      } finally {
+        if (!prepared) {
           await runLeaseRef.current?.release()
           runLeaseRef.current = null
           if (abortRef.current === controller) {
             abortRef.current = null
+            if (mountedRef.current) {
+              setIsRunning(false)
+              if (isSessionCurrent() && !request.directive) {
+                setInput((draft) => draft || promptText)
+                if (!attachmentsRef.current.length && request.attachments?.length) {
+                  attachmentsRef.current = request.attachments
+                  setAttachments(request.attachments)
+                }
+              }
+            }
           }
-          setIsRunning(false)
-          if (isSessionCurrent()) {
-            setMessagesSynced((previous) => [
-              ...previous,
-              {
-                kind: 'error',
-                id: newId(),
-                text: error instanceof Error ? error.message : 'Could not reserve this chat.',
-              },
-            ])
-          }
-          return
+        }
+        if (mountedRef.current) {
+          setPreparingPrompt((pending) => (pending?.id === pendingUserMessage.id ? null : pending))
         }
       }
       const assistantId = newId()
@@ -1438,12 +1485,7 @@ function ConversationPanelImpl({
 
       const messagesWithTurn: UIMessage[] = [
         ...messagesRef.current,
-        {
-          kind: 'user',
-          id: newId(),
-          text: promptText,
-          ...(request.attachments?.length ? { attachments: request.attachments } : {}),
-        },
+        pendingUserMessage,
         { kind: 'assistant', id: assistantId, text: '', tools: [], streaming: true },
       ]
       setMessagesSynced(() => messagesWithTurn)
@@ -1886,7 +1928,7 @@ function ConversationPanelImpl({
 
   const handleSend = useCallback(() => {
     const trimmed = input.trim()
-    if ((!trimmed && !attachments.length) || isRunning || attachmentsBusy) {
+    if ((!trimmed && !attachments.length) || isRunning || abortRef.current || attachmentsBusy) {
       return
     }
     notifyFirstMessage(trimmed)
@@ -1969,7 +2011,7 @@ function ConversationPanelImpl({
       {isRunning && (
         <div className="border-border bg-default flex shrink-0 items-center justify-between gap-2 border-b px-3 py-1.5">
           <span className="text-passive-1 text-xs" role="status">
-            {isStopping ? 'Stopping…' : 'Current request'}
+            {isStopping ? 'Stopping…' : preparingPrompt ? 'Preparing request…' : 'Current request'}
           </span>
           <button
             type="button"
@@ -2023,7 +2065,7 @@ function ConversationPanelImpl({
       )}
 
       <div ref={scrollRef} className="min-h-0 flex-grow overflow-y-auto px-3 py-3">
-        {messages.length === 0 && recentChats}
+        {messages.length === 0 && !preparingPrompt && recentChats}
         {!noticeDismissed && (
           <div className="border-warning bg-warning-faded mb-4 rounded border border-solid p-3">
             <div className="flex items-start justify-between gap-2">
@@ -2054,7 +2096,7 @@ function ConversationPanelImpl({
               'The assistant is not configured yet. Open Preferences → Assistant to choose a connection.'}
           </div>
         )}
-        {messages.length === 0 && isConfigured && (
+        {messages.length === 0 && !preparingPrompt && isConfigured && (
           <div className="text-passive-0 text-sm">
             Ask the assistant to find, summarize, create, or organize your notes.
           </div>
@@ -2068,6 +2110,21 @@ function ConversationPanelImpl({
               onRemoveMessage={removeMessage}
             />
           ))}
+          {preparingPrompt && (
+            <div className="max-w-[85%] min-w-0 self-end" aria-label="Preparing assistant message">
+              <div className="bg-info text-info-contrast rounded-lg px-2.5 py-1.5 text-sm leading-5">
+                {preparingPrompt.attachments?.length ? (
+                  <AttachmentPreview attachments={preparingPrompt.attachments} />
+                ) : null}
+                <div className="whitespace-pre-wrap">
+                  {parseAssistantDirectivePrompt(preparingPrompt.text)?.instruction ?? preparingPrompt.text}
+                </div>
+              </div>
+              <div className="text-passive-1 mt-0.5 text-right text-xs" role="status">
+                {isStopping ? 'Stopping…' : 'Preparing…'}
+              </div>
+            </div>
+          )}
           {pendingConfirmation && (
             <InlineAssistantConfirmation
               confirmation={pendingConfirmation.presentation}
