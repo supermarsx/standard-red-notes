@@ -1,6 +1,7 @@
 import { addToast } from '@standardnotes/toast'
 import { ServerAvailabilityAlert, fetchWithServerAvailability } from './ServerAvailabilityAlert'
-jest.mock('@standardnotes/toast', () => ({ addToast: jest.fn(), ToastType: { Error: 'error' } }))
+import { showCollaborationThrottle } from '@/Components/SuperEditor/Collaboration/CollaborationThrottle'
+jest.mock('@standardnotes/toast', () => ({ addToast: jest.fn(), ToastType: { Error: 'error', Regular: 'regular' } }))
 
 it('shows a bounded 502 outage toast once across concurrent requests, then allows a reminder', () => {
   let now = 0
@@ -33,4 +34,16 @@ it('retains the original fetch response and does not turn network exceptions int
   } finally {
     globalThis.fetch = original
   }
+})
+
+it('coalesces rate-limit notices with collaboration notices without calling throttling a block', () => {
+  jest.mocked(addToast).mockClear()
+  const alert = new ServerAvailabilityAlert()
+  alert.observeStatus(429)
+  alert.observeStatus(429)
+  showCollaborationThrottle()
+  expect(addToast).toHaveBeenCalledTimes(1)
+  expect(addToast).toHaveBeenLastCalledWith(
+    expect.objectContaining({ message: expect.stringContaining('temporarily rate-limited') }),
+  )
 })
