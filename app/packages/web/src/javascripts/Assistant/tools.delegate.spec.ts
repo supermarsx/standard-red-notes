@@ -20,6 +20,25 @@ function makeContext(runSubAgent?: AssistantToolContext['runSubAgent']): Assista
 const fakeApp = {} as unknown as WebApplication
 
 describe('AssistantTools delegate', () => {
+  it('withholds web tools under the account lockdown and rechecks it after an open approval', async () => {
+    let enabled = false
+    const serverJsonRequest = jest.fn()
+    const application = { getPreference: () => enabled, serverJsonRequest } as unknown as WebApplication
+    const requestConfirmation = jest.fn(async () => {
+      enabled = false
+      return true
+    })
+    const tools = new AssistantTools(application, { ...makeContext(), requestConfirmation })
+    expect(tools.tools().some((tool) => tool.name.startsWith('web.'))).toBe(false)
+    await expect(tools.call('web.search', { query: 'research' })).rejects.toThrow('Internet access is disabled')
+    expect(requestConfirmation).not.toHaveBeenCalled()
+    enabled = true
+    expect(tools.tools().some((tool) => tool.name === 'web.search')).toBe(true)
+    await expect(tools.call('web.search', { query: 'research' })).resolves.toEqual({
+      error: expect.stringContaining('disabled in Assistant settings'),
+    })
+    expect(serverJsonRequest).not.toHaveBeenCalled()
+  })
   it('exposes the delegate tool at the top level when a sub-agent runner is provided', () => {
     const tools = new AssistantTools(
       fakeApp,

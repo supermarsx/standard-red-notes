@@ -1,4 +1,5 @@
 import { WebApplication } from '@/Application/WebApplication'
+import { assistantInternetAccessEnabled } from './assistantInternetAccess'
 
 /**
  * Standard Red Notes: the assistant's WEB tools (`web.search` / `web.fetch`).
@@ -152,6 +153,9 @@ export async function webSearch(
   query: string,
   options: { limit?: number; signal?: AbortSignal } = {},
 ): Promise<WebSearchResponse | WebToolError> {
+  if (!assistantInternetAccessEnabled(application)) {
+    return { error: 'Internet access is disabled in Assistant settings.' }
+  }
   const trimmed = typeof query === 'string' ? query.trim() : ''
   if (!trimmed) {
     return { error: 'A non-empty "query" string is required.' }
@@ -222,6 +226,9 @@ export async function webFetch(
   url: string,
   options: { signal?: AbortSignal } = {},
 ): Promise<WebFetchResponse | WebToolError> {
+  if (!assistantInternetAccessEnabled(application)) {
+    return { error: 'Internet access is disabled in Assistant settings.' }
+  }
   const trimmed = typeof url === 'string' ? url.trim() : ''
   if (!trimmed) {
     return { error: 'A non-empty "url" string is required.' }

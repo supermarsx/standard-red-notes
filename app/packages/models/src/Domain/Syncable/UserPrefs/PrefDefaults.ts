@@ -87,6 +87,7 @@ export const PrefDefaults = {
   [PrefKey.AssistantProvider]: '',
   [PrefKey.AssistantModel]: '',
   [PrefKey.AssistantImageInputCapability]: '',
+  [PrefKey.AssistantInternetAccessEnabled]: true,
   [PrefKey.AssistantConfirmBeforeWrite]: true,
   [PrefKey.AssistantToolPermissionMode]: 'allow-read',
   [PrefKey.AssistantConnectionMode]: 'direct',

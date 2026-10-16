@@ -7,6 +7,17 @@ const makeApplication = (response: unknown) => {
 }
 
 describe('assistant web tools', () => {
+  it('blocks search and page reads before network access when the account setting disables internet', async () => {
+    const { application, serverJsonRequest } = makeApplication({ ok: true, status: 200, data: {} })
+    application.getPreference = jest.fn().mockReturnValue(false)
+    await expect(webSearch(application, 'public research')).resolves.toEqual({
+      error: expect.stringContaining('disabled in Assistant settings'),
+    })
+    await expect(webFetch(application, 'https://example.test')).resolves.toEqual({
+      error: expect.stringContaining('disabled in Assistant settings'),
+    })
+    expect(serverJsonRequest).not.toHaveBeenCalled()
+  })
   it('returns safe normalized search results through the authenticated same-origin route', async () => {
     const { application, serverJsonRequest } = makeApplication({
       ok: true,

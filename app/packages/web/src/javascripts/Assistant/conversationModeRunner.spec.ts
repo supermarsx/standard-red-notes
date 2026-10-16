@@ -4,6 +4,7 @@ import { AgentOptions } from './agent'
 import type { Provider, ProviderEvent, ProviderRequest, ToolDefinition } from './types'
 import { webFetch, webSearch } from './webTools'
 import { isAssistantConversationMode, normalizeAssistantConversationMode } from './conversationModes'
+import { AssistantTools } from './tools'
 
 jest.mock('./webTools', () => ({ webSearch: jest.fn(), webFetch: jest.fn() }))
 
@@ -64,6 +65,19 @@ it('strictly recognizes supported modes while legacy UI falls back to Agent', ()
   expect(isAssistantConversationMode('plan')).toBe(true)
   expect(isAssistantConversationMode('unknown')).toBe(false)
   expect(normalizeAssistantConversationMode(undefined)).toBe('agent')
+})
+
+it.each(['agent', 'research', 'deep-research'] as const)('%s respects the account internet lockdown', async (mode) => {
+  const harness = setup()
+  harness.options.session = new AssistantTools({ getPreference: () => false } as unknown as WebApplication, {
+    confirmBeforeWrite: false,
+    requestConfirmation: async () => true,
+    presentPane: () => undefined,
+  })
+  await runConversationMode(mode, [], harness.options, harness.extras)
+  expect(webSearch).not.toHaveBeenCalled()
+  expect(webFetch).not.toHaveBeenCalled()
+  expect(harness.extras.requestWebConfirmation).not.toHaveBeenCalled()
 })
 
 it.each(['chat', 'plan'] as const)(

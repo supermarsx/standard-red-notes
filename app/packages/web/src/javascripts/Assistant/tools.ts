@@ -36,6 +36,7 @@ import {
 } from '@/Reminders/reminders'
 import { createEmailReminder, deleteEmailReminder } from '@/Reminders/emailReminders'
 import { webSearch, webFetch } from './webTools'
+import { assistantInternetAccessEnabled } from './assistantInternetAccess'
 import { achievements, ACHIEVEMENTS } from '@/Achievements'
 import { AssistantToolConfirmation } from './assistantPresentation'
 import { SUPER_TOOLBAR_AUTO_HIDE_PREF_KEY } from '@/Components/SuperEditor/Plugins/ToolbarPlugin/ToolbarAutoHidePreference'
@@ -368,11 +369,19 @@ export class AssistantTools implements ToolSession {
   tools(): ToolDefinition[] {
     const available =
       this.enableDelegate && this.context.runSubAgent ? [...TOOL_DEFINITIONS, DELEGATE_TOOL] : TOOL_DEFINITIONS
-    return this.context.allowMutatingTools === false ? available.filter((tool) => !tool.mutating) : available
+    const allowInternet = assistantInternetAccessEnabled(this.application)
+    return available.filter(
+      (tool) =>
+        !(this.context.allowMutatingTools === false && tool.mutating) &&
+        (allowInternet || !tool.name.startsWith('web.')),
+    )
   }
 
   async call(name: string, rawArgs: unknown, callId?: string): Promise<unknown> {
     this.throwIfAborted()
+    if (name.startsWith('web.') && !assistantInternetAccessEnabled(this.application)) {
+      throw new Error('Internet access is disabled in Assistant settings.')
+    }
     const args = (rawArgs ?? {}) as Record<string, unknown>
     // Resolve against the live tool list so a withheld tool (e.g. delegate inside
     // a sub-agent) is rejected as unknown rather than silently executing.

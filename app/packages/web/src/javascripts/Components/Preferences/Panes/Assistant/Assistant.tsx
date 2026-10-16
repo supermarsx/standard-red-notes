@@ -426,6 +426,9 @@ const Assistant = ({ application }: { application: WebApplication }) => {
   const [imageCapability, setImageCapability] = useState(() =>
     application.getPreference(PrefKey.AssistantImageInputCapability, ''),
   )
+  const [internetAccess, setInternetAccess] = useState(() =>
+    application.getPreference(PrefKey.AssistantInternetAccessEnabled, true),
+  )
   const imageCapabilityValue = JSON.stringify({ baseURL: baseURL.trim().replace(/\/+$/, ''), model: model.trim() })
   const [toolPermissionMode, setToolPermissionMode] = useState<AssistantToolPermissionMode>(() =>
     application.getPreference(PrefKey.AssistantToolPermissionMode, 'allow-read'),
@@ -441,6 +444,7 @@ const Assistant = ({ application }: { application: WebApplication }) => {
         ) {
           setToolPermissionMode(application.getPreference(PrefKey.AssistantToolPermissionMode, 'allow-read'))
           setImageCapability(application.getPreference(PrefKey.AssistantImageInputCapability, ''))
+          setInternetAccess(application.getPreference(PrefKey.AssistantInternetAccessEnabled, true))
         }
       }),
     [application],
@@ -1209,6 +1213,26 @@ const Assistant = ({ application }: { application: WebApplication }) => {
 
       <TabPanel state={tabState} id="search">
         <PreferencesGroup>
+          <PreferencesSegment>
+            <Title>Assistant internet access</Title>
+            <div className="flex items-center justify-between gap-4">
+              <Text>
+                Allow Agent, Research and Deep Research to search the web and read pages through this server. Your
+                server administrator can disable access for everyone. Existing tool approvals still apply.
+              </Text>
+              <Switch
+                checked={internetAccess}
+                onChange={(enabled) => {
+                  setInternetAccess(enabled)
+                  void application.setPreference(PrefKey.AssistantInternetAccessEnabled, enabled)
+                }}
+              />
+            </div>
+            <Text className="text-passive-1 mt-2">
+              Turning this off removes web tools from current and new chats. Note search remains available; queries and
+              page URLs are sent to the server only while internet access is enabled.
+            </Text>
+          </PreferencesSegment>
           <PreferencesSegment>
             <Title>Search</Title>
             <Text>

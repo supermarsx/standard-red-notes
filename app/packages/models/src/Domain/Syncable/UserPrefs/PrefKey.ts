@@ -155,6 +155,7 @@ export enum PrefKey {
   AssistantModel = 'assistantModel',
   /** Exact endpoint/model pair explicitly confirmed to support image inputs. */
   AssistantImageInputCapability = 'assistantImageInputCapability',
+  AssistantInternetAccessEnabled = 'assistantInternetAccessEnabled',
   AssistantConfirmBeforeWrite = 'assistantConfirmBeforeWrite',
   /**
    * Controls which assistant tool calls may run without an inline approval.
@@ -476,6 +477,7 @@ export type PrefValue = {
   [PrefKey.AssistantProvider]: string
   [PrefKey.AssistantModel]: string
   [PrefKey.AssistantImageInputCapability]: string
+  [PrefKey.AssistantInternetAccessEnabled]: boolean
   [PrefKey.AssistantConfirmBeforeWrite]: boolean
   [PrefKey.AssistantToolPermissionMode]: 'ask' | 'allow-read' | 'allow-safe' | 'allow-all' | 'bypass'
   [PrefKey.AssistantConnectionMode]: 'direct' | 'proxy'
