@@ -1072,6 +1072,8 @@
           url: /concurrency-performance-audit.html#open-private-comment-data-loss-issue
         - title: Open observations
           url: /concurrency-performance-audit.html#other-unresolved-observations
+        - title: Static-analysis follow-up
+          url: /concurrency-performance-audit.html#static-analysis-follow-up--17-october
     - title: Dependency upgrade audit
       items:
         - title: Audit overview
