@@ -98,7 +98,7 @@ const AssistantUsageMeter: FunctionComponent<Props> = ({ fiveHour, weekly, chat,
             This open chat · In {count(chat.input)} · Out {count(chat.output)}
             {chat.calls > 0 && ` · ${chat.reportedCalls}/${chat.calls} calls reported`}
           </span>
-          <span title="Input tokens sent in the last model call, including system prompt, conversation and tool context. The model window is shown only when the provider reports it; output tokens are separate.">
+          <span title="Input tokens sent in the last model call, including system prompt, conversation and tool context. The model window is shown only when supplied by the provider or configured AI profile; output tokens are separate.">
             Input context · {count(input)}
             {limit
               ? ` / ${formatTokens(limit)}${percent !== undefined ? ` (${percent}%)` : ''}`
