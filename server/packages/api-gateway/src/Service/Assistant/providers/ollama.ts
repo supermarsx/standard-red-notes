@@ -13,6 +13,8 @@ interface OllamaResponse {
     tool_calls?: Array<{ function: { name: string; arguments: Record<string, unknown> } }>
   }
   done_reason?: string
+  prompt_eval_count?: number
+  eval_count?: number
 }
 
 /**
@@ -102,10 +104,7 @@ export class OllamaProvider implements Provider {
 
     for (;;) {
       const { done, value } = await reader.read()
-      if (done) {
-        break
-      }
-      buf += decoder.decode(value, { stream: true })
+      buf += done ? decoder.decode() + '\n' : decoder.decode(value, { stream: true })
       const lines = buf.split('\n')
       buf = lines.pop() ?? ''
 
@@ -134,6 +133,18 @@ export class OllamaProvider implements Provider {
         }
 
         if (parsed.done) {
+          const promptTokens = validTokenCount(parsed.prompt_eval_count)
+          const completionTokens = validTokenCount(parsed.eval_count)
+          if (promptTokens !== undefined || completionTokens !== undefined) {
+            yield {
+              kind: 'usage',
+              promptTokens,
+              completionTokens,
+              ...(promptTokens !== undefined && completionTokens !== undefined
+                ? { totalTokens: promptTokens + completionTokens }
+                : {}),
+            }
+          }
           yield {
             kind: 'finish',
             stopReason: parsed.done_reason === 'length' ? 'max_tokens' : 'end_turn',
@@ -141,6 +152,13 @@ export class OllamaProvider implements Provider {
           return
         }
       }
+      if (done) {
+        break
+      }
     }
   }
+}
+
+function validTokenCount(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined
 }

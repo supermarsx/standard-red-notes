@@ -103,6 +103,15 @@ export class AnthropicProvider implements Provider {
         }
         case 'message_stop': {
           const final = await stream.finalMessage()
+          if (final.usage) {
+            // Actual API usage; cache reads/writes are additional input tokens.
+            const promptTokens =
+              final.usage.input_tokens +
+              (final.usage.cache_read_input_tokens ?? 0) +
+              (final.usage.cache_creation_input_tokens ?? 0)
+            const completionTokens = final.usage.output_tokens
+            yield { kind: 'usage', promptTokens, completionTokens, totalTokens: promptTokens + completionTokens }
+          }
           yield { kind: 'finish', stopReason: mapStop(final.stop_reason) }
           return
         }
