@@ -56,7 +56,14 @@ export type ProviderEvent =
   // Token usage reported by the endpoint when a completion finishes. Best-effort:
   // emitted only when the provider's response carries a `usage` object (OpenAI
   // non-streaming responses, or streaming with stream_options.include_usage).
-  | { kind: 'usage'; promptTokens?: number; completionTokens?: number; totalTokens?: number }
+  | {
+      kind: 'usage'
+      promptTokens?: number
+      completionTokens?: number
+      totalTokens?: number
+      /** Optional provider-reported model window; never inferred from a model name. */
+      contextWindowTokens?: number
+    }
 
 export interface Provider {
   readonly id: string

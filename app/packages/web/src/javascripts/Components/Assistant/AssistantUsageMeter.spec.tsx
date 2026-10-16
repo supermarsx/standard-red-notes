@@ -43,6 +43,38 @@ const render = (props: Parameters<typeof AssistantUsageMeter>[0]): HTMLElement =
 }
 
 describe('AssistantUsageMeter', () => {
+  it('shows actual call input/output and reported totals without inventing a context limit', () => {
+    const el = render({
+      fiveHour: undefined,
+      weekly: undefined,
+      chat: { calls: 2, reportedCalls: 1, input: 100, output: 25, last: { input: 100, output: 25 } },
+    })
+    expect(el.textContent).toContain('Last call · In 100 · Out 25')
+    expect(el.textContent).toContain('This open chat · In 100 · Out 25 · 1/2 calls reported')
+    expect(el.textContent).toContain('Input context · 100 · limit not reported')
+    expect(el.querySelector('[role="progressbar"]')).toBeNull()
+  })
+
+  it('shows known context percentage only from a reported limit, alongside existing account windows', () => {
+    const el = render({
+      fiveHour: window({}),
+      weekly: undefined,
+      chat: { calls: 1, reportedCalls: 1, last: { input: 80, output: 12, contextLimit: 100 } },
+    })
+    expect(el.textContent).toContain('Input context · 80 / 100 (80%)')
+    expect(el.querySelector('[aria-label="Last call input context usage"]')?.getAttribute('aria-valuenow')).toBe('80')
+    expect(el.querySelector('[aria-label="5-hour AI token usage"]')).not.toBeNull()
+  })
+
+  it('shows missing latest token reports as unknown even when earlier chat totals exist', () => {
+    const el = render({
+      fiveHour: undefined,
+      weekly: undefined,
+      chat: { calls: 2, reportedCalls: 1, input: 100, output: 25, last: {} },
+    })
+    expect(el.textContent).toContain('Last call · In not reported · Out not reported')
+    expect(el.textContent).toContain('This open chat · In 100 · Out 25')
+  })
   it('does NOT render the reset clause for an already-elapsed window', () => {
     const el = render({
       fiveHour: window({ resetsAt: new Date(Date.now() - 60_000).toISOString() }),
