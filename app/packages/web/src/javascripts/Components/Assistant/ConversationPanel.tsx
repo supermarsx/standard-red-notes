@@ -8,6 +8,7 @@ import {
 } from '@/Assistant/attachments'
 import { AttachmentPreview } from './ComposerAttachments'
 import AssistantMessageContent from './AssistantMessageContent'
+import AssistantActivityGroup from './AssistantActivityGroup'
 import type { AssistantChatContextSnapshot } from '@/Assistant/assistantDirectiveContext'
 import AssistantComposer from './AssistantComposer'
 import AssistantModeSelector from './AssistantModeSelector'
@@ -1470,6 +1471,9 @@ function ConversationPanelImpl({
       }
 
       let activeAssistantId = assistantId
+      let hasActiveText = false
+      let hasRunText = false
+      let textAfterTools = false
       let waitingForSteeredResponse = false
       const updateAssistant = (updater: (message: Extract<UIMessage, { kind: 'assistant' }>) => void) => {
         setMessagesSynced((prev) => {
@@ -1497,11 +1501,45 @@ function ConversationPanelImpl({
           })
         })
       }
-      const textDeltas = createAssistantTextDeltaBatcher((text) =>
+      const textDeltas = createAssistantTextDeltaBatcher((text) => {
+        if (!isSessionCurrent()) {
+          return
+        }
         updateAssistant((message) => {
           message.text += text
-        }),
-      )
+        })
+      })
+      const beginSteeredResponse = () => {
+        textDeltas.flush()
+        updateAssistant((message) => {
+          message.streaming = false
+        })
+        activeAssistantId = newId()
+        hasActiveText = false
+        textAfterTools = false
+      }
+      const finishRunActivities = () => {
+        const activityIds = new Set(activeToolActivityIdsRef.current.values())
+        setMessagesSynced((current) =>
+          current.map((message) => {
+            if (message.kind !== 'assistant') {
+              return message
+            }
+            if (message.id !== activeAssistantId && !message.tools.some((tool) => activityIds.has(tool.id))) {
+              return message
+            }
+            return {
+              ...message,
+              streaming: false,
+              tools: message.tools.map((tool) => {
+                return activityIds.has(tool.id) && tool.outcome === undefined
+                  ? { ...tool, outcome: 'interrupted' as const }
+                  : tool
+              }),
+            }
+          }),
+        )
+      }
 
       const baseProvider = buildAssistantProvider(application, controller.signal, runLeaseRef.current?.proof)
       const agentProvider: Provider = observeProviderTokenUsage(
@@ -1563,7 +1601,7 @@ function ConversationPanelImpl({
           setMessagesSynced((current) =>
             retainNewestAssistantNoteChanges(
               current.map((message) => {
-                if (message.kind !== 'assistant' || message.id !== activeAssistantId) {
+                if (message.kind !== 'assistant' || !message.tools.some((entry) => entry.id === activityId)) {
                   return message
                 }
                 return {
@@ -1630,9 +1668,15 @@ function ConversationPanelImpl({
               },
             },
             onTextDelta: (delta) => {
-              if (!isSessionCurrent()) {
+              if (!isSessionCurrent() || !delta) {
                 return
               }
+              if (textAfterTools && hasActiveText) {
+                textDeltas.push('\n\n')
+              }
+              textAfterTools = false
+              hasActiveText = true
+              hasRunText = true
               waitingForSteeredResponse = false
               textDeltas.push(delta)
             },
@@ -1645,11 +1689,7 @@ function ConversationPanelImpl({
               // it cannot be concatenated ahead of that user guidance. Multiple
               // steers drained at one boundary still share one response bubble.
               if (!waitingForSteeredResponse) {
-                textDeltas.flush()
-                updateAssistant((message) => {
-                  message.streaming = false
-                })
-                activeAssistantId = newId()
+                beginSteeredResponse()
                 waitingForSteeredResponse = true
               }
             },
@@ -1659,6 +1699,7 @@ function ConversationPanelImpl({
               }
               waitingForSteeredResponse = false
               textDeltas.flush()
+              textAfterTools = true
               const activityId = newId()
               activeToolActivityIdsRef.current.set(call.id, activityId)
               updateAssistant((message) =>
@@ -1669,13 +1710,22 @@ function ConversationPanelImpl({
               if (!isSessionCurrent()) {
                 return
               }
-              updateAssistant((message) => {
-                const activityId = activeToolActivityIdsRef.current.get(callId)
-                const entry = activityId ? message.tools.find((tool) => tool.id === activityId) : undefined
-                if (entry) {
-                  entry.outcome = outcome
-                }
-              })
+              const activityId = activeToolActivityIdsRef.current.get(callId)
+              if (activityId) {
+                setMessagesSynced((current) =>
+                  current.map((message) => {
+                    if (message.kind !== 'assistant' || !message.tools.some((tool) => tool.id === activityId)) {
+                      return message
+                    }
+                    return {
+                      ...message,
+                      tools: message.tools.map((tool) => {
+                        return tool.id === activityId ? { ...tool, outcome } : tool
+                      }),
+                    }
+                  }),
+                )
+              }
             },
           },
           {
@@ -1711,10 +1761,13 @@ function ConversationPanelImpl({
         textDeltas.flush()
         updateAssistant((message) => {
           message.streaming = false
-          if (!message.text) {
+          // An abort just after steering can return the previous response's
+          // text. Keep that text in its original bubble instead of repeating it.
+          if (!message.text && (!hasRunText || hasActiveText)) {
             message.text = result.finalText
           }
         })
+        finishRunActivities()
 
         if (result.stopReason === 'error') {
           setMessagesSynced((prev) => [
@@ -1725,12 +1778,7 @@ function ConversationPanelImpl({
       } catch (error) {
         textDeltas.flush()
         if (isSessionCurrent()) {
-          updateAssistant((message) => {
-            message.streaming = false
-            for (const tool of message.tools) {
-              tool.outcome ??= 'interrupted'
-            }
-          })
+          finishRunActivities()
           setMessagesSynced((prev) => [
             ...prev,
             { kind: 'error', id: newId(), text: error instanceof Error ? error.message : String(error) },
@@ -2189,13 +2237,19 @@ export const MessageBubble = ({
       {(messageTextRef) => (
         <div className="min-w-0">
           {message.tools.length > 0 && (
-            <div className="mb-1 flex flex-col gap-1">
+            <AssistantActivityGroup
+              tools={message.tools.map((tool) => ({
+                label: tool.persistedLabel ?? describeAssistantTool(tool.name, tool.args).label,
+                outcome: tool.outcome,
+                changed: Boolean(tool.noteChange),
+              }))}
+            >
               {message.tools.map((tool) => (
                 <ToolActivity key={tool.id} tool={tool} onApplyNoteChange={onApplyNoteChange} />
               ))}
-            </div>
+            </AssistantActivityGroup>
           )}
-          {(message.text || message.streaming) && (
+          {(message.text || (message.streaming && message.tools.length === 0)) && (
             <AssistantMessageContent
               text={message.text}
               streaming={message.streaming}

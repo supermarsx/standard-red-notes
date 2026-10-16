@@ -46,7 +46,7 @@ export default function AssistantMessageContent({
   const [format, setFormat] = useState<'markdown' | 'plain'>('markdown')
   const html = useMemo(() => (format === 'markdown' ? assistantMarkdownHtml(text) : ''), [text, format])
   return (
-    <div className="bg-contrast text-text min-w-0 rounded-lg px-2.5 py-1.5 text-sm leading-5">
+    <div className="text-text min-w-0 py-1 text-sm leading-5">
       <div
         role="group"
         aria-label="Message display format"
