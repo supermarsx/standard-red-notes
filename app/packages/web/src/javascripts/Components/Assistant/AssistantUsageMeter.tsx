@@ -1,4 +1,4 @@
-import { FunctionComponent, useMemo } from 'react'
+import { FunctionComponent, useMemo, useState } from 'react'
 import { classNames } from '@standardnotes/utils'
 import { buildMeterModel, formatResetDuration, TokenWindowUsage } from '@/Assistant/usageMeter'
 import type { ChatTokenUsage } from '@/Assistant/usageMeterProvider'
@@ -14,7 +14,11 @@ const WindowMeter: FunctionComponent<WindowMeterProps> = ({ label, window }) => 
   const model = useMemo(() => buildMeterModel(window), [window])
   const resetIn = useMemo(() => (window && !window.unavailable ? formatResetDuration(window.resetsAt) : ''), [window])
 
-  const value = model.unavailable ? 'Unavailable' : model.unlimited ? 'Unlimited' : model.percentLabel
+  const value = model.unavailable
+    ? 'Unavailable'
+    : model.unlimited
+      ? `${model.usedLabel} / Unlimited`
+      : model.valueLabel
   const detail = model.unavailable
     ? `${label}: Usage unavailable`
     : model.unlimited
@@ -33,6 +37,7 @@ const WindowMeter: FunctionComponent<WindowMeterProps> = ({ label, window }) => 
     >
       <span className="text-passive-1">{label === '5-hour' ? '5h' : label}</span>
       <span className={classNames('font-medium tabular-nums', model.textColorClass)}>{value}</span>
+      {resetIn && resetIn !== 'now' && <span className="text-passive-1">· {resetIn}</span>}
     </span>
   )
 }
@@ -48,6 +53,7 @@ type Props = {
  * In-chat usage details with a single compact line for account limits.
  */
 const AssistantUsageMeter: FunctionComponent<Props> = ({ fiveHour, weekly, chat, className }) => {
+  const [expanded, setExpanded] = useState(false)
   if (!fiveHour && !weekly && !chat) {
     return null
   }
@@ -58,7 +64,29 @@ const AssistantUsageMeter: FunctionComponent<Props> = ({ fiveHour, weekly, chat,
 
   return (
     <div className={classNames('flex min-w-0 flex-col gap-2', className)}>
-      {chat && (
+      <div
+        className="flex flex-wrap items-center gap-2 text-[11px] leading-4"
+        role="group"
+        aria-label="AI token limits"
+      >
+        {fiveHour && <WindowMeter label="5-hour" window={fiveHour} />}
+        {fiveHour && weekly && (
+          <span className="text-passive-2" aria-hidden="true">
+            ·
+          </span>
+        )}
+        {weekly && <WindowMeter label="Weekly" window={weekly} />}
+        <button
+          type="button"
+          className="text-passive-1 hover:text-passive-0 rounded px-1 py-0.5"
+          aria-expanded={expanded}
+          aria-label="Usage details"
+          onClick={() => setExpanded(!expanded)}
+        >
+          {expanded ? '▴' : '▾'} Usage
+        </button>
+      </div>
+      {expanded && chat && (
         <div
           className="text-passive-1 flex min-w-0 flex-wrap gap-x-3 gap-y-0.5 text-[11px] tabular-nums"
           aria-label="Chat token usage"
@@ -96,13 +124,15 @@ const AssistantUsageMeter: FunctionComponent<Props> = ({ fiveHour, weekly, chat,
           )}
         </div>
       )}
-      {(fiveHour || weekly) && (
-        <div className="flex items-center gap-2 text-[11px] leading-4" role="group" aria-label="AI token limits">
-          <WindowMeter label="5-hour" window={fiveHour} />
-          <span className="text-passive-2" aria-hidden="true">
-            ·
-          </span>
-          <WindowMeter label="Weekly" window={weekly} />
+      {expanded && [fiveHour, weekly].some((window) => window && !window.unavailable && window.limitTokens > 0) && (
+        <div className="text-passive-1 text-[11px]">
+          {fiveHour && !fiveHour.unavailable && fiveHour.limitTokens > 0 && (
+            <span>5h remaining: {formatTokens(Math.max(0, fiveHour.limitTokens - fiveHour.usedTokens))} tokens. </span>
+          )}
+          {weekly && !weekly.unavailable && weekly.limitTokens > 0 && (
+            <span>Weekly remaining: {formatTokens(Math.max(0, weekly.limitTokens - weekly.usedTokens))} tokens.</span>
+          )}{' '}
+          Rolling windows free capacity as older usage expires.
         </div>
       )}
     </div>

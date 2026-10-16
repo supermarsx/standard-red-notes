@@ -42,6 +42,8 @@ const render = (props: Parameters<typeof AssistantUsageMeter>[0]): HTMLElement =
   return container
 }
 
+const expand = () => act(() => container.querySelector<HTMLButtonElement>('[aria-label="Usage details"]')!.click())
+
 describe('AssistantUsageMeter', () => {
   it('shows actual call input/output and reported totals without inventing a context limit', () => {
     const el = render({
@@ -49,6 +51,8 @@ describe('AssistantUsageMeter', () => {
       weekly: undefined,
       chat: { calls: 2, reportedCalls: 1, input: 100, output: 25, last: { input: 100, output: 25 } },
     })
+    expect(el.textContent).not.toContain('Last call')
+    expand()
     expect(el.textContent).toContain('Last call · In 100 · Out 25')
     expect(el.textContent).toContain('This open chat · In 100 · Out 25 · 1/2 calls reported')
     expect(el.textContent).toContain('Input context · 100 · limit not reported')
@@ -61,10 +65,13 @@ describe('AssistantUsageMeter', () => {
       weekly: undefined,
       chat: { calls: 1, reportedCalls: 1, last: { input: 80, output: 12, contextLimit: 100 } },
     })
+    expand()
     expect(el.textContent).toContain('Input context · 80 / 100 (80%)')
     expect(el.querySelector('[aria-label="Last call input context usage"]')?.getAttribute('aria-valuenow')).toBe('80')
     expect(el.querySelector('[aria-label="5-hour AI token usage"]')).not.toBeNull()
-    expect(el.querySelector('[aria-label="AI token limits"]')?.textContent).toBe('5h10%·WeeklyUnavailable')
+    expect(el.querySelector('[aria-label="AI token limits"]')?.textContent).toContain('5h100 / 1k')
+    expect(el.textContent).not.toContain('WeeklyUnavailable')
+    expect(el.textContent).toContain('5h remaining: 900 tokens.')
     expect(el.querySelector('[aria-label="5-hour AI token usage"]')?.getAttribute('aria-valuetext')).toContain(
       '100 / 1k tokens (10%)',
     )
@@ -76,6 +83,7 @@ describe('AssistantUsageMeter', () => {
       weekly: undefined,
       chat: { calls: 2, reportedCalls: 1, input: 100, output: 25, last: {} },
     })
+    expand()
     expect(el.textContent).toContain('Last call · In not reported · Out not reported')
     expect(el.textContent).toContain('This open chat · In 100 · Out 25')
   })
