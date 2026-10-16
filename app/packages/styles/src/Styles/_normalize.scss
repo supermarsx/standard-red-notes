@@ -10,7 +10,12 @@
 
 html {
   line-height: 1.15; /* 1 */
-  -webkit-text-size-adjust: 100%; /* 2 */
+  @supports (text-size-adjust: 100%) {
+    text-size-adjust: 100%; /* 2 */
+  }
+  @supports (-webkit-text-size-adjust: 100%) {
+    -webkit-text-size-adjust: 100%;
+  }
 }
 
 /* Sections
