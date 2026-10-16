@@ -1,5 +1,6 @@
 /** @jest-environment jsdom */
 import { WebApplication } from '@/Application/WebApplication'
+import * as chatHistory from './assistantChatHistory'
 import {
   AssistantSyncedChats,
   mergeSyncedChats,
@@ -190,6 +191,123 @@ function harness() {
     },
   }
 }
+it('reuses unchanged normalized records and merged chats without repeating transcript serialization or sanitization', async () => {
+  const h = harness()
+  const content = writer('a', [entry('one', null)])
+  h.values.set('item', { uuid: 'item', content })
+  const store = new AssistantSyncedChats(h.application, 'a')
+  const stringify = jest.spyOn(JSON, 'stringify')
+  const sanitize = jest.spyOn(chatHistory, 'sanitizeAssistantChatMessages')
+  try {
+    const first = await store.read()
+    const calls = stringify.mock.calls.length
+    const sanitized = sanitize.mock.calls.length
+    expect(await store.read()).toBe(first)
+    expect(stringify.mock.calls).toHaveLength(calls)
+    expect(sanitize.mock.calls).toHaveLength(sanitized)
+    expect(store['catalogSerializedLength']).toBe(
+      JSON.stringify([{ uuid: 'item', record: normalizeSyncedChatRecord(content, 'account') }]).length,
+    )
+    h.values.set('item', { uuid: 'item', content: writer('a', [entry('two', null)], { revision: 2 }) })
+    expect((await store.read())[0].messages).toEqual([message('two')])
+    h.values.set('deleted', { uuid: 'deleted', content: writer('b', [], { kind: 'deleted' }) })
+    expect(await store.read()).toEqual([])
+  } finally {
+    stringify.mockRestore()
+    sanitize.mockRestore()
+  }
+})
+
+it('rechecks authorization and sharing before cache access and evicts removed or inadmissible records', async () => {
+  const h = harness()
+  const content = writer('a', [entry('private', null)])
+  const item = { uuid: 'item', content }
+  h.values.set(item.uuid, item)
+  const authorized = jest.spyOn(h.raw, 'isAuthorizedToRenderItem').mockReturnValue(true)
+  const store = new AssistantSyncedChats(h.application, 'a')
+  expect((await store.read())[0].messages).toEqual([message('private')])
+  authorized.mockReturnValue(false)
+  expect(await store.read()).toEqual([])
+  expect(store['parsedRecords'].size).toBe(0)
+  authorized.mockReturnValue(true)
+  expect((await store.read())[0].messages).toEqual([message('private')])
+  h.values.set(item.uuid, { ...item, shared_vault_uuid: 'vault' } as typeof item)
+  expect(await store.read()).toEqual([])
+  h.values.set(item.uuid, { ...item, key_system_identifier: 'shared-key' } as typeof item)
+  expect(await store.read()).toEqual([])
+  h.values.set(item.uuid, item)
+  await store.read()
+  h.values.delete(item.uuid)
+  expect(await store.read()).toEqual([])
+  expect(store['parsedRecords'].size).toBe(0)
+  h.values.set(item.uuid, item)
+  await store.read()
+  h.setLocked(true)
+  await expect(store.read()).rejects.toThrow('unlocked')
+  expect(store['parsedRecords'].size).toBe(0)
+  h.setLocked(false)
+  await store.read()
+  h.setPrincipal('other')
+  await expect(store.read()).rejects.toThrow('unlocked')
+  expect(store['previousChats']).toEqual([])
+  h.setPrincipal('account')
+  await store.read()
+  store.dispose()
+  expect(store['parsedRecords'].size).toBe(0)
+  await expect(store.read()).rejects.toThrow('unlocked')
+})
+
+it('remerges only changed chat groups with the same ordering and tombstone results as a full catalog merge', async () => {
+  const h = harness()
+  h.values.set('a', { uuid: 'a', content: writer('a', [entry('old', null)], { chatId: 'first' }) })
+  h.values.set('b', { uuid: 'b', content: writer('b', [entry('unchanged', null)], { chatId: 'second' }) })
+  const store = new AssistantSyncedChats(h.application, 'a')
+  const initial = await store.read()
+  const unchanged = initial.find((chat) => chat.tab.id === 'second')
+  const sanitize = jest.spyOn(chatHistory, 'sanitizeAssistantChatMessages')
+  try {
+    h.values.set('a', {
+      uuid: 'a',
+      content: writer('a', [entry('new', null)], { chatId: 'first', revision: 2, updatedAt: 999 }),
+    })
+    const updated = await store.read()
+    expect(updated.find((chat) => chat.tab.id === 'second')).toBe(unchanged)
+    expect(
+      sanitize.mock.calls.flatMap(([messages]) => messages.map((message) => (message as { id: string }).id)),
+    ).not.toContain('unchanged')
+    expect(updated).toEqual(
+      mergeSyncedChats(
+        [...h.values.values()].map((item) => ({
+          uuid: item.uuid,
+          record: normalizeSyncedChatRecord(item.content, 'account')!,
+        })),
+      ),
+    )
+    h.values.set('tombstone', {
+      uuid: 'tombstone',
+      content: writer('c', [], { chatId: 'first', kind: 'deleted' }),
+    })
+    expect(await store.read()).toEqual([unchanged])
+  } finally {
+    sanitize.mockRestore()
+  }
+})
+
+it('preserves the exact catalog length budget for empty, multiple, escaped and unicode records', async () => {
+  const h = harness()
+  const store = new AssistantSyncedChats(h.application, 'a')
+  await store.read()
+  expect(store['catalogSerializedLength']).toBe(JSON.stringify([]).length)
+  for (const uuid of ['a', 'quote"', 'emoji-🙂']) {
+    h.values.set(uuid, { uuid, content: writer('a', [entry('one', null)], { title: 'Quotes " and 🙂' }) })
+  }
+  await store.read()
+  const expected = [...h.values.values()].map((item) => ({
+    uuid: item.uuid,
+    record: normalizeSyncedChatRecord(item.content, 'account'),
+  }))
+  expect(store['catalogSerializedLength']).toBe(JSON.stringify(expected).length)
+})
 it('syncs private checkpoints while preserving other device messages', async () => {
   const h = harness(),
     a = new AssistantSyncedChats(h.application, 'a'),

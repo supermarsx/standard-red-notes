@@ -312,6 +312,14 @@ export function getAssistantChatWriterId(accountScope: string): string {
 export class AssistantSyncedChats {
   private active = true
   private queue = Promise.resolve()
+  private readonly parsedRecords = new Map<
+    string,
+    { content: unknown; parsed: Parsed | undefined; serializedLength: number }
+  >()
+  private previousRecords: Parsed[] = []
+  private previousChats: SyncedChat[] = []
+  private mergedGroups = new Map<string, { records: Parsed[]; chat: SyncedChat | undefined }>()
+  private catalogSerializedLength = 2
   private readonly ownerUuid: string
   private _writerId: string
   private identityClaimed: boolean
@@ -332,7 +340,15 @@ export class AssistantSyncedChats {
   }
   dispose(): void {
     this.active = false
+    this.clearReadCache()
     this.releaseIdentity?.()
+  }
+  private clearReadCache(): void {
+    this.parsedRecords.clear()
+    this.previousRecords = []
+    this.previousChats = []
+    this.mergedGroups.clear()
+    this.catalogSerializedLength = 2
   }
   private async claimIdentity(): Promise<void> {
     if (this.identityClaimed) {
@@ -391,21 +407,80 @@ export class AssistantSyncedChats {
       (await this.application.protections.isLocked()) ||
       !this.current()
     ) {
+      this.clearReadCache()
       throw new Error('Synced chats are unavailable until this account is loaded and unlocked.')
     }
   }
   private records(): Parsed[] {
-    return this.application.items.getItems<DecryptedItemInterface>(ASSISTANT_CHAT_CONTENT_TYPE).flatMap((item) => {
-      if (item.shared_vault_uuid || item.key_system_identifier || !this.application.isAuthorizedToRenderItem(item)) {
-        return []
+    const seen = new Set<string>()
+    const records = this.application.items
+      .getItems<DecryptedItemInterface>(ASSISTANT_CHAT_CONTENT_TYPE)
+      .flatMap((item) => {
+        // Admission is deliberately rechecked even for an unchanged immutable payload.
+        if (item.shared_vault_uuid || item.key_system_identifier || !this.application.isAuthorizedToRenderItem(item)) {
+          return []
+        }
+        seen.add(item.uuid)
+        let cached = this.parsedRecords.get(item.uuid)
+        if (!cached || cached.content !== item.content) {
+          // DecryptedItemMutator copies content into a replacement payload. Content
+          // identity therefore invalidates this cache for both local and remote edits.
+          const record = normalizeSyncedChatRecord(item.content, this.ownerUuid)
+          const parsed = record ? { uuid: item.uuid, record } : undefined
+          cached = { content: item.content, parsed, serializedLength: parsed ? JSON.stringify(parsed).length : 0 }
+          this.parsedRecords.set(item.uuid, cached)
+        }
+        return cached.parsed ? [cached.parsed] : []
+      })
+    for (const uuid of this.parsedRecords.keys()) {
+      if (!seen.has(uuid)) {
+        this.parsedRecords.delete(uuid)
       }
-      const record = normalizeSyncedChatRecord(item.content, this.ownerUuid)
-      return record ? [{ uuid: item.uuid, record }] : []
-    })
+    }
+    // Exactly JSON.stringify(records).length: brackets, commas and each serialized
+    // {uuid,record}. Keep the existing UTF-16 length budget, not a different byte unit.
+    this.catalogSerializedLength =
+      2 +
+      Math.max(0, records.length - 1) +
+      records.reduce((sum, parsed) => sum + this.parsedRecords.get(parsed.uuid)!.serializedLength, 0)
+    return records
   }
   async read(): Promise<SyncedChat[]> {
     await this.assertAvailable()
-    return mergeSyncedChats(this.records())
+    const records = this.records()
+    if (
+      records.length !== this.previousRecords.length ||
+      records.some((record, index) => record !== this.previousRecords[index])
+    ) {
+      this.previousRecords = records
+      const groups = new Map<string, Parsed[]>()
+      for (const parsed of records) {
+        const group = groups.get(parsed.record.chatId) ?? []
+        group.push(parsed)
+        groups.set(parsed.record.chatId, group)
+      }
+      const mergedGroups = new Map<string, { records: Parsed[]; chat: SyncedChat | undefined }>()
+      const chats: SyncedChat[] = []
+      for (const [chatId, group] of groups) {
+        let cached = this.mergedGroups.get(chatId)
+        if (
+          !cached ||
+          cached.records.length !== group.length ||
+          group.some((record, index) => record !== cached!.records[index])
+        ) {
+          cached = { records: group, chat: mergeSyncedChats(group)[0] }
+        }
+        mergedGroups.set(chatId, cached)
+        if (cached.chat) {
+          chats.push(cached.chat)
+        }
+      }
+      this.mergedGroups = mergedGroups
+      this.previousChats = chats
+        .sort((a, b) => (b.tab.lastActiveAt ?? 0) - (a.tab.lastActiveAt ?? 0) || a.tab.id.localeCompare(b.tab.id))
+        .slice(0, MAX_SYNCED_CHATS)
+    }
+    return this.previousChats
   }
   subscribe(listener: () => void): () => void {
     return this.application.items.addObserver(ASSISTANT_CHAT_CONTENT_TYPE, () => {
@@ -447,7 +522,7 @@ export class AssistantSyncedChats {
       }
       if (
         (!own && records.filter(({ record }) => record.kind === 'writer').length >= MAX_SYNCED_CHAT_RECORDS) ||
-        JSON.stringify(records).length >= MAX_SYNCED_CHAT_BYTES
+        this.catalogSerializedLength >= MAX_SYNCED_CHAT_BYTES
       ) {
         throw new Error(
           'The encrypted chat storage budget is full, including retained deletion markers. Export or start with a different account before adding more history.',
