@@ -31,6 +31,8 @@ export interface NotificationsSettings {
     connectivity: boolean
     /** Sync problems / rate limiting. */
     sync: boolean
+    /** Signed collaborative comments whose author chose to notify note members. */
+    comments: boolean
   }
 }
 
@@ -49,6 +51,7 @@ export const DEFAULT_NOTIFICATIONS_SETTINGS: NotificationsSettings = {
     backup: true,
     connectivity: true,
     sync: true,
+    comments: true,
   },
 }
 
@@ -96,6 +99,7 @@ export function loadNotificationsSettings(): NotificationsSettings {
         backup: asBool(sources.backup, DEFAULT_NOTIFICATIONS_SETTINGS.sources.backup),
         connectivity: asBool(sources.connectivity, DEFAULT_NOTIFICATIONS_SETTINGS.sources.connectivity),
         sync: asBool(sources.sync, DEFAULT_NOTIFICATIONS_SETTINGS.sources.sync),
+        comments: asBool(sources.comments, DEFAULT_NOTIFICATIONS_SETTINGS.sources.comments),
       },
     }
   } catch {

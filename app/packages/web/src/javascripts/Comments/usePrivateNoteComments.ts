@@ -57,6 +57,17 @@ export function usePrivateNoteComments(note: SNNote): CommentsApi {
         await mutatePrivateNoteComments(application, note.uuid, (comments) => removeComment(comments, id))
       }
     },
+    purgeComments: async () => {
+      if (!user || !current()) {
+        throw new Error('The private comment session is no longer available.')
+      }
+      await mutatePrivateNoteComments(application, note.uuid, () => {
+        if (!current()) {
+          throw new Error('The private comment session is no longer available.')
+        }
+        return []
+      })
+    },
     setResolved: async (id, resolved) => {
       if (current()) {
         await mutatePrivateNoteComments(application, note.uuid, (comments) =>

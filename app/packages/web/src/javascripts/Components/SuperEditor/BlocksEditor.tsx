@@ -337,7 +337,7 @@ export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
       {noteUuid && <AssistantStructuralBridgePlugin noteUuid={noteUuid} />}
       {noteUuid && <AssistantChangeDecorationsPlugin noteUuid={noteUuid} />}
       {!isMobile && <ToolbarPlugin noteUuid={noteUuid} note={commentNote} flushChanges={flushWithBypass} />}
-      <CommentsPlugin />
+      <CommentsPlugin note={commentNote} />
       {/*
         Standard Red Notes: dock the on-screen navigation sidebar (Word-style
         outline of headings + bookmarks) to the LEFT of the editor content. The

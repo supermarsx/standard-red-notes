@@ -10,11 +10,22 @@ jest.mock('@/Components/ApplicationProvider', () => ({ useApplication: jest.fn()
 jest.mock('@/Comments/useNoteComments', () => ({ useNoteComments: jest.fn() }))
 jest.mock('@/Comments/usePrivateNoteComments', () => ({ usePrivateNoteComments: jest.fn() }))
 jest.mock('@/Comments/useMentionCandidates', () => ({ useMentionCandidates: jest.fn(() => []) }))
+jest.mock('@/Hooks/usePreference', () => ({ __esModule: true, default: () => true }))
 jest.mock('@/Components/Icon/Icon', () => ({ __esModule: true, default: () => null }))
 jest.mock('./CommentComposer', () => ({
   __esModule: true,
-  default: ({ onSubmit }: { onSubmit: (text: string) => void }) => (
-    <button onClick={() => onSubmit('Test comment')}>Submit test comment</button>
+  default: ({
+    onSubmit,
+    showNotifyOthers,
+    defaultNotifyOthers,
+  }: {
+    onSubmit: (text: string, notify: boolean) => void
+    showNotifyOthers?: boolean
+    defaultNotifyOthers?: boolean
+  }) => (
+    <button onClick={() => onSubmit('Test comment', Boolean(showNotifyOthers && defaultNotifyOthers))}>
+      Submit test comment
+    </button>
   ),
 }))
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -59,7 +70,36 @@ it('defaults to private without preparing shared room access, explicitly opts in
   await act(async () =>
     [...container.querySelectorAll('button')].find((button) => button.textContent === 'Submit test comment')!.click(),
   )
-  expect(shared.addComment).toHaveBeenCalled()
+  expect(shared.addComment).toHaveBeenCalledWith({
+    text: 'Test comment',
+    parentId: undefined,
+    anchor: undefined,
+    notifyOthers: true,
+  })
+  shared.comments = [
+    {
+      id: 'thread-a',
+      authorUuid: 'user-b',
+      verifiedAuthorUuid: 'user-b',
+      displayAuthorName: 'Peer',
+      authorshipStatus: 'verified',
+      text: 'A shared thread',
+      createdAt: new Date().toISOString(),
+    },
+  ] as never
+  await act(async () => root.render(<CommentsPanel note={note} />))
+  await act(async () =>
+    [...container.querySelectorAll('button')].find((button) => button.textContent === 'Reply')!.click(),
+  )
+  await act(async () =>
+    [...container.querySelectorAll('button')].find((button) => button.textContent === 'Submit test comment')!.click(),
+  )
+  expect(shared.addComment).toHaveBeenLastCalledWith({
+    text: 'Test comment',
+    parentId: 'thread-a',
+    anchor: undefined,
+    notifyOthers: true,
+  })
   jest.mocked(useNoteComments).mockClear()
   // A legacy task ID may equal the whole-note sentinel; its scope must still reset.
   const anchor = { kind: 'checklist' as const, todoId: 'note', snippet: 'Task' }

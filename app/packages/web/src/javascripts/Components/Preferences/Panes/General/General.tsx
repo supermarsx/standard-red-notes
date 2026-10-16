@@ -21,6 +21,7 @@ import SyncConnection from './SyncConnection'
 import TodoHeadings from './TodoHeadings'
 import ChecklistRecurrence from './ChecklistRecurrence'
 import MermaidSourceHighlighting from './MermaidSourceHighlighting'
+import CommentsPreferences from './CommentsPreferences'
 import { useApplication } from '@/Components/ApplicationProvider'
 import { useTabState } from '@/Components/Tabs/useTabState'
 
@@ -62,6 +63,7 @@ const General: FunctionComponent = () => {
           <TodoHeadings application={application} />
           <ChecklistRecurrence application={application} />
           <MermaidSourceHighlighting application={application} />
+          <CommentsPreferences />
           <Spellcheck application={application} />
           <SmartViews application={application} featuresController={application.featuresController} />
         </>

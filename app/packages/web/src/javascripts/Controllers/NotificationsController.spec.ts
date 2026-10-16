@@ -1,9 +1,12 @@
-import { ApplicationEvent } from '@standardnotes/snjs'
+import { ApplicationEvent, ContentType } from '@standardnotes/snjs'
+import { readDisplayNoteComments } from '@/Comments/CommentAuthorship'
+import { ALL_NOTE_MEMBERS_RECIPIENT } from '@/Comments/CommentPreferences'
 import { WebApplication } from '@/Application/WebApplication'
 import { NotificationsController } from './NotificationsController'
 import { AppPaneId } from '@/Components/Panes/AppPaneMetadata'
 import { ACHIEVEMENTS } from '@/Achievements/achievementDefinitions'
 import { listAchievementNotifications, recordAchievementNotification } from '@/Notifications/achievementNotifications'
+jest.mock('@/Comments/CommentAuthorship', () => ({ readDisplayNoteComments: jest.fn() }))
 
 jest.mock('@standardnotes/toast', () => ({
   ToastType: {
@@ -65,6 +68,68 @@ describe('NotificationsController', () => {
 
   afterEach(() => {
     controller?.deinit()
+  })
+
+  it('receives shared-comment notifications through note streams and clears them on removal or sign-out', () => {
+    const { application, observers } = createApplication({ signedOut: false })
+    let comments: unknown[] = []
+    const streams = new Map<string, () => void>()
+    let note = { uuid: 'note-a', shared_vault_uuid: 'vault-a', title: 'Planning' }
+    jest.mocked(readDisplayNoteComments).mockImplementation(() => ({ comments, quarantinedCount: 0 }) as never)
+    Object.assign(application, {
+      items: {
+        getItems: () => [note],
+        streamItems: (type: string, callback: () => void) => {
+          streams.set(type, callback)
+          return () => streams.delete(type)
+        },
+      },
+      isAuthorizedToRenderItem: () => true,
+    })
+    Object.assign(application.sessions, { getUser: () => ({ uuid: 'self' }) })
+    localStorage.setItem('standardnotes.notifications.read.v1', JSON.stringify(['comment:self:note-a:comment-a']))
+    controller = new NotificationsController(application)
+    expect(controller.notifications).toEqual([])
+    comments = [
+      {
+        id: 'comment-a',
+        verifiedAuthorUuid: 'other',
+        authorshipStatus: 'verified',
+        displayAuthorName: 'Peer',
+        mentions: [ALL_NOTE_MEMBERS_RECIPIENT],
+      },
+    ]
+    // A note stream carries a new immutable model after receiving its encrypted comment.
+    note = { ...note }
+    streams.get(ContentType.TYPES.Note)!()
+    expect(controller.notifications).toHaveLength(1)
+    expect(controller.unreadCount).toBe(0)
+    controller.updateSettings({ sources: { comments: false } })
+    expect(controller.notifications).toEqual([])
+    controller.updateSettings({ sources: { comments: true } })
+    expect(controller.notifications).toHaveLength(1)
+    expect(controller.unreadCount).toBe(0)
+    comments = []
+    note = { ...note }
+    streams.get(ContentType.TYPES.Note)!()
+    expect(controller.notifications).toEqual([])
+    comments = [
+      {
+        id: 'comment-b',
+        verifiedAuthorUuid: 'other',
+        authorshipStatus: 'verified',
+        displayAuthorName: 'Peer',
+        mentions: [ALL_NOTE_MEMBERS_RECIPIENT],
+      },
+    ]
+    streams.get(ContentType.TYPES.TrustedContact)!()
+    expect(controller.notifications).toHaveLength(1)
+    ;(application.sessions.isSignedOut as jest.Mock).mockReturnValue(true)
+    observers.forEach((observer) => void observer(ApplicationEvent.SignedOut))
+    expect(controller.notifications.some((entry) => entry.id.startsWith('comment:'))).toBe(false)
+    controller.deinit()
+    controller = undefined
+    expect(streams.size).toBe(0)
   })
 
   it('opens actual sync recovery and switches to reauthentication if the session changes before clicking', () => {

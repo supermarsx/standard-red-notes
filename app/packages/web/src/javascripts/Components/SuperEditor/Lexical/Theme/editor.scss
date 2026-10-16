@@ -1,5 +1,16 @@
 @import 'lists';
 
+// Comment markers live only in the DOM. An inset shadow avoids moving task
+// controls or text when a comment arrives or the user changes this preference.
+[data-comment-indicators='shown'] [data-note-comment-indicator='true'] {
+  box-shadow: inset -3px 0 var(--sn-stylekit-info-color);
+  background-color: color-mix(in srgb, var(--sn-stylekit-info-color) 7%, transparent);
+}
+[data-comment-indicators='hidden'] [data-comment-block='true'] {
+  border-left-color: transparent;
+  background-color: transparent;
+}
+
 /* Standard Red Notes: size of every Super-editor ribbon toolbar icon. Driven by
  * the `--super-toolbar-icon-size` custom property the ToolbarPlugin sets on the
  * toolbar root from the SuperToolbarIconSize pref, so all toolbar icons scale

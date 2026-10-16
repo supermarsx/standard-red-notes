@@ -11,6 +11,8 @@ import { MentionCandidate, segmentCommentText } from '@/Comments/mentions'
 import { collaboratorColor, collaboratorInitials } from '@/Components/SuperEditor/Collaboration/collaboratorColor'
 import CommentComposer from './CommentComposer'
 import type { DisplayNoteComment } from '@/Comments/CommentAuthorship'
+import usePreference from '@/Hooks/usePreference'
+import { COMMENT_NOTIFY_DEFAULT_PREF_KEY, notifyOthersByDefault } from '@/Comments/CommentPreferences'
 
 type Props = {
   note: SNNote
@@ -153,6 +155,7 @@ const CommentsPanelContent: FunctionComponent<ScopedProps & { api: CommentsApi; 
   onNavigate,
 }) => {
   const application = useApplication()
+  const defaultNotifyOthers = notifyOthersByDefault(usePreference(COMMENT_NOTIFY_DEFAULT_PREF_KEY))
   const { quarantinedCount, addComment, removeComment, setResolved, selfUuid } = api
   const draftKey = `${scope}:${note.uuid}:${commentContextKey(anchor)}`
   const comments = api.comments.filter((comment) => {
@@ -182,11 +185,11 @@ const CommentsPanelContent: FunctionComponent<ScopedProps & { api: CommentsApi; 
       setError(failure instanceof Error ? failure.message : 'The comment could not be saved. Try again.'),
     )
   }
-  const submit = async (text: string, parentId?: string) => {
+  const submit = async (text: string, parentId?: string, notifyOthers = false) => {
     if (!canWrite) {
       return
     }
-    const saved = await addComment({ text, parentId, anchor })
+    const saved = await addComment({ text, parentId, anchor, ...(scope === 'collaborative' ? { notifyOthers } : {}) })
     if (!saved) {
       throw new Error('The comment could not be saved. Check that the note is unlocked and you still have access.')
     }
@@ -283,8 +286,10 @@ const CommentsPanelContent: FunctionComponent<ScopedProps & { api: CommentsApi; 
                     autoFocus
                     submitLabel="Reply"
                     placeholder="Write a reply…"
-                    onSubmit={(text) => {
-                      perform(submit(text, comment.id))
+                    showNotifyOthers={scope === 'collaborative'}
+                    defaultNotifyOthers={defaultNotifyOthers}
+                    onSubmit={(text, notifyOthers) => {
+                      perform(submit(text, comment.id, notifyOthers))
                       setReplyingTo(null)
                     }}
                     onCancel={() => setReplyingTo(null)}
@@ -297,7 +302,13 @@ const CommentsPanelContent: FunctionComponent<ScopedProps & { api: CommentsApi; 
       </div>
 
       {canWrite ? (
-        <CommentComposer draftKey={draftKey} candidates={candidates} onSubmit={(text) => perform(submit(text))} />
+        <CommentComposer
+          draftKey={draftKey}
+          candidates={candidates}
+          showNotifyOthers={scope === 'collaborative'}
+          defaultNotifyOthers={defaultNotifyOthers}
+          onSubmit={(text, notifyOthers) => perform(submit(text, undefined, notifyOthers))}
+        />
       ) : (
         <p className="text-passive-1 text-xs">Comments are read-only for this account or note.</p>
       )}

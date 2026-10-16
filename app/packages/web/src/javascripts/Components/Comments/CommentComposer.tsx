@@ -8,7 +8,9 @@ type Props = {
   placeholder?: string
   autoFocus?: boolean
   submitLabel?: string
-  onSubmit: (text: string) => void
+  onSubmit: (text: string, notifyOthers: boolean) => void
+  showNotifyOthers?: boolean
+  defaultNotifyOthers?: boolean
   onCancel?: () => void
   draftKey?: string
 }
@@ -30,6 +32,8 @@ export const CommentComposer: FunctionComponent<Props> = ({
   onSubmit,
   onCancel,
   draftKey,
+  showNotifyOthers = false,
+  defaultNotifyOthers = false,
 }) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const controls = useEditorControlsState()
@@ -49,6 +53,8 @@ export const CommentComposer: FunctionComponent<Props> = ({
   )
   const [query, setQuery] = useState<{ query: string; replaceStart: number; replaceEnd: number } | null>(null)
   const [highlighted, setHighlighted] = useState(0)
+  const [notifyOverride, setNotifyOverride] = useState<boolean>()
+  const notifyOthers = notifyOverride ?? defaultNotifyOthers
 
   const filtered = useMemo(() => {
     if (!query) {
@@ -111,10 +117,10 @@ export const CommentComposer: FunctionComponent<Props> = ({
     if (!trimmed) {
       return
     }
-    onSubmit(trimmed)
+    onSubmit(trimmed, showNotifyOthers && notifyOthers)
     setValue('')
     setQuery(null)
-  }, [value, onSubmit, setValue])
+  }, [value, onSubmit, setValue, showNotifyOthers, notifyOthers])
 
   const handleKeyDown = useCallback(
     (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -193,6 +199,16 @@ export const CommentComposer: FunctionComponent<Props> = ({
         </ul>
       )}
       <div className="mt-1.5 flex items-center justify-end gap-2">
+        {showNotifyOthers && (
+          <label className="text-passive-1 mr-auto flex items-center gap-1.5 text-xs">
+            <input
+              type="checkbox"
+              checked={notifyOthers}
+              onChange={(event) => setNotifyOverride(event.target.checked)}
+            />
+            Notify other users
+          </label>
+        )}
         {onCancel && (
           <button
             type="button"

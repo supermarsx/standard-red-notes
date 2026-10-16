@@ -1,6 +1,12 @@
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
 import { $getSelection, $isRangeSelection, COMMAND_PRIORITY_EDITOR, createCommand } from 'lexical'
 import { useEffect } from 'react'
+import { ApplicationEvent, ContentType, SNNote } from '@standardnotes/snjs'
+import { useApplicationOrNull } from '@/Components/ApplicationProvider'
+import { readPrivateNoteComments } from '@/Comments/PrivateNoteComments'
+import { readDisplayNoteComments } from '@/Comments/CommentAuthorship'
+import { COMMENT_INDICATORS_PREF_KEY, showCommentIndicators } from '@/Comments/CommentPreferences'
+import { markCommentAnchors } from './CommentIndicators'
 import type { CommentAnchor, SuperCommentAnchor } from '@/Comments/comments'
 import { $isListItemNode } from '@lexical/list'
 import {
@@ -19,12 +25,8 @@ import {
  * can then attach that anchor to a new comment so it shows as an "inline" comment
  * with the quoted context.
  *
- * First-version scope: this captures + reports the anchor. The node key is stable
- * for the life of an editor session (it survives edits to other blocks) and the
- * snippet lets us re-find / display the anchored text. A richer follow-up would
- * also DECORATE the anchored block (a margin marker / highlight) and SCROLL to it
- * when a comment is clicked — both can be built on top of this same node key
- * without changing the stored data model.
+ * Anchored comments receive DOM-only markers. Stored anchors remain unchanged;
+ * after a reload a unique snippet can locate a block whose session key changed.
  */
 export const CAPTURE_COMMENT_ANCHOR_COMMAND = createCommand<(anchor: CommentAnchor | null) => void>(
   'CAPTURE_COMMENT_ANCHOR_COMMAND',
@@ -32,8 +34,74 @@ export const CAPTURE_COMMENT_ANCHOR_COMMAND = createCommand<(anchor: CommentAnch
 
 const SNIPPET_MAX = 80
 
-export function CommentsPlugin(): null {
+export function CommentsPlugin({ note }: { note?: SNNote }): null {
   const [editor] = useLexicalComposerContext()
+  const application = useApplicationOrNull()
+  const noteUuid = note?.uuid
+
+  useEffect(() => {
+    if (!application || !noteUuid) {
+      return
+    }
+    let clearMarkers = () => {}
+    let previousRoot: HTMLElement | null = null
+    let anchors: CommentAnchor[] = []
+    const refresh = () => {
+      clearMarkers()
+      const root = editor.getRootElement()
+      if (previousRoot !== root) {
+        previousRoot?.removeAttribute('data-comment-indicators')
+      }
+      previousRoot = root
+      if (!root) {
+        return
+      }
+      const visible = showCommentIndicators(application.getPreference(COMMENT_INDICATORS_PREF_KEY))
+      root.setAttribute('data-comment-indicators', visible ? 'shown' : 'hidden')
+      if (!visible) {
+        return
+      }
+      const current = application.items.findItem<SNNote>(noteUuid)
+      if (!current || !application.isAuthorizedToRenderItem(current)) {
+        return
+      }
+      clearMarkers = markCommentAnchors(editor, anchors)
+    }
+    const readComments = () => {
+      const current = application.items.findItem<SNNote>(noteUuid)
+      if (!current || !application.isAuthorizedToRenderItem(current)) {
+        anchors = []
+        refresh()
+        return
+      }
+      const comments = [
+        ...readPrivateNoteComments(application, noteUuid),
+        ...readDisplayNoteComments(application, current).comments.filter(
+          (comment) => comment.authorshipStatus === 'verified',
+        ),
+      ]
+      anchors = comments
+        .filter((comment) => !comment.resolved)
+        .flatMap((comment) => (comment.anchor ? [comment.anchor] : []))
+      refresh()
+    }
+    readComments()
+    const stopRoot = editor.registerRootListener(refresh)
+    const stopEditor = editor.registerUpdateListener(refresh)
+    const stopItems = application.items.streamItems(
+      [ContentType.TYPES.Note, ContentType.TYPES.UserPrefs, ContentType.TYPES.TrustedContact],
+      readComments,
+    )
+    const stopPrefs = application.addEventObserver(async () => readComments(), ApplicationEvent.PreferencesChanged)
+    return () => {
+      stopRoot()
+      stopEditor()
+      stopItems()
+      stopPrefs()
+      clearMarkers()
+      previousRoot?.removeAttribute('data-comment-indicators')
+    }
+  }, [application, editor, noteUuid])
 
   useEffect(() => {
     return editor.registerCommand(

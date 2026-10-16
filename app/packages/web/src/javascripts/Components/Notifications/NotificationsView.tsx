@@ -241,6 +241,15 @@ const NotificationsView: FunctionComponent<Props> = ({ application, className, i
                       onChange={(checked) => controller.updateSettings({ sources: { sync: checked } })}
                     />
                   </SettingRow>
+                  <SettingRow
+                    title="Collaborative comments"
+                    description="Comments and replies whose author selected Notify other users."
+                  >
+                    <Switch
+                      checked={settings.sources.comments}
+                      onChange={(checked) => controller.updateSettings({ sources: { comments: checked } })}
+                    />
+                  </SettingRow>
                 </div>
                 <div className="text-passive-1 mt-1 text-xs">The critical “Sign in needed” alert always shows.</div>
               </div>

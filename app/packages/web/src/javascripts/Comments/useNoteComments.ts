@@ -3,6 +3,7 @@ import { ContentType, SNNote } from '@standardnotes/snjs'
 import { useApplication } from '@/Components/ApplicationProvider'
 import { generateCommentId, NoteComment, normalizeComment } from './comments'
 import { extractMentionedUuids } from './mentions'
+import { ALL_NOTE_MEMBERS_RECIPIENT } from './CommentPreferences'
 import { useCollaborationRoomAccess } from '@/Components/SuperEditor/Collaboration/useCollaborationRoomAccess'
 import { CommentRelay, CommentRelayEvent } from './CommentRelay'
 import {
@@ -72,8 +73,10 @@ export type CommentsApi = {
     text: string
     parentId?: string
     anchor?: NoteComment['anchor']
+    notifyOthers?: boolean
   }) => Promise<NoteComment | undefined>
   removeComment: (id: string) => Promise<void>
+  purgeComments: (scope: 'mine' | 'all') => Promise<void>
   setResolved: (id: string, resolved: boolean) => Promise<void>
   /** The local account uuid, so the UI can distinguish "your" comments. */
   selfUuid?: string
@@ -241,7 +244,7 @@ export function useNoteComments(note: SNNote): CommentsApi {
   }, [application, application.items, commentIdentity, noteUuid])
 
   const addComment = useCallback<CommentsApi['addComment']>(
-    async ({ text, parentId, anchor }) => {
+    async ({ text, parentId, anchor, notifyOthers = false }) => {
       const trimmed = text.trim()
       if (!trimmed || !selfUuid) {
         return undefined
@@ -260,8 +263,8 @@ export function useNoteComments(note: SNNote): CommentsApi {
       if (parentId) {
         comment.parentId = parentId
       }
-      if (mentions.length > 0) {
-        comment.mentions = mentions
+      if (notifyOthers) {
+        comment.mentions = [ALL_NOTE_MEMBERS_RECIPIENT, ...mentions.slice(0, 63)]
       }
       const normalizedComment = normalizeComment(comment)
       if (!normalizedComment) {
@@ -294,6 +297,27 @@ export function useNoteComments(note: SNNote): CommentsApi {
     [application.notesController, commentIdentity, note],
   )
 
+  const purgeComments = useCallback(
+    async (scope: 'mine' | 'all') => {
+      if (!commentIdentity) {
+        throw new Error('Comments are unavailable for this session.')
+      }
+      const relay = relayRef.current
+      const events = await application.notesController.purgeNoteComments(note, scope, commentIdentity)
+      // The atomic encrypted write is already durable. Relay failure must not
+      // make a completed purge look failed; ordinary sync carries the removals.
+      if (relay && relayRef.current === relay) {
+        for (const event of events) {
+          if (relayRef.current !== relay) {
+            break
+          }
+          await relay.broadcastRemove(event.commentId, event.mutation).catch(() => undefined)
+        }
+      }
+    },
+    [application.notesController, commentIdentity, note],
+  )
+
   const setResolved = useCallback(
     async (id: string, resolved: boolean) => {
       const relay = relayRef.current
@@ -313,6 +337,7 @@ export function useNoteComments(note: SNNote): CommentsApi {
     quarantinedCount: visibleCommentState.quarantinedCount,
     addComment,
     removeComment,
+    purgeComments,
     setResolved,
     selfUuid,
   }

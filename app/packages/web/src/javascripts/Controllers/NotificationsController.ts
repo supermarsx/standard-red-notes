@@ -1,4 +1,4 @@
-import { ApplicationEvent } from '@standardnotes/snjs'
+import { ApplicationEvent, ContentType, SNNote } from '@standardnotes/snjs'
 import { addToast, dismissToast, ToastType } from '@standardnotes/toast'
 import { action, computed, makeObservable, observable, observableShallow, reaction, runInAction } from 'mobx'
 import type { ReactNode } from 'react'
@@ -17,6 +17,7 @@ import {
   saveNotificationsSettings,
 } from '@/Notifications/notificationsSettings'
 import { AbstractViewController } from './Abstract/AbstractViewController'
+import { CommentNotificationReader } from '@/Notifications/commentNotifications'
 
 export type NotificationLevel = 'info' | 'warning' | 'error'
 
@@ -92,6 +93,7 @@ export class NotificationsController extends AbstractViewController {
 
   private syncFailing = false
   private syncRateLimited = false
+  private commentReader = new CommentNotificationReader()
 
   private reminderTimer: ReturnType<typeof setInterval> | null = null
   private readTimer: ReturnType<typeof setTimeout> | null = null
@@ -136,8 +138,11 @@ export class NotificationsController extends AbstractViewController {
             break
           case ApplicationEvent.SignedIn:
           case ApplicationEvent.SignedOut:
+          case ApplicationEvent.KeyStatusChanged:
+          case ApplicationEvent.PreferencesChanged:
           case ApplicationEvent.Started:
           case ApplicationEvent.LocalDataLoaded:
+            this.commentReader.invalidate()
             this.recompute()
             break
           default:
@@ -145,6 +150,22 @@ export class NotificationsController extends AbstractViewController {
         }
       }),
     )
+
+    if (application.items?.streamItems) {
+      this.disposers.push(application.items.streamItems(ContentType.TYPES.Note, () => this.recompute()))
+      this.disposers.push(
+        application.items.streamItems(ContentType.TYPES.TrustedContact, () => {
+          this.commentReader.invalidate()
+          this.recompute()
+        }),
+      )
+      this.disposers.push(
+        application.items.streamItems(ContentType.TYPES.VaultListing, () => {
+          this.commentReader.invalidate()
+          this.recompute()
+        }),
+      )
+    }
 
     // React to the re-login-dismissed flag flipping (drives "Sign in needed").
     this.disposers.push(
@@ -223,6 +244,12 @@ export class NotificationsController extends AbstractViewController {
       }
       let readChanged = false
       for (const readId of Array.from(this.readIds)) {
+        // Comment ids identify immutable events, not transient conditions. Their
+        // encrypted notes may load after this controller or be locked temporarily;
+        // preserve read state so startup, unlock and source toggles do not re-alert.
+        if (readId.startsWith('comment:')) {
+          continue
+        }
         if (!candidateIds.has(readId)) {
           this.readIds.delete(readId)
           readChanged = true
@@ -325,6 +352,13 @@ export class NotificationsController extends AbstractViewController {
         action: { label: 'Resolve assignments', run: () => application.openPreferences('vaults') },
         dismissable: true,
       })
+    }
+
+    const selfUuid = !signedOut ? application.sessions.getUser?.()?.uuid : undefined
+    if (selfUuid && this.settings.sources.comments && application.items?.getItems) {
+      for (const note of application.items.getItems<SNNote>(ContentType.TYPES.Note)) {
+        notifications.push(...this.commentReader.read(application, note, selfUuid))
+      }
     }
 
     // Unlocked achievements (persisted event feed; newest first, after alerts).

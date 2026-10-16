@@ -1,4 +1,5 @@
 import ToolbarButton from './ToolbarButton'
+import { ReviewTools } from './ReviewTools'
 import Icon from '@/Components/Icon/Icon'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
 import useModal from '../../Lexical/Hooks/useModal'
@@ -145,7 +146,6 @@ import { NavigationLayoutSubsection, applyNavigationPatch } from './NavigationLa
 import { ChecklistSubsection } from './ChecklistSubsection'
 import { ChecklistPanel } from '../../Checklist/ChecklistPanel'
 import { useEditorControlsState } from '../../EditorControlsContext'
-import { CAPTURE_COMMENT_ANCHOR_COMMAND } from '../CommentsPlugin/CommentsPlugin'
 import { resolveChecklistBackfillSettings } from '../../Checklist/checklistBackfill'
 import {
   $generateMissedChecklistOccurrences,
@@ -4195,41 +4195,7 @@ const ToolbarPlugin = ({
                     className="super-toolbar flex flex-grow items-center gap-1.5 px-1 pt-1 pb-1"
                     store={toolbarStore}
                   >
-                    <div
-                      role="group"
-                      aria-label="Review tools"
-                      className="super-toolbar-group bg-contrast flex flex-shrink-0 flex-col rounded-lg px-1 py-0.5"
-                    >
-                      <div className="flex flex-col items-start justify-center gap-0.5 md:min-h-[6.25rem]">
-                        <ToolbarButton
-                          name="Show comments"
-                          iconName="comment"
-                          onSelect={() => controlsState.openComments()}
-                        >
-                          <Icon type="comment" size="small" />
-                          <span className="ml-1.5 text-xs">Show comments</span>
-                        </ToolbarButton>
-                        <ToolbarButton
-                          name="New comment on selection"
-                          aria-label="New comment on selection"
-                          iconName="pencil-filled"
-                          onSelect={() =>
-                            editor.dispatchCommand(CAPTURE_COMMENT_ANCHOR_COMMAND, (anchor) =>
-                              controlsState.openComments(anchor ?? undefined),
-                            )
-                          }
-                        >
-                          <Icon type="pencil-filled" size="small" />
-                          <span className="ml-1.5 text-xs">New comment</span>
-                        </ToolbarButton>
-                      </div>
-                      <span
-                        aria-hidden
-                        className="text-passive-1 mt-px hidden truncate text-center text-[10px] leading-none font-medium tracking-wide uppercase select-none md:block"
-                      >
-                        Comments
-                      </span>
-                    </div>
+                    <ReviewTools note={note} />
                   </Toolbar>
                 )}
               </>

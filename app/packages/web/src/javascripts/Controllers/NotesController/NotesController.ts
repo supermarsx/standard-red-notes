@@ -104,6 +104,7 @@ import {
   verifyCommentMutationAuthorship,
 } from '../../Comments/CommentAuthorship'
 import { NoteIsTemplateKey, noteIsTemplate } from '../../Templates/templates'
+import { canPurgeAllNoteComments, noteCommentOwner } from '../../Comments/CommentPermissions'
 import { WebApplication } from '../../Application/WebApplication'
 import { downloadOrShareBlobBasedOnPlatform } from '../../Utils/DownloadOrShareBasedOnPlatform'
 import {
@@ -1055,6 +1056,7 @@ export class NotesController
           comments: NoteComment[]
           mutations: AuthenticatedNoteCommentMutationRecord[]
           clocks: NoteCommentActorClock[]
+          explicitlyRemovedIds?: string[]
           result: Result
         }
       | undefined,
@@ -1096,7 +1098,10 @@ export class NotesController
           const next = update(authoritative, currentComments, mutationState.mutations, mutationState.clocks)
           const mutableIds = new Set(next?.comments.map((comment) => comment.id) ?? [])
           const quarantinedComments = boundedComments.filter(
-            (comment) => !currentComments.some((current) => current.id === comment.id) && !mutableIds.has(comment.id),
+            (comment) =>
+              !currentComments.some((current) => current.id === comment.id) &&
+              !mutableIds.has(comment.id) &&
+              !next?.explicitlyRemovedIds?.includes(comment.id),
           )
           const nextComments = next ? [...quarantinedComments, ...next.comments] : undefined
           const compacted = next
@@ -1269,7 +1274,15 @@ export class NotesController
       return undefined
     }
     const actorClock = clocks.find((clock) => clock.actorUuid === actorUuid)
-    const counter = (actorClock?.highWater.stamp.counter ?? 0) + 1
+    // Stamps are compared across authors on each affected target. Advance past
+    // observed target events, but keep unrelated remote clocks isolated: one
+    // trusted peer exhausting its counter must not block every local comment.
+    const observedTargets = current.filter((mutation) =>
+      mutation.affectedCommentIds.some((id) => affectedCommentIds.includes(id)),
+    )
+    const counter =
+      Math.max(actorClock?.highWater.stamp.counter ?? 0, ...observedTargets.map((mutation) => mutation.stamp.counter)) +
+      1
     if (!Number.isSafeInteger(counter)) {
       return undefined
     }
@@ -1454,6 +1467,76 @@ export class NotesController
     })
   }
 
+  /** Purge in one local checkpoint. Other authors' replies survive a personal purge. */
+  async purgeNoteComments(
+    note: SNNote,
+    scope: 'mine' | 'all',
+    expectedIdentity = resolveNoteEncryptionIdentity(this.application, note),
+  ) {
+    if (!expectedIdentity || (scope !== 'mine' && scope !== 'all')) {
+      throw new Error('Comments are unavailable for this session.')
+    }
+    const signingKey = captureCommentSigningPublicKey(this.application, expectedIdentity)
+    if (!signingKey) {
+      throw new Error('Comment signing is unavailable.')
+    }
+    const result = await this.enqueueCommentMutation(note.uuid, expectedIdentity, async () => {
+      const liveNote = this.application.items.findItem<SNNote>(note.uuid)
+      if (!liveNote || !this.isNoteCommentAccessAuthorized(liveNote, expectedIdentity)) {
+        return undefined
+      }
+      return this.writeNoteComments(liveNote, expectedIdentity, (authoritative, comments, mutations, clocks) => {
+        if (scope === 'all' && !canPurgeAllNoteComments(this.application, authoritative)) {
+          return undefined
+        }
+        const targets =
+          scope === 'all'
+            ? getBoundedNoteComments(authoritative)
+            : comments.filter(
+                (comment) =>
+                  comment.authorUuid === expectedIdentity.userUuid &&
+                  verifyCommentAuthorship(this.application, note.uuid, comment).status === 'verified',
+              )
+        if (!targets) {
+          return undefined
+        }
+        let nextMutations = mutations
+        let nextClocks = clocks
+        const events: { commentId: string; mutation: NoteCommentMutationRecord }[] = []
+        for (const target of targets) {
+          const created = this.createCommentMutation(
+            authoritative,
+            expectedIdentity,
+            signingKey,
+            nextMutations,
+            nextClocks,
+            target.id,
+            'remove',
+            [target.id],
+          )
+          if (!created?.event) {
+            return undefined
+          }
+          nextMutations = created.durable
+          nextClocks = created.clocks
+          events.push({ commentId: target.id, mutation: created.event })
+        }
+        const removedIds = targets.map((comment) => comment.id)
+        return {
+          comments: comments.filter((comment) => !removedIds.includes(comment.id)),
+          explicitlyRemovedIds: scope === 'all' ? removedIds : [],
+          mutations: nextMutations,
+          clocks: nextClocks,
+          result: events,
+        }
+      })
+    })
+    if (!result) {
+      throw new Error('The comment purge could not be saved. Check note access and try again.')
+    }
+    return result
+  }
+
   /** Set/clear the resolved flag on a comment by id. */
   async setNoteCommentResolved(
     note: SNNote,
@@ -1561,7 +1644,7 @@ export class NotesController
       const wrote = await this.writeNoteComments(
         note,
         expectedIdentity,
-        (_authoritative, currentComments, currentMutations, clocks) => {
+        (authoritative, currentComments, currentMutations, clocks) => {
           if (
             normalizedComment &&
             verifyCommentAuthorship(this.application, noteUuid, normalizedComment).status !== 'verified'
@@ -1572,16 +1655,21 @@ export class NotesController
             return undefined
           }
           if (event.operation === 'remove') {
-            const target = currentComments.find((comment) => comment.id === event.commentId)
+            const ownerRemoval = noteCommentOwner(this.application, authoritative) === mutation.stamp.actorUuid
+            const candidates = ownerRemoval ? (getBoundedNoteComments(authoritative) ?? []) : currentComments
+            const target = candidates.find((comment) => comment.id === event.commentId)
             const targetVerification = target ? verifyCommentAuthorship(this.application, noteUuid, target) : undefined
-            const expectedAffectedIds = currentComments
+            const expectedAffectedIds = candidates
               .filter((comment) => comment.id === event.commentId || comment.parentId === event.commentId)
               .map((comment) => comment.id)
             if (
-              targetVerification?.status !== 'verified' ||
-              targetVerification.comment.authorUuid !== mutation.stamp.actorUuid ||
-              expectedAffectedIds.length !== mutation.affectedCommentIds.length ||
-              expectedAffectedIds.some((commentId) => !mutation.affectedCommentIds.includes(commentId))
+              !target ||
+              (!ownerRemoval &&
+                (targetVerification?.status !== 'verified' ||
+                  targetVerification.comment.authorUuid !== mutation.stamp.actorUuid)) ||
+              (!(mutation.affectedCommentIds.length === 1 && mutation.affectedCommentIds[0] === target.id) &&
+                (expectedAffectedIds.length !== mutation.affectedCommentIds.length ||
+                  expectedAffectedIds.some((commentId) => !mutation.affectedCommentIds.includes(commentId))))
             ) {
               return undefined
             }
@@ -1632,6 +1720,7 @@ export class NotesController
           })
           return {
             comments: nextComments,
+            explicitlyRemovedIds: event.operation === 'remove' ? mutation.affectedCommentIds : [],
             mutations: [...currentMutations, mutation],
             clocks: nextClocks,
             result: true,

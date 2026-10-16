@@ -283,11 +283,14 @@ If collaborators see stale content:
 ## Comments and mentions
 
 The Super editor's **Review** ribbon tab contains **Show comments** and
-**New comment on selection**. Comments open in a separate sidebar to the right
+**New comment on selection**, **Comment indicators**, and comment purge controls.
+Comments open in a separate sidebar to the right
 of the document. Drag its left edge to resize it (or focus the divider and use
 the arrow keys), collapse it to a narrow rail, expand it, or close it. Switching
 ribbon tabs does not close the sidebar. On small screens it opens over the right
-side of the document. Comments load only when opened; a comments rendering error
+side of the document. Existing private or shared comments automatically reveal
+the sidebar once when opening a note; manually closing it keeps it closed for
+that editing session. The panel loads when opened; a comments rendering error
 is contained in the sidebar rather than replacing the editor.
 Choose the whole note or a task with **Comments for**, or click a task's
 **Comments** action in the **Checklist** tab to open the sidebar for that task.
@@ -303,6 +306,27 @@ the note belongs to a shared vault. Choose **Collaborative** explicitly to use
 the note's signed, encrypted comment stream. Changing the note or comment target
 returns the selector to Private. Collaborative comments follow the note's access
 permissions; a private comment does not give another person access.
+
+**Comment indicators** toggles the visual markers on referenced blocks and tasks
+without hiding the comments sidebar or changing note content. The same setting
+is available in **Preferences → General → Notes & editor → Comments**.
+
+New collaborative comments and replies offer **Notify other users**. When
+checked, a signed recipient marker travels inside the encrypted note; other
+authorized vault members receive an in-app notification after the comment arrives
+and its authorship is verified. This does not send email. The checkbox starts
+unchecked; **Notify other users by default** in the Comments preferences changes
+that default. Private comments never notify other users. Incoming comment alerts
+can also be switched off in Notifications preferences.
+
+**Purge my comments** removes your private comments and your authored shared
+comments from this note, preserving shared replies written by other people.
+The note or shared-vault owner additionally has **Purge all comments**, which
+removes all shared comments on the note and that owner's private comments.
+Neither operation reads or removes another account's private comments. Both
+require confirmation. Shared purges use signed removals and an atomic encrypted
+local checkpoint before ordinary sync distributes them; ownership is checked
+again when the mutation executes.
 
 Switching notes does not wait for a remote collaboration saver. When the outgoing
 document still has changes awaiting acknowledgment, its exact editor stays mounted

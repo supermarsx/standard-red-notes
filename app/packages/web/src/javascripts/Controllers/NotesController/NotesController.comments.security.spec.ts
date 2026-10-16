@@ -163,7 +163,7 @@ function createHarness() {
   const vault = {
     uuid: 'vault-1',
     systemIdentifier: 'key-system-1',
-    sharing: { sharedVaultUuid: 'shared-vault-1' },
+    sharing: { sharedVaultUuid: 'shared-vault-1', ownerUserUuid: 'owner-1' },
     isSharedVaultListing: () => true,
   }
   const setAppDataItem = jest.fn((key: unknown, value: unknown) => {
@@ -237,6 +237,9 @@ function createHarness() {
     emitPayload,
     getFullContentPayload,
     note,
+    setVaultOwner: (uuid: string) => {
+      vault.sharing.ownerUserUuid = uuid
+    },
     seedAppData: (key: unknown, value: unknown) => {
       appData.set(key, value)
     },
@@ -300,6 +303,105 @@ function createHarness() {
 }
 
 describe('NotesController comment mutation serialization and authorization', () => {
+  it('makes owner purge newer than another author high-counter event so peers accept it', async () => {
+    const sender = createHarness()
+    const receiver = createHarness()
+    const pair = WebCrypto.sodiumCryptoSignSeedKeypair('66'.repeat(32))
+    const target = signedComment({ ...comment('peer'), id: 'peer:comment', authorUuid: 'peer' }, pair)
+    const previous = signedMutation(100, 'upsert', target.id, [target.id], { actorUuid: 'peer', pair })
+    for (const harness of [sender, receiver]) {
+      harness.setVaultOwner('user-1')
+      harness.trustContact('peer', 'Peer', pair)
+      expect(
+        await harness.controller.applyRemoteCommentMutation('note-1', {
+          operation: 'upsert',
+          comment: target,
+          mutation: previous,
+        }),
+      ).toBe(true)
+    }
+    const [removed] = await sender.controller.purgeNoteComments(sender.note as never, 'all')
+    expect(removed.mutation.stamp.counter).toBe(101)
+    expect(
+      await receiver.controller.applyRemoteCommentMutation('note-1', {
+        operation: 'remove',
+        ...removed,
+      }),
+    ).toBe(true)
+    expect(getNoteComments(receiver.note as never)).toEqual([])
+  })
+
+  it('purges only verified authored comments and preserves another author reply in one checkpoint', async () => {
+    const harness = createHarness()
+    const otherPair = WebCrypto.sodiumCryptoSignSeedKeypair('55'.repeat(32))
+    harness.trustContact('other-user', 'Other', otherPair)
+    const own = signedComment(comment('own'))
+    const reply = signedComment(
+      { ...comment('reply'), id: 'other-user:reply', authorUuid: 'other-user', parentId: own.id },
+      otherPair,
+    )
+    harness.seedAppData(NoteCommentsKey, [own, reply])
+    const events = await harness.controller.purgeNoteComments(harness.note as never, 'mine')
+    expect(events.map((event) => event.commentId)).toEqual([own.id])
+    expect(getNoteComments(harness.note as never)).toEqual([reply])
+    expect(harness.changeItem).toHaveBeenCalledTimes(1)
+    expect(harness.getFullContentPayload).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects a non-owner all-comments purge without changing storage', async () => {
+    const harness = createHarness()
+    const own = signedComment(comment('own'))
+    harness.seedAppData(NoteCommentsKey, [own])
+    await expect(harness.controller.purgeNoteComments(harness.note as never, 'all')).rejects.toThrow(
+      'could not be saved',
+    )
+    expect(getNoteComments(harness.note as never)).toEqual([own])
+    expect(harness.emitPayload).not.toHaveBeenCalled()
+  })
+
+  it('allows the owner to explicitly purge quarantined comments without trusting their authors', async () => {
+    const harness = createHarness()
+    harness.setVaultOwner('user-1')
+    const forged = { ...signedComment(comment('forged')), text: 'tampered' }
+    harness.seedAppData(NoteCommentsKey, [forged, signedComment(comment('own'))])
+    const events = await harness.controller.purgeNoteComments(harness.note as never, 'all')
+    expect(events).toHaveLength(2)
+    expect(getNoteComments(harness.note as never)).toEqual([])
+    expect(harness.getFullContentPayload).toHaveBeenCalledTimes(1)
+  })
+
+  it('rechecks ownership inside the serialized mutation before purging', async () => {
+    const harness = createHarness()
+    harness.setVaultOwner('user-1')
+    harness.seedAppData(NoteCommentsKey, [signedComment(comment('own'))])
+    const release = harness.deferNextChange()
+    const purge = harness.controller.purgeNoteComments(harness.note as never, 'all')
+    await Promise.resolve()
+    harness.setVaultOwner('other-user')
+    release()
+    await expect(purge).rejects.toThrow('could not be saved')
+    expect(getNoteComments(harness.note as never)).toHaveLength(1)
+    expect(harness.emitPayload).not.toHaveBeenCalled()
+  })
+
+  it('accepts signed owner removals of another author and rejects the same proof from a non-owner', async () => {
+    const harness = createHarness()
+    const otherPair = WebCrypto.sodiumCryptoSignSeedKeypair('55'.repeat(32))
+    const target = { ...signedComment(comment('forged')), text: 'quarantined' }
+    harness.trustContact('other-user', 'Other', otherPair)
+    harness.seedAppData(NoteCommentsKey, [target])
+    const event = {
+      operation: 'remove' as const,
+      commentId: target.id,
+      mutation: signedMutation(1, 'remove', target.id, [target.id], { actorUuid: 'other-user', pair: otherPair }),
+    }
+    expect(await harness.controller.applyRemoteCommentMutation('note-1', event)).toBe(false)
+    harness.setVaultOwner('other-user')
+    expect(await harness.controller.applyRemoteCommentMutation('note-1', event)).toBe(true)
+    expect(getNoteComments(harness.note as never)).toEqual([])
+    expect(await harness.controller.applyRemoteCommentMutation('note-1', event)).toBe(false)
+  })
+
   it('serializes concurrent local writes so counters advance and neither comment is lost', async () => {
     const harness = createHarness()
 
