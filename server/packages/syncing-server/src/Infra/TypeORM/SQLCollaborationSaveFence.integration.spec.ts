@@ -62,6 +62,23 @@ describe('SQL collaboration save fence commit boundary', () => {
   const write = async (value: string) =>
     context.manager!.query('UPDATE test_notes SET content=? WHERE uuid=?', [value, ROOM])
 
+  it('reports the committed note revision with its claim and observes fenced saves before a replacement claim', async () => {
+    await source.query(
+      "INSERT INTO items (uuid,user_uuid,content_type,content,deleted,created_at,updated_at,created_at_timestamp,updated_at_timestamp) VALUES (?,?, 'Note','ciphertext',0,datetime('now'),datetime('now'),1,123)",
+      [ROOM, ALICE],
+    )
+    const first = await fence.request(identity(ALICE))
+    expect(first.serverUpdatedAtTimestamp).toBe(123)
+    await fence.run(ALICE, [ROOM], proof(first.token!, ALICE), async () => {
+      await context.manager!.query('UPDATE items SET updated_at_timestamp=456 WHERE uuid=?', [ROOM])
+    })
+    await fence.request({ ...identity(ALICE), action: 'release', token: first.token })
+    const replacement = await fence.request(identity(BOB))
+    expect(replacement.serverUpdatedAtTimestamp).toBe(456)
+    await source.query('UPDATE items SET deleted=1 WHERE uuid=?', [ROOM])
+    expect((await fence.request(identity(BOB))).serverUpdatedAtTimestamp).toBeUndefined()
+  })
+
   it('rejects foreign or stale release bindings and cannot release a successor fence', async () => {
     const lease = await fence.request(identity(ALICE))
     for (const patch of [
@@ -225,6 +242,9 @@ describe('SQL collaboration save fence commit boundary', () => {
     try {
       await syncSource.initialize()
       await new CollaborationSaveFences1791936000001().up(syncSource.createQueryRunner())
+      await syncSource.query(
+        'CREATE TABLE items (uuid text, content_type text, deleted integer, updated_at_timestamp bigint)',
+      )
       await syncSource.query('CREATE TABLE auth_shared_vault_replica_lock (value integer)')
       await syncSource.query('INSERT INTO auth_shared_vault_replica_lock VALUES (0)')
       await authSource.initialize()

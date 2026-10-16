@@ -83,7 +83,9 @@ export class SQLCollaborationSaveFence {
       !bounded(deviceId) ||
       !Array.isArray(proofs) ||
       proofs.length > 32 ||
-      proofs.some((proof) => !proof || typeof proof !== 'object' || !validRoom(proof.room) || !validToken(proof.token)) ||
+      proofs.some(
+        (proof) => !proof || typeof proof !== 'object' || !validRoom(proof.room) || !validToken(proof.token),
+      ) ||
       new Set(proofs.map((proof) => proof.room)).size !== proofs.length
     ) {
       throw lost()
@@ -97,7 +99,9 @@ export class SQLCollaborationSaveFence {
     return { deviceId, proofs }
   }
 
-  async request(request: CollaborationSaveFenceRequest): Promise<{ room: string; token?: string; expiresAt: number }> {
+  async request(
+    request: CollaborationSaveFenceRequest,
+  ): Promise<{ room: string; token?: string; expiresAt: number; serverUpdatedAtTimestamp?: number }> {
     return inSyncingTransaction(this.dataSource, async (manager) => {
       const row = await this.lock(manager, request.room)
       const now = Date.now()
@@ -121,7 +125,20 @@ export class SQLCollaborationSaveFence {
           'UPDATE collaboration_save_fences SET owner_uuid=?,owner_device_id=?,lease_id=?,room_epoch=?,token=?,expires_at=? WHERE room_uuid=?',
           [request.userUuid, request.deviceId, request.leaseId, request.roomEpoch, token, expiresAt, request.room],
         )
-        return { room: request.room, token, expiresAt }
+        // Read under the same lock that serializes fenced writes. The client
+        // can avoid an account-wide catchup only when its clean note matches
+        // this exact committed revision; the grant is not a freshness guess.
+        const [note] = await manager.query(
+          "SELECT updated_at_timestamp FROM items WHERE uuid=? AND content_type='Note' AND deleted=0",
+          [request.room],
+        )
+        const revision = Number(note?.updated_at_timestamp)
+        return {
+          room: request.room,
+          token,
+          expiresAt,
+          ...(Number.isSafeInteger(revision) && revision > 0 ? { serverUpdatedAtTimestamp: revision } : {}),
+        }
       }
       if (!sameOwner || row.token !== request.token || !active) {
         throw lost()
