@@ -10,9 +10,9 @@
 
   --background-primary: var(--c-true-black);
   --background-secondary: var(--c-off-black);
-  --border-subtle: var(--c-dark-gray);
+  --border-subtle: var(--c-mid-gray);
   --text-primary: var(--c-white);
-  --text-secondary: var(--c-mid-gray);
+  --text-secondary: #A3A3A3;
 
   --sn-stylekit-neutral-color: var(--text-secondary);
   --sn-stylekit-neutral-contrast-color: var(--c-true-black);
@@ -64,7 +64,7 @@
 
   --sn-stylekit-passive-color-0: var(--text-secondary);
   --sn-stylekit-passive-color-1: var(--text-secondary);
-  --sn-stylekit-passive-color-2: var(--background-secondary);
+  --sn-stylekit-passive-color-2: var(--c-light-gray);
   --sn-stylekit-passive-color-3: var(--border-subtle);
   --sn-stylekit-passive-color-4: var(--background-secondary);
   --sn-stylekit-passive-color-4-opacity-variant: var(--border-subtle);
@@ -80,4 +80,14 @@
   --sn-stylekit-accessory-tint-color-6: var(--c-mid-gray);
 
   --navigation-item-selected-background-color: var(--sn-stylekit-background-color);
+}
+
+/* Keep unavailable actions legible instead of dimming already muted colors.
+   This also covers focusable buttons that expose their disabled reason. */
+button:disabled,
+button[aria-disabled='true'] {
+  color: var(--text-secondary);
+  background-color: var(--background-secondary);
+  border-color: var(--border-subtle);
+  opacity: 1;
 }
