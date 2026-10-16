@@ -444,7 +444,9 @@ Super is the most capable editor. Content is organized into blocks — paragraph
 
 #### Table of contents
 
-In the Super editor, open Insert → Table of contents. Insert adds a live index to the note; Navigate headings opens a temporary outline without adding a block. Both follow heading changes automatically.
+In the Super editor, open Review → Table of contents. Insert adds a live index to the note; Navigate headings opens a temporary outline without adding a block. Both follow heading changes automatically. The Insert ribbon’s Lists group shows compact names beside its list icons.
+
+Home keeps its compact actions in this order: Undo, Redo, Print, Cut, Copy, Paste, then Smart checklist. Clipboard and history menus remain attached to their icons. The AI changes control sits at the right end of the ribbon bar.
 
 Use Format to choose the inserted index's heading depth (levels 1–6), number its entries, or hide its title. When the note has several indexes, choose which one to format in the dropdown. These settings are saved with each index and shared with the note. Existing indexes retain their original appearance until you change them.
 
@@ -989,6 +991,8 @@ Related: [collaboration/vaults](#collaboration-vaults), [collaboration/realtime]
 Co-edit notes live, with changes relayed end-to-end encrypted.
 
 Realtime collaboration lets shared-vault members with current write or admin permission—including the note creator—edit the same note together, with presence, encrypted comments, and live updates. Changes are encrypted on each client and relayed through the self-hosted gateway, which forwards ciphertext without being able to read it.
+
+When an active collaborator is above or below the visible editor, a small 22-pixel colored arrow appears at that edge. Hover to see their name, or click to jump to their position without moving your own caret. The editor never follows them automatically.
 
 > **Info.** Read-only vault members and read-only account or MCP sessions cannot join the live relay. They keep ordinary encrypted sync and can still view content their vault permission allows. If the relay is unavailable, editors fall back to ordinary encrypted note persistence and sync.
 

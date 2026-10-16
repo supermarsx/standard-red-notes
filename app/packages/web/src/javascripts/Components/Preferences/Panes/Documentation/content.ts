@@ -578,7 +578,11 @@ export const DOC_CATEGORIES: DocCategory[] = [
           },
           {
             type: 'paragraph',
-            text: 'In the Super editor, open Insert → Table of contents. Insert adds a live index to the note; Navigate headings opens a temporary outline without adding a block. Both follow heading changes automatically.',
+            text: 'In the Super editor, open Review → Table of contents. Insert adds a live index to the note; Navigate headings opens a temporary outline without adding a block. Both follow heading changes automatically. The Insert ribbon’s Lists group shows compact names beside its list icons.',
+          },
+          {
+            type: 'paragraph',
+            text: 'Home keeps its compact actions in this order: Undo, Redo, Print, Cut, Copy, Paste, then Smart checklist. Clipboard and history menus remain attached to their icons. The AI changes control sits at the right end of the ribbon bar.',
           },
           {
             type: 'paragraph',
@@ -1400,6 +1404,10 @@ export const DOC_CATEGORIES: DocCategory[] = [
           {
             type: 'paragraph',
             text: 'Realtime collaboration lets shared-vault members with current write or admin permission—including the note creator—edit the same note together, with presence, encrypted comments, and live updates. Changes are encrypted on each client and relayed through the self-hosted gateway, which forwards ciphertext without being able to read it.',
+          },
+          {
+            type: 'paragraph',
+            text: 'When an active collaborator is above or below the visible editor, a small 22-pixel colored arrow appears at that edge. Hover to see their name, or click to jump to their position without moving your own caret. The editor never follows them automatically.',
           },
           {
             type: 'callout',
