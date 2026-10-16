@@ -941,10 +941,12 @@ Agent, Research and Deep Research can search the internet and read pages through
 The assistant’s data-exposure reminder can be dismissed from its small close control. Choose once, 15 days, or never. Remembered choices apply to this account’s assistant workspace in this browser; hiding the reminder does not change approval requirements or where messages, note excerpts, and web queries are sent.
 
 - Steer: while the assistant is working, type a message and press Steer (or Enter) to inject guidance mid-task. It adjusts on its next step without restarting, and your steered message appears with a “↳ Steer” marker.
-- Interrupt: the Stop button aborts the current run and clears any pending steers and queued messages.
+- Interrupt: use Stop beside Current request at the top of the conversation, or in the message controls. It stops generation and clears pending steers and queued messages. Stopping… remains visible while an already-started save settles; completed note edits remain available in AI changes for review or Undo.
 - Queue: messages you enter while a run is active are lined up and run automatically, in order, when the current run finishes. Queued items are listed and can be removed.
 - Delegate: for a large task the assistant can hand a focused subtask to a sub-agent that has the same tools, then continue using the sub-agent’s summary. Sub-agents cannot delegate further.
 - Plan / todos: for multi-step tasks the assistant writes a short todo list, shown as a live “Plan” checklist (○ pending, ◐ in-progress, ✓ done), and updates it as it works.
+
+New, unsent chats remain drafts in the current Assistant view. Their selected mode and title are saved with the first message instead of creating empty synced history entries. A storage error while saving a real conversation remains visible so you can retry when storage is available.
 
 > **Tip.** You do not have to wait for the assistant to finish. Steer it to correct course right away, or queue your next request so it runs automatically.
 
