@@ -166,6 +166,9 @@ function isAllowedRpcRequest(
   return (
     (pathname === '/v1/assistant/stream' && operations.includes('STREAM_ASSISTANT')) ||
     /^\/v1\/assistant\/chats\/run-lease\/(acquire|renew|release)$/.test(pathname) ||
+    /^\/v1\/assistant\/subscription\/(start|complete|unpair|unpair-all)$/.test(pathname) ||
+    pathname === '/v1/web/search' ||
+    pathname === '/v1/web/fetch' ||
     pathname === '/v1/sessions/activity' ||
     pathname === '/v1/collaboration/authorize'
   )

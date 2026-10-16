@@ -43,6 +43,36 @@ describe('WebApplication control-plane websocket RPC lane', () => {
     globalThis.fetch = originalFetch
   })
 
+  it.each([
+    '/v1/web/search',
+    '/v1/web/fetch',
+    '/v1/assistant/subscription/start',
+    '/v1/assistant/subscription/complete',
+    '/v1/assistant/subscription/unpair',
+    '/v1/assistant/subscription/unpair-all',
+    '/v1/web/search?api=20240226',
+  ])('gives each reviewed Assistant command its own socket request identity: %s', async (path) => {
+    const transport: TransportMock = {
+      openAuthenticatedRpcStream: jest.fn().mockResolvedValue({ status: 200, headers: {}, body: { ok: true } }),
+    }
+    globalThis.fetch = jest.fn()
+    const application = applicationWith(transport)
+    await post(application, path, {})
+    await post(application, path, {})
+    const keys = transport.openAuthenticatedRpcStream.mock.calls.map(([request]) => request.idempotencyKey)
+    expect(keys[0]).toMatch(/^[a-f0-9-]{36}$/i)
+    expect(keys[1]).not.toBe(keys[0])
+    expect(globalThis.fetch).not.toHaveBeenCalled()
+  })
+
+  it('does not give unrelated mutations an Assistant request identity', async () => {
+    const transport: TransportMock = {
+      openAuthenticatedRpcStream: jest.fn().mockResolvedValue({ status: 200, headers: {}, body: {} }),
+    }
+    await post(applicationWith(transport), '/v1/assistant/subscription/start-extra', {})
+    expect(transport.openAuthenticatedRpcStream.mock.calls[0][0]).not.toHaveProperty('idempotencyKey')
+  })
+
   it('carries a control-plane GET over the socket without issuing an HTTP request', async () => {
     const transport: TransportMock = {
       openAuthenticatedRpcStream: jest.fn().mockResolvedValue({

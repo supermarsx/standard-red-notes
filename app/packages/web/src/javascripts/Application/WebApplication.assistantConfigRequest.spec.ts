@@ -1,6 +1,8 @@
 import { WebApplication } from './WebApplication'
+const controlPlaneRpc = jest.fn()
 
 const application = {
+  controlPlaneRpc,
   getHost: {
     execute: () => ({ getValue: () => 'https://notes.example.test' }),
   },
@@ -14,6 +16,9 @@ const request = <T>() =>
 
 describe('WebApplication.assistantConfigRequest', () => {
   const originalFetch = globalThis.fetch
+  beforeEach(() => {
+    controlPlaneRpc.mockReset()
+  })
 
   afterEach(() => {
     globalThis.fetch = originalFetch
@@ -47,5 +52,25 @@ describe('WebApplication.assistantConfigRequest', () => {
     } as unknown as Response)
 
     await expect(request<{ defaultProvider: string }>()).resolves.toEqual({ defaultProvider: 'openai' })
+  })
+  it.each([
+    '/v1/assistant/config',
+    '/v1/assistant/usage',
+    '/v1/assistant/models',
+    '/v1/assistant/subscription/status?subscriptionId=default',
+  ])('reads %s over the authenticated socket without an HTTP request', async (path) => {
+    controlPlaneRpc.mockResolvedValue({ ok: true, status: 200, data: { available: true } })
+    globalThis.fetch = jest.fn()
+    await expect(WebApplication.prototype.assistantConfigRequest.call(application, path)).resolves.toEqual({
+      available: true,
+    })
+    expect(controlPlaneRpc).toHaveBeenCalledWith('GET', path)
+    expect(globalThis.fetch).not.toHaveBeenCalled()
+  })
+  it('surfaces socket authorization failures without disguising them as config or issuing HTTP', async () => {
+    controlPlaneRpc.mockResolvedValue({ ok: false, status: 403, data: { error: { message: 'Access denied' } } })
+    globalThis.fetch = jest.fn()
+    await expect(request()).rejects.toThrow('HTTP 403')
+    expect(globalThis.fetch).not.toHaveBeenCalled()
   })
 })

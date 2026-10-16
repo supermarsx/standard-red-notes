@@ -31,6 +31,7 @@ import {
   MAX_SYNC_BUFFERED_BYTES,
   MAX_SYNC_FRAME_BYTES,
   MAX_RPC_CREDIT_BYTES,
+  maximumRpcDeadlineMs,
   normalizeSyncRequestForWire,
   payloadByteLength,
   SYNC_CHANNEL,
@@ -5191,7 +5192,7 @@ function isValidWorkerRpcRequest(request: WorkerAuthenticatedRpcRequest): boolea
     utf8Bytes(request.path).byteLength > 2_048 ||
     !Number.isSafeInteger(request.deadlineMs) ||
     request.deadlineMs < 1_000 ||
-    request.deadlineMs > 120_000 ||
+    request.deadlineMs > maximumRpcDeadlineMs(request) ||
     !Number.isSafeInteger(request.initialCreditBytes) ||
     request.initialCreditBytes <= 0 ||
     request.initialCreditBytes > MAX_RPC_CREDIT_BYTES ||

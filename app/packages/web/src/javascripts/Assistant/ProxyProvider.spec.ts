@@ -305,7 +305,7 @@ describe('ProxyProvider automatic profile routing', () => {
       {
         kind: 'error',
         message:
-          'Could not reach the assistant proxy. Check your connection and whether the Standard Red Notes server is healthy.',
+          'The connection to the assistant proxy was interrupted during the response. The partial answer has been kept. You can ask it to continue; the request was not replayed.',
       },
       { kind: 'finish', stopReason: 'error' },
     ])
@@ -322,4 +322,96 @@ it('attaches only the explicitly supplied chat run proof to a proxy model call',
   )
   await collect(new ProxyProvider({ provider: '', model: '', postStream, chatRunLease: proof }))
   expect(postStream.mock.calls[0][0]).toMatchObject({ chatRunLease: proof })
+})
+
+describe('ProxyProvider interruptions', () => {
+  beforeEach(() => {
+    ;(globalThis as { TextDecoder?: unknown }).TextDecoder = NodeTextDecoder
+  })
+
+  const responseWithReader = (read: jest.Mock, cancel = jest.fn().mockResolvedValue(undefined)) =>
+    ({
+      ok: true,
+      status: 200,
+      headers: { get: () => 'text/event-stream' },
+      body: { getReader: () => ({ read, cancel }) },
+    }) as unknown as Response
+  const frame = (event: ProviderEvent) => Uint8Array.from(Buffer.from(`data: ${JSON.stringify(event)}\n\n`))
+
+  it('keeps the partial answer and identifies a request deadline without replaying the model call', async () => {
+    const read = jest
+      .fn()
+      .mockResolvedValueOnce({ done: false, value: frame({ kind: 'text-delta', delta: 'Already answered' }) })
+      .mockRejectedValueOnce(Object.assign(new Error('opaque transport text'), { code: 'DEADLINE_EXCEEDED' }))
+    const postStream = jest.fn(async () => responseWithReader(read))
+    const events = await collect(new ProxyProvider({ provider: '', model: '', postStream }))
+    expect(events[0]).toEqual({ kind: 'text-delta', delta: 'Already answered' })
+    expect(events[1]).toMatchObject({ kind: 'error', message: expect.stringContaining('reached its time limit') })
+    expect(events.at(-1)).toEqual({ kind: 'finish', stopReason: 'error' })
+    expect(postStream).toHaveBeenCalledTimes(1)
+  })
+
+  it('recognizes an ordinary Error abort reason as cancellation rather than server unreachability', async () => {
+    const controller = new AbortController()
+    const read = jest.fn(async () => {
+      controller.abort(new Error('Chat run ownership expired'))
+      throw controller.signal.reason
+    })
+    const postStream = jest.fn(async () => responseWithReader(read))
+    const events = await collect(new ProxyProvider({ provider: '', model: '', postStream }), {
+      ...request,
+      signal: controller.signal,
+    })
+    expect(events).toContainEqual({
+      kind: 'error',
+      message: 'Assistant response was stopped. The partial answer has been kept.',
+    })
+    expect(postStream).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not turn a completed response into a network failure when the socket closes late', async () => {
+    const read = jest
+      .fn()
+      .mockResolvedValueOnce({ done: false, value: frame({ kind: 'finish', stopReason: 'end_turn' }) })
+      .mockRejectedValueOnce(new Error('late disconnect'))
+    const cancel = jest.fn().mockResolvedValue(undefined)
+    const events = await collect(
+      new ProxyProvider({ provider: '', model: '', postStream: async () => responseWithReader(read, cancel) }),
+    )
+    expect(events).toEqual([{ kind: 'finish', stopReason: 'end_turn' }])
+    expect(read).toHaveBeenCalledTimes(2)
+    expect(cancel).not.toHaveBeenCalled()
+  })
+})
+
+it('drains trailing usage after finish without cancelling server settlement', async () => {
+  ;(globalThis as { TextDecoder?: unknown }).TextDecoder = NodeTextDecoder
+  const record = jest.spyOn(assistantUsageService, 'record').mockImplementation(() => undefined)
+  const read = jest
+    .fn()
+    .mockResolvedValueOnce({
+      done: false,
+      value: Uint8Array.from(
+        Buffer.from('data: {"kind":"finish","stopReason":"end_turn"}\n\ndata: {"kind":"usage","totalTokens":23}\n\n'),
+      ),
+    })
+    .mockResolvedValueOnce({ done: true, value: undefined })
+  const cancel = jest.fn()
+  try {
+    const postStream = jest.fn(
+      async () =>
+        ({
+          ok: true,
+          status: 200,
+          headers: { get: () => 'text/event-stream' },
+          body: { getReader: () => ({ read, cancel }) },
+        }) as unknown as Response,
+    )
+    const events = await collect(new ProxyProvider({ provider: '', model: '', postStream }))
+    expect(events).toContainEqual({ kind: 'usage', totalTokens: 23 })
+    expect(record).toHaveBeenCalledWith({ promptTokens: undefined, completionTokens: undefined, totalTokens: 23 })
+    expect(cancel).not.toHaveBeenCalled()
+  } finally {
+    record.mockRestore()
+  }
 })

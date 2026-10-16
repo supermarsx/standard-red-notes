@@ -49,7 +49,11 @@ export async function acquireAssistantChatRun(
     released = true
     clearTimeout(timer)
     clearTimeout(expiryTimer)
-    controller.abort(new Error('Chat run ownership expired. The response stopped safely; it will not be replayed.'))
+    controller.abort(
+      Object.assign(new Error('Chat run ownership expired. The response stopped safely; it will not be replayed.'), {
+        code: 'CHAT_RUN_LEASE_LOST',
+      }),
+    )
   }
   const armExpiry = () => {
     clearTimeout(expiryTimer)

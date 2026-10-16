@@ -95,6 +95,7 @@ describe('WebApplication.assistantStreamRequest websocket preference', () => {
       expect.objectContaining({
         method: 'POST',
         path: '/v1/assistant/stream',
+        deadlineMs: 330_000,
         stream: true,
         body: { messages: [{ role: 'user', content: 'Hello' }] },
         idempotencyKey: expect.stringMatching(/^assistant-/),

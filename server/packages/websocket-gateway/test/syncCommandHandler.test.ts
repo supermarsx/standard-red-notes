@@ -2297,6 +2297,38 @@ describe('SyncCommandHandler', () => {
     },
   )
 
+  it.each([
+    '/v1/web/search',
+    '/v1/web/fetch',
+    '/v1/assistant/subscription/start',
+    '/v1/assistant/subscription/complete',
+    '/v1/assistant/subscription/unpair',
+    '/v1/assistant/subscription/unpair-all',
+  ])('allows only the reviewed keyed AI POST: %s', async (path) => {
+    const apiRpc: SyncApiRpcAdapter = {
+      idempotencyScope: 'shared-durable',
+      ready: () => true,
+      operations: () => ['API_RPC'],
+      execute: vi.fn(async () => ({ status: 200, body: {} })),
+    }
+    const { handler, socket } = await authenticatedHandler({ apiRpc })
+    enqueue(handler, rpcFrame(1, { method: 'POST', path, body: {}, idempotencyKey: 'ai-call-1' }))
+    await vi.waitFor(() => expect(socket.frames.at(-1)?.type).toBe('RPC_END'))
+    let sequence = 2
+    for (const rejected of [
+      { method: 'PUT' as const, path, idempotencyKey: 'wrong-method' },
+      { method: 'POST' as const, path: `${path}/other`, idempotencyKey: 'subroute' },
+      { method: 'POST' as const, path: `${path}-extra`, idempotencyKey: 'neighbor' },
+      { method: 'POST' as const, path },
+    ]) {
+      const requestId = `rpc-request-${sequence}`
+      enqueue(handler, rpcFrame(sequence++, rejected))
+      await vi.waitFor(() => expect(socket.frames.at(-1)).toMatchObject({ type: 'ERROR', requestId }))
+    }
+    expect(apiRpc.execute).toHaveBeenCalledTimes(1)
+    handler.disconnect()
+  })
+
   it('fails closed for unavailable adapters, file reads, unsupported verbs, and unkeyed reviewed writes', async () => {
     const unavailableAdapters: Array<SyncApiRpcAdapter | undefined> = [
       undefined,

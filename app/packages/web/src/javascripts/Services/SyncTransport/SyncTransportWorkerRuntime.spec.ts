@@ -333,6 +333,54 @@ describe('SyncTransportWorkerRuntime', () => {
     return { runtime, messages, sockets, outbox: sharedOutbox }
   }
 
+  it('keeps an assistant stream alive beyond two minutes without replacing its socket', async () => {
+    const harness = setup()
+    const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS', 'API_RPC'])
+    const initialSync = socket.sent.map((entry) => JSON.parse(entry)).find((frame) => frame.type === 'COMMAND')!
+    socket.receive(serverFrame('COMMITTED', initialSync.commandId, { result: { saved_items: [] } }, initialSync.digest))
+    await flush()
+    await harness.runtime.handle({
+      type: 'OPEN_RPC',
+      clientRequestId: 'long-answer',
+      sessionScope: SESSION_A,
+      request: {
+        method: 'POST',
+        path: '/v1/assistant/stream',
+        idempotencyKey: 'one-model-attempt',
+        deadlineMs: 330_000,
+        initialCreditBytes: 4096,
+        stream: true,
+      },
+    })
+    await flush()
+    const rpc = socket.sent.map((entry) => JSON.parse(entry)).find((frame) => frame.type === 'RPC_REQUEST')!
+    expect(rpc.payload.deadlineMs).toBe(330_000)
+    socket.receive(serverFrame('RPC_ACCEPTED', rpc.commandId, { accepted: true }))
+    socket.receive(
+      serverFrame('RPC_RESPONSE', rpc.commandId, {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+        stream: true,
+      }),
+    )
+    for (let elapsed = 0; elapsed < 180_000; elapsed += 10_000) {
+      jest.advanceTimersByTime(10_000)
+      await flush()
+      socket.receive(serverFrame('PONG', 'heartbeat', {}))
+      await flush()
+    }
+    expect(
+      harness.messages.filter((message) => message.type === 'RPC_ERROR' && message.clientRequestId === 'long-answer'),
+    ).toEqual([])
+    expect(socket.readyState).toBe(1)
+    expect(harness.sockets).toHaveLength(1)
+    socket.receive(serverFrame('RPC_END', rpc.commandId, { status: 'COMPLETED' }))
+    await flush()
+    expect(harness.messages).toContainEqual(
+      expect.objectContaining({ type: 'RPC_END', clientRequestId: 'long-answer' }),
+    )
+  })
+
   it('uses one actual runtime/socket/journal for two broker ports saving different notes', async () => {
     let broker: SharedSyncTransportBroker
     const harness = setup(undefined, undefined, (message) => broker.publish(message))

@@ -107,7 +107,7 @@ import { CommandService } from '../Components/CommandPalette/CommandService'
 import { CrossTabCoordinator } from './CrossTab/CrossTabCoordinator'
 import { reloadForeignDatabasePayloads } from './CrossTab/ReloadForeignDatabasePayloads'
 import { WebDevice } from './Device/WebDevice'
-import { assistantHttpError } from '@/Assistant/AssistantHttpError'
+import { assistantHttpError, assistantJsonHttpError } from '@/Assistant/AssistantHttpError'
 import {
   AuthenticatedRpcError,
   deriveOpaqueSyncSessionScope,
@@ -1504,7 +1504,7 @@ export class WebApplication extends SNApplication implements WebApplicationInter
           },
           body,
           idempotencyKey,
-          deadlineMs: 120_000,
+          deadlineMs: 330_000,
           initialCreditBytes: 128 * 1024,
           stream: true,
           signal,
@@ -1571,8 +1571,15 @@ export class WebApplication extends SNApplication implements WebApplicationInter
     return this.serverJsonRequest<T>(path, body, signal)
   }
 
-  /** Authenticated GET helper for the Assistant config endpoint. */
+  /** Socket-first authenticated reads for Assistant configuration, models and usage. */
   public async assistantConfigRequest<T>(path: string): Promise<T> {
+    const overSocket = await this.controlPlaneRpc<T>('GET', path)
+    if (overSocket) {
+      if (!overSocket.ok) {
+        throw new Error(assistantJsonHttpError(overSocket.status, overSocket.data, 'proxy'))
+      }
+      return overSocket.data
+    }
     const host = this.getHost.execute().getValue()
     const session = (this.sessions as unknown as { getSession?: () => unknown }).getSession?.()
     const accessToken = extractAccessToken(session)
@@ -1633,9 +1640,12 @@ export class WebApplication extends SNApplication implements WebApplicationInter
     const hasBody = body !== undefined
     try {
       const response = await transport.openAuthenticatedRpcStream({
-        // Only the closed chat-lease commands gain a mutation idempotency key.
-        // Renewals need distinct keys so a cached acquire/renew cannot extend a stale lease.
-        ...(method === 'POST' && /^\/v1\/assistant\/chats\/run-lease\/(acquire|renew|release)$/.test(path)
+        // Each explicitly reviewed Assistant command gets its own identity;
+        // retries must not replay ambiguous provider, search or pairing work.
+        ...(method === 'POST' &&
+        /^(?:\/v1\/assistant\/chats\/run-lease\/(?:acquire|renew|release)|\/v1\/web\/(?:search|fetch)|\/v1\/assistant\/subscription\/(?:start|complete|unpair|unpair-all))$/.test(
+          path.split('?')[0],
+        )
           ? { idempotencyKey: crypto.randomUUID() }
           : {}),
         method,

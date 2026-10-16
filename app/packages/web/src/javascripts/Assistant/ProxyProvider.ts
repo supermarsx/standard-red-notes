@@ -1,5 +1,5 @@
 import { assistantUsageService } from './AssistantUsageService'
-import { assistantHttpError, assistantNetworkError } from './AssistantHttpError'
+import { assistantHttpError, assistantNetworkError, assistantStreamError } from './AssistantHttpError'
 import { Provider, ProviderEvent, ProviderRequest } from './types'
 import type { AssistantChatRunProof } from './assistantChatRunLease'
 
@@ -53,11 +53,12 @@ export class ProxyProvider implements Provider {
       // cap narrower; the client never supplies the cap itself.
     }
 
+    const signal = req.signal ?? this.options.signal
     let response: Response
     try {
-      response = await this.options.postStream(body, req.signal ?? this.options.signal)
+      response = await this.options.postStream(body, signal)
     } catch (error) {
-      yield { kind: 'error', message: assistantNetworkError(error, 'proxy') }
+      yield { kind: 'error', message: assistantNetworkError(error, 'proxy', signal) }
       yield { kind: 'finish', stopReason: 'error' }
       return
     }
@@ -124,18 +125,22 @@ export class ProxyProvider implements Provider {
         }
       }
     } catch (error) {
-      yield { kind: 'error', message: assistantNetworkError(error, 'proxy') }
-      yield { kind: 'finish', stopReason: 'error' }
-      return
+      if (!finished) {
+        yield { kind: 'error', message: assistantStreamError(error, 'proxy', signal) }
+        yield { kind: 'finish', stopReason: 'error' }
+        return
+      }
+      // Keep draining through EOF for trailing usage and server quota settlement.
+      // A later transport failure cannot contradict an authoritative finish.
     }
 
     const trailing = this.parseFrame(buffer)
-    if (trailing === MALFORMED_PROXY_FRAME) {
+    if (trailing === MALFORMED_PROXY_FRAME && !finished) {
       yield { kind: 'error', message: 'The assistant proxy returned malformed stream data.' }
       yield { kind: 'finish', stopReason: 'error' }
       return
     }
-    if (trailing) {
+    if (trailing && trailing !== MALFORMED_PROXY_FRAME) {
       observe(trailing)
       yield trailing
     }

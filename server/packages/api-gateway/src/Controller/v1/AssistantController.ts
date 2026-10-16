@@ -65,17 +65,17 @@ import {
   RedisAssistantRequestQuota,
 } from '../../Service/Assistant/AssistantRequestQuota'
 
-/** A misbehaving upstream iterator must not retain a synced chat past cancellation. */
+/** A misbehaving upstream iterator must not retain any stream past cancellation. */
 async function nextProviderEventWithAbort(
   iterator: AsyncIterator<ProviderEvent>,
   signal: AbortSignal,
 ): Promise<IteratorResult<ProviderEvent>> {
   if (signal.aborted) {
-    throw new Error('Assistant chat stream cancelled.')
+    throw new Error('Assistant stream cancelled.')
   }
   let onAbort: (() => void) | undefined
   const cancelled = new Promise<never>((_resolve, reject) => {
-    onAbort = () => reject(new Error('Assistant chat stream cancelled.'))
+    onAbort = () => reject(new Error('Assistant stream cancelled.'))
     signal.addEventListener('abort', onAbort, { once: true })
   })
   try {
@@ -115,6 +115,7 @@ interface ResolvedUserLimits {
 const ASSISTANT_QUOTA_SETTLEMENT_MAX_ATTEMPTS = 2
 const ASSISTANT_SAFETY_REVIEW_MAX_OUTPUT_TOKENS = 8
 const ASSISTANT_DEFAULT_MAX_OUTPUT_TOKENS = 4_096
+const ASSISTANT_SSE_KEEPALIVE_MS = 15_000
 const ASSISTANT_ATTEMPT_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000
 const ASSISTANT_ATTEMPT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u
 
@@ -1275,8 +1276,12 @@ export class AssistantController extends BaseHttpController {
     response.setHeader('X-Accel-Buffering', 'no')
     response.flushHeaders?.()
 
+    let terminalEventWritten = false
     const writeEvent = (event: ProviderEvent): void => {
       response.write(`data: ${JSON.stringify(event)}\n\n`)
+      if (event.kind === 'finish') {
+        terminalEventWritten = true
+      }
     }
 
     const outcome = new AssistantRequestOutcome()
@@ -1286,29 +1291,35 @@ export class AssistantController extends BaseHttpController {
     let clientClosed = request.aborted === true
     let quotaLeaseLost = false
     let chatLeaseLost = false
-    let chatStreamTimedOut = false
+    let streamTimedOut = false
     let streamCancelled = false
-    const cancelProvider = (reason: 'client' | 'quota' | 'chat' | 'chat-timeout'): void => {
+    let sseKeepalive: ReturnType<typeof setInterval> | undefined
+    const cancelProvider = (reason: 'client' | 'quota' | 'chat' | 'timeout'): void => {
       if (streamCancelled) {
         return
       }
       streamCancelled = true
+      clearInterval(sseKeepalive)
       if (reason === 'client') {
         clientClosed = true
       } else if (reason === 'quota') {
         quotaLeaseLost = true
-      } else {
+      } else if (reason === 'chat') {
         chatLeaseLost = true
-        chatStreamTimedOut = reason === 'chat-timeout'
+      } else {
+        streamTimedOut = true
       }
       outcome.markFailed()
       upstreamAbortController.abort()
       if (!iteratorCancellationRequested && providerIterator?.return) {
         iteratorCancellationRequested = true
-        void Promise.resolve(providerIterator.return()).catch(() => {
-          // The request-scoped AbortSignal is authoritative; iterator cleanup is
-          // best effort for custom providers that expose an explicit return().
-        })
+        const iterator = providerIterator
+        void Promise.resolve()
+          .then(() => iterator.return?.())
+          .catch(() => {
+            // The request-scoped AbortSignal is authoritative; iterator cleanup is
+            // best effort, including custom providers whose return() throws.
+          })
       }
     }
 
@@ -1330,12 +1341,33 @@ export class AssistantController extends BaseHttpController {
       tokenQuotaReservation?.startHeartbeat(() => cancelProvider('quota'))
     }
 
+    if (!clientClosed) {
+      // SSE comments keep an idle reverse proxy awake during provider reasoning.
+      // They carry no model event, lease renewal, or extension of the total deadline.
+      sseKeepalive = setInterval(() => {
+        if (streamCancelled || response.writableEnded || response.destroyed) {
+          clearInterval(sseKeepalive)
+          return
+        }
+        try {
+          response.write(': keepalive\n\n')
+        } catch {
+          cancelProvider('client')
+        }
+      }, ASSISTANT_SSE_KEEPALIVE_MS)
+      sseKeepalive.unref?.()
+    }
+
     let chatHeartbeat: ReturnType<typeof setInterval> | undefined
-    let chatWatchdog: ReturnType<typeof setTimeout> | undefined
+    // A total budget applies to HTTP and socket streams, including legacy callers
+    // without a chat proof. Keepalive comments never extend this deadline.
+    const streamWatchdog = !clientClosed
+      ? setTimeout(() => cancelProvider('timeout'), CHAT_RUN_STREAM_MAX_MS)
+      : undefined
+    streamWatchdog?.unref?.()
     let chatRenewal: Promise<void> | undefined
     if (chatStreamId && chatProof && chatLeaseStore && !clientClosed) {
       const ownedStream = chatStreamId
-      chatWatchdog = setTimeout(() => cancelProvider('chat-timeout'), CHAT_RUN_STREAM_MAX_MS)
       chatHeartbeat = setInterval(() => {
         if (chatRenewal || streamCancelled) {
           return
@@ -1374,16 +1406,13 @@ export class AssistantController extends BaseHttpController {
       })
       providerIterator = stream[Symbol.asyncIterator]()
       const cancellableStream: AsyncIterable<ProviderEvent> = {
-        [Symbol.asyncIterator]: () =>
-          chatStreamId
-            ? {
-                next: () =>
-                  nextProviderEventWithAbort(
-                    providerIterator as AsyncIterator<ProviderEvent>,
-                    upstreamAbortController.signal,
-                  ),
-              }
-            : (providerIterator as AsyncIterator<ProviderEvent>),
+        [Symbol.asyncIterator]: () => ({
+          next: () =>
+            nextProviderEventWithAbort(
+              providerIterator as AsyncIterator<ProviderEvent>,
+              upstreamAbortController.signal,
+            ),
+        }),
       }
 
       for await (const event of cancellableStream) {
@@ -1408,14 +1437,15 @@ export class AssistantController extends BaseHttpController {
       }
     } catch (error) {
       outcome.markFailed()
-      if (!clientClosed && !quotaLeaseLost && !chatLeaseLost) {
+      if (!streamCancelled && !terminalEventWritten) {
         writeEvent({ kind: 'error', message: (error as Error).message })
         writeEvent({ kind: 'finish', stopReason: 'error' })
       }
     } finally {
       providerIterator = undefined
+      clearInterval(sseKeepalive)
       clearInterval(chatHeartbeat)
-      clearTimeout(chatWatchdog)
+      clearTimeout(streamWatchdog)
       await chatRenewal
       if (chatStreamId && chatProof && chatLeaseStore) {
         await chatLeaseStore
@@ -1423,15 +1453,15 @@ export class AssistantController extends BaseHttpController {
           .catch(() => undefined)
       }
       await Promise.all([quotaReservation?.stopHeartbeat(), tokenQuotaReservation?.stopHeartbeat()])
-      if (quotaLeaseLost && !clientClosed) {
+      if (quotaLeaseLost && !clientClosed && !terminalEventWritten) {
         writeEvent({ kind: 'error', message: 'AI request quota could not be renewed. Please try again.' })
         writeEvent({ kind: 'finish', stopReason: 'error' })
       }
-      if (chatLeaseLost && !clientClosed) {
+      if ((chatLeaseLost || streamTimedOut) && !clientClosed && !terminalEventWritten) {
         writeEvent({
           kind: 'error',
-          message: chatStreamTimedOut
-            ? 'This chat generation exceeded the five-minute server limit. Resume from its synced history.'
+          message: streamTimedOut
+            ? 'This generation exceeded the five-minute server limit. Resume from its saved history.'
             : 'This chat run lost its server lease. Stop here and resume from its synced history.',
         })
         writeEvent({ kind: 'finish', stopReason: 'error' })

@@ -38,6 +38,40 @@ describe('LoopbackSyncApiRpcAdapter', () => {
       expect(fetch).toHaveBeenCalledTimes(1)
     },
   )
+  it.each([
+    '/v1/web/search',
+    '/v1/web/fetch',
+    '/v1/assistant/subscription/start',
+    '/v1/assistant/subscription/complete',
+    '/v1/assistant/subscription/unpair',
+    '/v1/assistant/subscription/unpair-all',
+  ])('permits only the reviewed keyed AI POST: %s', async (path) => {
+    const fetch = jest.fn(async () => Response.json({ accepted: true }))
+    const adapter = new LoopbackSyncApiRpcAdapter({
+      origin: 'http://127.0.0.1:3000',
+      operations: ['API_RPC'],
+      fetch: fetch as typeof globalThis.fetch,
+    })
+    const input = {
+      identity,
+      method: 'POST' as const,
+      path,
+      headers: {},
+      body: {},
+      idempotencyKey: 'ai-call-1',
+      stream: false,
+    }
+    expect((await adapter.execute(input, new AbortController().signal)).status).toBe(200)
+    for (const rejected of [
+      { ...input, method: 'PUT' as const },
+      { ...input, path: `${path}/other` },
+      { ...input, path: `${path}-extra` },
+      { ...input, idempotencyKey: undefined },
+    ]) {
+      await expect(adapter.execute(rejected, new AbortController().signal)).rejects.toThrow()
+    }
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
   it('permits only an idempotency-keyed authenticated POST on the activity route while keeping other session operations blocked', async () => {
     const fetch = jest.fn(async () => Response.json({ data: { active: true } }))
     const adapter = new LoopbackSyncApiRpcAdapter({

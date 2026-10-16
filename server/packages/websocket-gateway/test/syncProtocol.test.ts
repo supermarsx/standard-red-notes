@@ -4,6 +4,7 @@ import {
   MAX_INVITE_CURSOR_BYTES,
   MAX_RPC_CREDIT_BYTES,
   MAX_RPC_DEADLINE_MS,
+  MAX_ASSISTANT_RPC_DEADLINE_MS,
   MAX_SYNC_FRAME_BYTES,
   MAX_SYNC_RESUME_SEQUENCE,
   MAX_SYNC_SEQUENCE,
@@ -447,6 +448,34 @@ describe('sync protocol v1', () => {
         JSON.stringify(clientFrame('RPC_CREDIT', { targetRequestId: 'rpc-request-1', creditBytes: 1 })),
       ),
     ).toMatchObject({ type: 'RPC_CREDIT' })
+  })
+
+  it.each(['/v1/assistant/stream', '/v1/assistant/stream?api=20240226'])(
+    'accepts the extended deadline only for assistant generation: %s',
+    (path) => {
+      const payload = {
+        method: 'POST',
+        path,
+        stream: true,
+        deadlineMs: MAX_ASSISTANT_RPC_DEADLINE_MS,
+        initialCreditBytes: 1_024,
+        idempotencyKey: 'assistant-stream-1',
+      }
+      expect(parseSyncClientFrame(JSON.stringify(clientFrame('RPC_REQUEST', payload)))).toMatchObject({ payload })
+      expectInvalidFrame(clientFrame('RPC_REQUEST', { ...payload, deadlineMs: MAX_ASSISTANT_RPC_DEADLINE_MS + 1 }))
+    },
+  )
+
+  it.each([
+    { method: 'GET', path: '/v1/assistant/stream', stream: true },
+    { method: 'POST', path: '/v1/assistant/stream', stream: false },
+    { method: 'POST', path: '/v1/assistant/streaming', stream: true },
+    { method: 'POST', path: '/v1/assistant/chats/run-lease/renew', stream: true },
+    { method: 'GET', path: '/v1/subscription-invites', stream: true },
+  ])('retains the ordinary deadline for other requests: %o', (request) => {
+    const payload = { ...request, deadlineMs: MAX_RPC_DEADLINE_MS, initialCreditBytes: 1_024 }
+    expect(parseSyncClientFrame(JSON.stringify(clientFrame('RPC_REQUEST', payload)))).toMatchObject({ payload })
+    expectInvalidFrame(clientFrame('RPC_REQUEST', { ...payload, deadlineMs: MAX_RPC_DEADLINE_MS + 1 }))
   })
 
   it.each([

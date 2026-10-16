@@ -30,7 +30,7 @@ import {
   MainToSyncWorkerMessage,
   MAX_RPC_CREDIT_BYTES,
   SocketFileResourceReference,
-  MAX_RPC_DEADLINE_MS,
+  maximumRpcDeadlineMs,
   MIN_RPC_DEADLINE_MS,
   normalizeSyncRequestForWire,
   SYNC_FALLBACK_REASON_EXPLANATIONS,
@@ -3151,7 +3151,7 @@ function normalizeAuthenticatedRpcRequest(request: AuthenticatedRpcStreamRequest
   if (
     !Number.isSafeInteger(deadlineMs) ||
     deadlineMs < MIN_RPC_DEADLINE_MS ||
-    deadlineMs > MAX_RPC_DEADLINE_MS ||
+    deadlineMs > maximumRpcDeadlineMs(request) ||
     !Number.isSafeInteger(initialCreditBytes) ||
     initialCreditBytes <= 0 ||
     initialCreditBytes > MAX_RPC_CREDIT_BYTES

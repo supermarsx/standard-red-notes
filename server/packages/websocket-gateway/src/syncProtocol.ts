@@ -137,6 +137,8 @@ export const MAX_SYNC_SEQUENCE = 0xffff_ffff
 export const MAX_SYNC_RESUME_SEQUENCE = MAX_SYNC_SEQUENCE - 1
 export const MAX_RPC_PATH_BYTES = 2_048
 export const MAX_RPC_DEADLINE_MS = 120_000
+/** Five-minute assistant generation budget plus transport/cleanup margin. */
+export const MAX_ASSISTANT_RPC_DEADLINE_MS = 330_000
 export const MIN_RPC_DEADLINE_MS = 1_000
 export const DEFAULT_RPC_DEADLINE_MS = 30_000
 export const MAX_RPC_CREDIT_BYTES = 4 * 1024 * 1024
@@ -752,7 +754,13 @@ export function parseSyncClientFrame(raw: string, rawBytes = Buffer.byteLength(r
       !isRpcPath(payload.path) ||
       !Number.isSafeInteger(payload.deadlineMs) ||
       Number(payload.deadlineMs) < MIN_RPC_DEADLINE_MS ||
-      Number(payload.deadlineMs) > MAX_RPC_DEADLINE_MS ||
+      Number(payload.deadlineMs) >
+        (payload.method === 'POST' &&
+        payload.stream === true &&
+        typeof payload.path === 'string' &&
+        payload.path.split('?', 1)[0] === '/v1/assistant/stream'
+          ? MAX_ASSISTANT_RPC_DEADLINE_MS
+          : MAX_RPC_DEADLINE_MS) ||
       !Number.isSafeInteger(payload.initialCreditBytes) ||
       Number(payload.initialCreditBytes) <= 0 ||
       Number(payload.initialCreditBytes) > MAX_RPC_CREDIT_BYTES ||

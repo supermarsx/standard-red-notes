@@ -133,3 +133,109 @@ it.each(['renewal-lost', 'watchdog', 'ignores-abort'] as const)(
     expect(renew).toHaveBeenCalledTimes(count)
   },
 )
+
+it.each(['complete', 'disconnect'] as const)('keeps silent SSE alive and stops comments after %s', async (cause) => {
+  jest.useFakeTimers()
+  const instance = controller()
+  let complete: (() => void) | undefined
+  let signal: AbortSignal | undefined
+  const send = jest.fn((input: { signal?: AbortSignal }): AsyncIterable<ProviderEvent> => ({
+    async *[Symbol.asyncIterator]() {
+      signal = input.signal
+      await new Promise<void>((resolve, reject) => {
+        complete = resolve
+        input.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true })
+      })
+      yield { kind: 'finish', stopReason: 'end_turn' }
+    },
+  }))
+  mockProvider(instance, { id: 'test', send })
+  const res = response()
+  // Also exercises legacy streams without chat proof: keepalive never needs Redis.
+  const pending = instance.streamCompletion(request({ messages: [] }), res)
+  for (let index = 0; index < 30; index++) {
+    await Promise.resolve()
+  }
+  expect(complete).toBeDefined()
+  await jest.advanceTimersByTimeAsync(14_999)
+  expect(res.write).not.toHaveBeenCalled()
+  await jest.advanceTimersByTimeAsync(1)
+  expect(res.write).toHaveBeenCalledWith(': keepalive\n\n')
+  expect(signal?.aborted).toBe(false)
+  await jest.advanceTimersByTimeAsync(15_000)
+  expect(res.write.mock.calls.filter(([value]) => value === ': keepalive\n\n')).toHaveLength(2)
+  if (cause === 'disconnect') {
+    res.emit('close')
+  } else {
+    complete!()
+  }
+  await pending
+  expect(signal?.aborted).toBe(cause === 'disconnect')
+  const writes = res.write.mock.calls.length
+  await jest.advanceTimersByTimeAsync(60_000)
+  expect(res.write).toHaveBeenCalledTimes(writes)
+  expect(res.end).toHaveBeenCalledTimes(1)
+})
+
+it.each(['timeout', 'disconnect', 'timeout-after-finish', 'cleanup-throws'] as const)(
+  'bounds an unleased noncooperative provider on %s and stops keepalive without duplicate errors',
+  async (cause) => {
+    jest.useFakeTimers()
+    const instance = controller(null)
+    let signal: AbortSignal | undefined
+    const cleanup = jest.fn(() => {
+      if (cause === 'cleanup-throws') {
+        throw new Error('Uncooperative cleanup')
+      }
+      return Promise.resolve({ done: true as const, value: undefined })
+    })
+    const send = jest.fn((input: { signal?: AbortSignal }): AsyncIterable<ProviderEvent> => ({
+      [Symbol.asyncIterator]() {
+        signal = input.signal
+        return {
+          next: jest
+            .fn()
+            .mockImplementationOnce(() =>
+              cause === 'timeout-after-finish'
+                ? Promise.resolve({ done: false, value: { kind: 'finish', stopReason: 'end_turn' } })
+                : new Promise<IteratorResult<ProviderEvent>>(() => undefined),
+            )
+            .mockImplementation(() => new Promise<IteratorResult<ProviderEvent>>(() => undefined)),
+          return: cleanup,
+        }
+      },
+    }))
+    mockProvider(instance, { id: 'test', send })
+    const res = response()
+    const pending = instance.streamCompletion(request({ messages: [] }), res)
+    for (let index = 0; index < 30 && !send.mock.calls.length; index++) {
+      await Promise.resolve()
+    }
+    expect(send).toHaveBeenCalledTimes(1)
+    await jest.advanceTimersByTimeAsync(15_000)
+    expect(res.write).toHaveBeenCalledWith(': keepalive\n\n')
+    if (cause !== 'disconnect') {
+      await jest.advanceTimersByTimeAsync(CHAT_RUN_STREAM_MAX_MS - 15_001)
+      expect(signal?.aborted).toBe(false)
+      await jest.advanceTimersByTimeAsync(1)
+    } else {
+      res.emit('close')
+    }
+    await pending
+    expect(signal?.aborted).toBe(true)
+    expect(cleanup).toHaveBeenCalledTimes(1)
+    const events = res.write.mock.calls.map(([value]) => String(value)).filter((value) => value.startsWith('data: '))
+    expect(events.filter((value) => value.includes('"kind":"error"'))).toHaveLength(
+      cause === 'timeout' || cause === 'cleanup-throws' ? 1 : 0,
+    )
+    expect(events.filter((value) => value.includes('"kind":"finish"'))).toHaveLength(cause !== 'disconnect' ? 1 : 0)
+    if (cause === 'timeout' || cause === 'cleanup-throws') {
+      expect(events.join('')).toContain('five-minute server limit')
+    }
+    expect(res.end).toHaveBeenCalledTimes(1)
+    const writes = res.write.mock.calls.length
+    await jest.advanceTimersByTimeAsync(60_000)
+    expect(res.write).toHaveBeenCalledTimes(writes)
+    expect(jest.getTimerCount()).toBe(0)
+  },
+)

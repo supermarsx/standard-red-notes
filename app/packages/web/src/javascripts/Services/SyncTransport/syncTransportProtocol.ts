@@ -12,6 +12,14 @@ export const MAX_SYNC_BUFFERED_BYTES = 256 * 1024
 export const DEFAULT_RPC_DEADLINE_MS = 30_000
 export const MIN_RPC_DEADLINE_MS = 1_000
 export const MAX_RPC_DEADLINE_MS = 120_000
+export const MAX_ASSISTANT_STREAM_DEADLINE_MS = 330_000
+
+/** Only model streams need to outlive the server's five-minute generation limit. */
+export function maximumRpcDeadlineMs(request: { method: string; path: string; stream?: boolean }): number {
+  return request.method === 'POST' && request.stream === true && request.path.split('?')[0] === '/v1/assistant/stream'
+    ? MAX_ASSISTANT_STREAM_DEADLINE_MS
+    : MAX_RPC_DEADLINE_MS
+}
 export const DEFAULT_RPC_CREDIT_BYTES = 256 * 1024
 export const MAX_RPC_CREDIT_BYTES = 4 * 1024 * 1024
 
