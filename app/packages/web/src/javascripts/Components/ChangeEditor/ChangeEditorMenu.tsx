@@ -650,26 +650,19 @@ const ChangeEditorMenu: FunctionComponent<ChangeEditorMenuProps> = ({
     setDisableClickOutside?.(false)
   }
 
-  const managePlugins = useCallback(() => {
-    application.openPreferences('plugins')
-  }, [application])
-
   return (
     <>
       <Menu className="pt-0.5 pb-1" a11yLabel="Change note type menu">
         <MenuSection>
-          <div className="flex items-center justify-between py-3 pr-4 md:pt-0 md:pb-1">
+          <div className="py-3 pr-4 md:pt-0 md:pb-1">
             <div className="px-3">
               <h2 className="text-base font-bold">Choose a note type</h2>
               {unableToFindEditor && (
                 <p className="text-warning mr-2 pt-1 text-xs">
-                  Unable to find system editor for this note. Select Manage Plugins to reinstall this editor.
+                  Unable to find system editor for this note. Open Preferences → Plugins to reinstall this editor.
                 </p>
               )}
             </div>
-            <button className="text-info cursor-pointer text-right text-xs whitespace-nowrap" onClick={managePlugins}>
-              Manage Plugins
-            </button>
           </div>
         </MenuSection>
 
