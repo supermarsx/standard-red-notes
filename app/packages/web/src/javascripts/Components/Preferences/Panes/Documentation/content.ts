@@ -1315,7 +1315,7 @@ export const DOC_CATEGORIES: DocCategory[] = [
           },
           {
             type: 'paragraph',
-            text: 'Generated answers use Markdown by default. Use Markdown or Plain text on each answer to switch views; copying a message keeps its original text. Action entries above an answer start as compact summaries with status and change counts. Expand an action to inspect its details, diff and Undo/Redo controls.',
+            text: 'Generated answers use Markdown by default. Use Markdown or Plain text on each answer to switch views; copying a message keeps its original text. All tool activity for a response shares one compact, expandable progress summary above the answer, with outcomes and change counts. Expand it to inspect each action, its details, diff and Undo/Redo controls.',
           },
           {
             type: 'paragraph',
