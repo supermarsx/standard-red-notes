@@ -17,6 +17,7 @@ export class ContentType extends ValueObject<ContentTypeProps> {
     Note: 'Note',
     Tag: 'Tag',
     Folder: 'Folder',
+    AssistantChat: 'SN|AssistantChat',
     SmartView: 'SN|SmartTag',
     Component: 'SN|Component',
     Editor: 'SN|Editor',

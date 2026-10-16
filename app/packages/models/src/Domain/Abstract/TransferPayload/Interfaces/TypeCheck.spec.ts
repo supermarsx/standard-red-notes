@@ -68,6 +68,12 @@ describe('type check', () => {
       ).toBe(true)
     })
 
+    it('accepts encrypted Assistant records while preserving deletion checks', () => {
+      const item = { uuid: 'chat', content_type: 'SN|AssistantChat', content: 'encrypted', ...PayloadTimestampDefaults() }
+      expect(isCorruptTransferPayload(item)).toBe(false)
+      expect(isCorruptTransferPayload({ ...item, deleted: true })).toBe(true)
+    })
+
     it('should return true if content type is unknown', () => {
       expect(
         isCorruptTransferPayload({

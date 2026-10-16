@@ -8,6 +8,10 @@ describe('ContentType', () => {
     expect(valueOrError.getValue().value).toEqual('SN|Component')
   })
 
+  it('accepts private encrypted Assistant chat sync records', () => {
+    expect(ContentType.create('SN|AssistantChat').isFailed()).toBe(false)
+  })
+
   it('should not create an invalid value object', () => {
     for (const value of ['', undefined, 0, 'FOOBAR']) {
       const valueOrError = ContentType.create(value as string)

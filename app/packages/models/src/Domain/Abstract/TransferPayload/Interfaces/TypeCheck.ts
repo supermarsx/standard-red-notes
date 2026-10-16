@@ -33,7 +33,7 @@ export function isDeletedTransferPayload(payload: TransferPayload): payload is D
  * exists in local item state, which makes creation re-insert it (duplicate folders) and makes its
  * uuid mismatch on every integrity check forever. Delete this list once domain-core ships the type.
  */
-const LOCALLY_DEFINED_CONTENT_TYPES: ReadonlySet<string> = new Set(['Folder'])
+const LOCALLY_DEFINED_CONTENT_TYPES: ReadonlySet<string> = new Set(['Folder', 'SN|AssistantChat'])
 
 function isKnownContentType(contentType: string): boolean {
   return !ContentType.create(contentType).isFailed() || LOCALLY_DEFINED_CONTENT_TYPES.has(contentType)

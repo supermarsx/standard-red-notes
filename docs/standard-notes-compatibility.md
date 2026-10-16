@@ -51,6 +51,18 @@ tests and the `001`–`004` operator, dispatcher, and wrapper tests passed befor
 updating this one fork-source hash. The upstream snapshot pins and the
 conditional interoperability boundaries in this page remain unchanged.
 
+On 2026-10-16, a scoped review admitted the additional private `SN|AssistantChat`
+content type for encrypted Assistant history. The server change adds only that
+literal to the existing content-type allowlist; every existing type and rejection
+rule remains intact. The client uses the existing generic encrypted item model,
+item sync and account authorization. Encryption operators, protocol versions,
+wire payload envelopes, and backup/import formats are unchanged. These records
+are fork-specific: original Standard Notes servers may reject this type, and
+original clients have no Assistant-history UI for it. The admission tests and
+client payload-validation tests cover the new type without accepting unknown
+strings or deleted records carrying content. This narrow review updates the
+fork content-type pin, not the upstream parity pins.
+
 {% include mermaid.html %}
 
 ```mermaid
