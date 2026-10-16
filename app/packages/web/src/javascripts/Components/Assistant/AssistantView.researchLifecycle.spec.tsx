@@ -9,6 +9,33 @@ import { getDeepResearchAvailability, runDeepResearchForApplication } from '@/As
 import { getResearchModeAvailability } from '@/Assistant/researchModeRunner'
 import AssistantView from './AssistantView'
 import { assistantWorkspaceRetention } from '@/Assistant/assistantWorkspaceRetention'
+jest.mock('@/Assistant/assistantSyncedChats', () => ({
+  AssistantSyncedChats: class {
+    constructor(private application: WebApplication) {}
+    private key() {
+      return `test-synced-chats:${this.application.sessions.getUser()?.uuid}`
+    }
+    async read() {
+      return this.application.storage.getValue(this.key()) ?? []
+    }
+    subscribe() {
+      return () => {}
+    }
+    dispose() {}
+    async updateMetadata(tab: unknown) {
+      const rows = (await this.read()) as { tab: { id: string } }[]
+      const next = rows.filter((row) => row.tab.id !== (tab as { id: string }).id)
+      next.push({ tab } as never)
+      this.application.storage.setValue(this.key(), next)
+    }
+    async delete(id: string) {
+      this.application.storage.setValue(
+        this.key(),
+        ((await this.read()) as { tab: { id: string } }[]).filter((row) => row.tab.id !== id),
+      )
+    }
+  },
+}))
 
 jest.mock('./ConversationPanel', () => ({
   __esModule: true,
@@ -424,7 +451,7 @@ describe('AssistantView research background lifecycle', () => {
     click(container.querySelector('[aria-label="Deep research"]')!)
     typeInto(container.querySelector('textarea[placeholder^="e.g. What have I noted"]')!, 'retained research title')
     await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0))
+      await new Promise((resolve) => setTimeout(resolve, 600))
     })
     expect([...values.values()].some((value) => JSON.stringify(value).includes('"kind":"deep-research"'))).toBe(true)
     await act(async () => root.unmount())

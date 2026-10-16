@@ -7,6 +7,18 @@ import { ApplicationEvent } from '@standardnotes/snjs'
 import { publishAssistantDirective, resetAssistantDirectivesForTests } from '@/Assistant/assistantDirectives'
 import ConversationPanel from './ConversationPanel'
 import AssistantView from './AssistantView'
+jest.mock('@/Assistant/assistantSyncedChats', () => ({
+  AssistantSyncedChats: class {
+    async read() {
+      return []
+    }
+    subscribe() {
+      return () => {}
+    }
+    dispose() {}
+    async updateMetadata() {}
+  },
+}))
 
 jest.mock('./ConversationPanel', () => ({ __esModule: true, default: jest.fn(() => null) }))
 jest.mock('./DeepResearchPanel', () => ({ __esModule: true, default: () => null }))

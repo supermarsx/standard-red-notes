@@ -19,6 +19,8 @@ export type CollectionSelection =
 
 export interface AssistantContextSelection {
   scope: AssistantContextScope
+  /** In-memory, explicitly selected excerpt with its original note provenance. */
+  excerpt?: { noteUuid: string; text: string }
   /** Present only when scope === 'collection'. */
   collection?: CollectionSelection
   /** Present only when scope === 'topic': the free-text query to match notes by. */
@@ -176,7 +178,7 @@ export function assistantContextOwnerKey(
   if (scope === 'open-notes') {
     return application.itemControllerGroup.itemControllers.map((controller) => controller.item?.uuid ?? '').join(':')
   }
-  if (scope !== 'current-note') {
+  if (scope !== 'current-note' && scope !== 'selection') {
     return ''
   }
   return (
@@ -214,6 +216,10 @@ function resolveRawContextSelection(
   application: WebApplication,
   selection: AssistantContextSelection,
 ): RawContextSelection {
+  if (selection.scope === 'selection') {
+    const note = currentNote(application)
+    return { notes: note && selection.excerpt?.noteUuid === note.uuid && selection.excerpt.text.trim() ? [note] : [] }
+  }
   if (selection.scope === 'current-note') {
     const active = currentNote(application)
     return active ? { notes: [active] } : { notes: [] }
@@ -284,6 +290,16 @@ export function resolveContextNotes(
   application: WebApplication,
   selection: AssistantContextSelection,
 ): ResolvedContextNotes {
+  if (selection.scope === 'selection') {
+    const note = currentNote(application)
+    return {
+      notes:
+        note && selection.excerpt?.noteUuid === note.uuid && selection.excerpt.text.trim()
+          ? [{ uuid: note.uuid, title: note.title, text: selection.excerpt.text.slice(0, 8000) }]
+          : [],
+      cappedNoteCount: 0,
+    }
+  }
   const resolved = resolveRawContextSelection(application, selection)
   return resolveFrom(application, resolved.notes, resolved.collectionLabel)
 }
@@ -306,4 +322,31 @@ export function buildContextForSelection(
     omittedNoteCount: built.omittedNoteCount + cappedNoteCount,
     truncated: true,
   }
+}
+
+/** Capture only a native selection inside the current first-party rich-text editor. */
+export function captureAssistantTextSelection(
+  application: WebApplication,
+): AssistantContextSelection['excerpt'] | undefined {
+  const note = currentNote(application)
+  const selected = document.getSelection()
+  if (!note || !selected || selected.isCollapsed || selected.rangeCount === 0) {
+    return undefined
+  }
+  const range = selected.getRangeAt(0)
+  const element =
+    range.commonAncestorContainer.nodeType === Node.ELEMENT_NODE
+      ? (range.commonAncestorContainer as Element)
+      : range.commonAncestorContainer.parentElement
+  const root = element?.closest<HTMLElement>('[data-assistant-note-uuid]')
+  if (
+    !root ||
+    root.dataset.assistantNoteUuid !== note.uuid ||
+    !root.contains(range.startContainer) ||
+    !root.contains(range.endContainer)
+  ) {
+    return undefined
+  }
+  const text = selected.toString().slice(0, 8000)
+  return text.trim() ? { noteUuid: note.uuid, text } : undefined
 }

@@ -21,6 +21,7 @@ const SCOPE_OPTIONS: {
   icon: 'notes' | 'list-bulleted' | 'folder' | 'window' | 'search'
 }[] = [
   { value: 'current-note', label: 'Current note', icon: 'notes' },
+  { value: 'selection', label: 'Selected text only', icon: 'notes' },
   { value: 'open-notes', label: 'Open notes (tabs)', icon: 'window' },
   { value: 'all-notes', label: 'Notebook (all notes)', icon: 'list-bulleted' },
   { value: 'topic', label: 'Topic / search…', icon: 'search' },

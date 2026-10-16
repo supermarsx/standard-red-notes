@@ -1633,6 +1633,11 @@ export class WebApplication extends SNApplication implements WebApplicationInter
     const hasBody = body !== undefined
     try {
       const response = await transport.openAuthenticatedRpcStream({
+        // Only the closed chat-lease commands gain a mutation idempotency key.
+        // Renewals need distinct keys so a cached acquire/renew cannot extend a stale lease.
+        ...(method === 'POST' && /^\/v1\/assistant\/chats\/run-lease\/(acquire|renew|release)$/.test(path)
+          ? { idempotencyKey: crypto.randomUUID() }
+          : {}),
         method,
         path,
         headers: {

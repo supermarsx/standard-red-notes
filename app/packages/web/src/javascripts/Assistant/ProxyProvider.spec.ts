@@ -313,3 +313,13 @@ describe('ProxyProvider automatic profile routing', () => {
     record.mockRestore()
   })
 })
+
+it('attaches only the explicitly supplied chat run proof to a proxy model call', async () => {
+  const proof = { chatId: 'chat', requestId: 'request', leaseId: 'lease', fence: 1 }
+  const postStream = jest.fn(
+    async (_body: unknown, _signal?: AbortSignal) =>
+      ({ ok: false, status: 503, json: async () => ({}), headers: { get: () => null } }) as unknown as Response,
+  )
+  await collect(new ProxyProvider({ provider: '', model: '', postStream, chatRunLease: proof }))
+  expect(postStream.mock.calls[0][0]).toMatchObject({ chatRunLease: proof })
+})

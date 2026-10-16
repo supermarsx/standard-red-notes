@@ -1,6 +1,11 @@
 import { ContentType, SNNote, SNTag } from '@standardnotes/snjs'
 import { WebApplication } from '@/Application/WebApplication'
-import { MAX_CONTEXT_NOTES, resolveContextNoteUuids, resolveContextNotes } from './assistantContextSource'
+import {
+  MAX_CONTEXT_NOTES,
+  resolveContextNoteUuids,
+  resolveContextNotes,
+  buildContextForSelection,
+} from './assistantContextSource'
 
 describe('assistant context authorization scope', () => {
   it('uses the live editor for send-time context even when the list retains a previous active note', () => {
@@ -163,4 +168,29 @@ describe('assistant context authorization scope', () => {
     expect(resolved.collectionLabel).toBe(child.title)
     expect(resolved.notes).toEqual([expect.objectContaining({ uuid: note.uuid })])
   })
+})
+
+it('selection context sends only its explicit excerpt and never falls back to whole note', () => {
+  const note = {
+    uuid: 'note',
+    content_type: ContentType.TYPES.Note,
+    title: 'Source',
+    text: 'WHOLE NOTE SECRET',
+    trashed: false,
+  } as SNNote
+  const application = {
+    isAuthorizedToRenderItem: () => true,
+    itemListController: { activeControllerItem: note },
+  } as unknown as WebApplication
+  const built = buildContextForSelection(application, {
+    scope: 'selection',
+    excerpt: { noteUuid: 'note', text: 'ONLY THIS EXCERPT' },
+  })
+  expect(built.text).toContain('ONLY THIS EXCERPT')
+  expect(built.text).not.toContain('WHOLE NOTE SECRET')
+  expect(buildContextForSelection(application, { scope: 'selection' }).noteCount).toBe(0)
+  expect(
+    buildContextForSelection(application, { scope: 'selection', excerpt: { noteUuid: 'another', text: 'stale' } })
+      .noteCount,
+  ).toBe(0)
 })

@@ -69,6 +69,7 @@ export const persistAssistantNoticeDismissed = (
 
 const isContextScope = (value: string | null): value is AssistantContextScope =>
   value === 'current-note' ||
+  value === 'selection' ||
   value === 'open-notes' ||
   value === 'all-notes' ||
   value === 'topic' ||

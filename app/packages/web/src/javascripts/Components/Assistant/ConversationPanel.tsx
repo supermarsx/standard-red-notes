@@ -20,10 +20,16 @@ import AssistantUsageMeter from './AssistantUsageMeter'
 import AssistantNoticeDismissal from './AssistantNoticeDismissal'
 import { AssistantUsageResponse, TokenWindowUsage } from '@/Assistant/usageMeter'
 import {
+  accumulateChatTokenUsage,
+  EMPTY_CHAT_TOKEN_USAGE,
+  observeProviderTokenUsage,
+} from '@/Assistant/usageMeterProvider'
+import {
   AssistantContextSelection,
   assistantContextOwnerKey,
   buildContextForSelection,
   resolveContextNoteUuids,
+  captureAssistantTextSelection,
 } from '@/Assistant/assistantContextSource'
 import { buildAssistantProvider, getSelectionAIAvailability } from '@/Assistant/selectionActions'
 import {
@@ -72,6 +78,13 @@ import {
   flushAssistantNoteEditors,
 } from '@/Assistant/assistantNoteChanges'
 import AssistantMessageActions from './AssistantMessageActions'
+import type { AssistantSharedChatBinding } from '@/Assistant/assistantSyncedChats'
+import { acquireAssistantChatRun, AssistantChatRunGuard } from '@/Assistant/assistantChatRunLease'
+import {
+  acknowledgeAssistantSharedVersions,
+  reconcileAssistantSharedMessages,
+} from '@/Assistant/assistantSharedHistory'
+import { serializeAssistantProvider } from '@/Assistant/serializedProvider'
 
 export type ToolEntry = {
   id: string
@@ -96,6 +109,47 @@ type UIMessage =
   | { kind: 'user'; id: string; text: string; steered?: boolean }
   | { kind: 'assistant'; id: string; text: string; tools: ToolEntry[]; streaming?: boolean }
   | { kind: 'error'; id: string; text: string }
+
+const hydrateAssistantHistory = (history: PersistedAssistantMessage[]): UIMessage[] =>
+  history.map((message): UIMessage => {
+    if (message.kind === 'assistant') {
+      return {
+        kind: 'assistant',
+        id: message.id,
+        text: message.text,
+        tools: (message.activities ?? []).map((activity) => {
+          const persistedChange = activity.noteChange
+          return {
+            id: activity.id,
+            name: activity.name,
+            args: {},
+            persistedLabel: activity.label,
+            authorization: activity.authorization,
+            outcome: activity.outcome,
+            ...(persistedChange
+              ? {
+                  noteChange: {
+                    noteUuid: persistedChange.noteUuid,
+                    noteTitle: persistedChange.noteTitle,
+                    before: persistedChange.before,
+                    after: persistedChange.after,
+                    patch: persistedChange.patch,
+                    addedLines: persistedChange.addedLines,
+                    removedLines: persistedChange.removedLines,
+                    truncated: persistedChange.truncated,
+                  } as AssistantNoteChange,
+                  noteChangePosition: persistedChange.position,
+                }
+              : {}),
+          }
+        }),
+      }
+    }
+    if (message.kind === 'user') {
+      return { kind: 'user', id: message.id, text: message.text, steered: message.steered }
+    }
+    return { kind: 'error', id: message.id, text: message.text }
+  })
 
 type ConversationPrompt = {
   providerPrompt: string
@@ -182,6 +236,7 @@ type Props = {
   directive?: AssistantChatDirective
   onDirectiveConsumed?: (directiveId: string) => void
   recentChats?: ReactNode
+  sharedChat?: AssistantSharedChatBinding
 }
 
 function ConversationPanelImpl({
@@ -196,57 +251,26 @@ function ConversationPanelImpl({
   directive,
   onDirectiveConsumed,
   recentChats,
+  sharedChat,
 }: Props) {
   const { presentPane } = useResponsiveAppPane()
 
   const initialHistoryRead = useRef(
-    persistenceAllowed
-      ? readAssistantChatHistoryResult(application.storage, accountScope, tabId)
-      : ({ status: 'missing' } as const),
+    sharedChat?.history
+      ? {
+          status: 'found' as const,
+          messages: sharedChat.history.messages,
+          deniedToolNames: sharedChat.history.deniedToolNames,
+        }
+      : persistenceAllowed
+        ? readAssistantChatHistoryResult(application.storage, accountScope, tabId)
+        : ({ status: 'missing' } as const),
   ).current
   const historyReadFailed = initialHistoryRead.status === 'error'
   const [historyPersistenceFailed, setHistoryPersistenceFailed] = useState(historyReadFailed)
   const effectivePersistenceAllowed = persistenceAllowed && !historyPersistenceFailed
   const [messages, setMessages] = useState<UIMessage[]>(() =>
-    (initialHistoryRead.status === 'found' ? initialHistoryRead.messages : []).map((message): UIMessage => {
-      if (message.kind === 'assistant') {
-        return {
-          kind: 'assistant',
-          id: message.id,
-          text: message.text,
-          tools: (message.activities ?? []).map((activity) => {
-            const persistedChange = activity.noteChange
-            return {
-              id: activity.id,
-              name: activity.name,
-              args: {},
-              persistedLabel: activity.label,
-              authorization: activity.authorization,
-              outcome: activity.outcome,
-              ...(persistedChange
-                ? {
-                    noteChange: {
-                      noteUuid: persistedChange.noteUuid,
-                      noteTitle: persistedChange.noteTitle,
-                      before: persistedChange.before,
-                      after: persistedChange.after,
-                      patch: persistedChange.patch,
-                      addedLines: persistedChange.addedLines,
-                      removedLines: persistedChange.removedLines,
-                      truncated: persistedChange.truncated,
-                    } as AssistantNoteChange,
-                    noteChangePosition: persistedChange.position,
-                  }
-                : {}),
-            }
-          }),
-        }
-      }
-      if (message.kind === 'user') {
-        return { kind: 'user', id: message.id, text: message.text, steered: message.steered }
-      }
-      return { kind: 'error', id: message.id, text: message.text }
-    }),
+    hydrateAssistantHistory(initialHistoryRead.status === 'found' ? initialHistoryRead.messages : []),
   )
   const [input, setInput] = useState('')
   const [isRunning, setIsRunning] = useState(false)
@@ -255,6 +279,11 @@ function ConversationPanelImpl({
     fiveHour?: TokenWindowUsage
     weekly?: TokenWindowUsage
   } | null>(null)
+  const [chatTokenUsage, setChatTokenUsage] = useState(EMPTY_CHAT_TOKEN_USAGE)
+  useEffect(() => {
+    setChatTokenUsage(EMPTY_CHAT_TOKEN_USAGE)
+    setTokenWindows(null)
+  }, [accountScope])
   const [queue, setQueue] = useState<ConversationPrompt[]>([])
   const [todos, setTodos] = useState<TodoItem[]>([])
   const [noticeStoredDismissed, setNoticeStoredDismissed] = useState(() => readAssistantNoticeDismissed(accountScope))
@@ -306,6 +335,12 @@ function ConversationPanelImpl({
   } | null>(null)
   const [safetyReview, setSafetyReview] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
+  const runLeaseRef = useRef<AssistantChatRunGuard | null>(null)
+  const sharedChatRef = useRef(sharedChat)
+  sharedChatRef.current = sharedChat
+  const sharedDirtyRef = useRef(false)
+  const sharedDirtyIdsRef = useRef(new Map<string, number>())
+  const sharedLocalRevisionRef = useRef(0)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   // Mirror of `messages` kept in sync synchronously so a queued run started from
   // the previous run's finally block builds history from the latest transcript.
@@ -358,6 +393,25 @@ function ConversationPanelImpl({
   const sessionEpochRef = useRef(0)
   const observedPrincipalRef = useRef(captureAssistantSessionPrincipal(application.sessions))
 
+  useEffect(() => {
+    const incoming = sharedChat?.history
+    if (!incoming) {
+      return
+    }
+    const restored = hydrateAssistantHistory(incoming.messages)
+    const local = messagesRef.current
+    const merged = reconcileAssistantSharedMessages(restored, local, new Set(sharedDirtyIdsRef.current.keys()))
+    if (JSON.stringify(local) !== JSON.stringify(merged)) {
+      messagesRef.current = merged
+      setMessages(merged)
+    }
+    for (const name of incoming.deniedToolNames) {
+      if (KNOWN_ASSISTANT_TOOL_NAMES.has(name)) {
+        sessionToolDecisionsRef.current.set(name, false)
+      }
+    }
+  }, [sharedChat?.history])
+
   const markHistoryPersistenceFailed = useCallback(() => {
     persistenceAllowedRef.current = false
     persistableHistoryRef.current = null
@@ -367,7 +421,21 @@ function ConversationPanelImpl({
   }, [])
 
   const setMessagesSynced = useCallback((updater: (prev: UIMessage[]) => UIMessage[]) => {
+    const previous = new Map(messagesRef.current.map((message) => [message.id, JSON.stringify(message)]))
     const next = updater(messagesRef.current)
+    const revision = ++sharedLocalRevisionRef.current
+    const nextIds = new Set(next.map((message) => message.id))
+    for (const message of next) {
+      if (previous.get(message.id) !== JSON.stringify(message)) {
+        sharedDirtyIdsRef.current.set(message.id, revision)
+      }
+    }
+    for (const id of previous.keys()) {
+      if (!nextIds.has(id)) {
+        sharedDirtyIdsRef.current.set(id, revision)
+      }
+    }
+    sharedDirtyRef.current = sharedDirtyIdsRef.current.size > 0
     messagesRef.current = next
     setMessages(next)
   }, [])
@@ -462,10 +530,13 @@ function ConversationPanelImpl({
   const writeChatHistory = useCallback(async () => {
     const history = persistableHistoryRef.current
     const persist = runPersistenceRef.current
-    if (!history || !persistenceAllowedRef.current || !persist) {
+    const shared = sharedChatRef.current
+    if (!shared && (!history || !persistenceAllowedRef.current || !persist)) {
       return
     }
-    const latestMessages: PersistedAssistantMessage[] = messagesRef.current.map((message) => {
+    const checkpointSource = messagesRef.current
+    const dirtyVersions = new Map(sharedDirtyIdsRef.current)
+    const latestMessages: PersistedAssistantMessage[] = checkpointSource.map((message) => {
       if (message.kind === 'assistant') {
         return {
           kind: message.kind,
@@ -491,12 +562,41 @@ function ConversationPanelImpl({
       }
       return message
     })
+    if (shared) {
+      if (!sharedDirtyRef.current || !shared.ready) {
+        return
+      }
+      if (runLeaseRef.current && !runLeaseRef.current.isCurrent()) {
+        throw new Error('Chat generation ownership expired before checkpointing.')
+      }
+      const acknowledged = await shared.checkpoint(
+        latestMessages,
+        [...sessionToolDecisionsRef.current.entries()]
+          .filter(([, decision]) => decision === false)
+          .map(([name]) => name),
+      )
+      acknowledgeAssistantSharedVersions(sharedDirtyIdsRef.current, dirtyVersions)
+      sharedDirtyRef.current = sharedDirtyIdsRef.current.size > 0
+      if (acknowledged && mountedRef.current && sharedChatRef.current) {
+        const current = messagesRef.current
+        const merged = reconcileAssistantSharedMessages(
+          hydrateAssistantHistory(acknowledged.messages),
+          current,
+          new Set(sharedDirtyIdsRef.current.keys()),
+        )
+        if (JSON.stringify(current) !== JSON.stringify(merged)) {
+          messagesRef.current = merged
+          setMessages(merged)
+        }
+      }
+      return
+    }
     try {
-      const persisted = await persist(() =>
+      const persisted = await persist!(() =>
         persistAssistantChatHistoryStrict(
           application.storage,
-          history.accountScope,
-          history.tabId,
+          history!.accountScope,
+          history!.tabId,
           latestMessages,
           [...sessionToolDecisionsRef.current.entries()]
             .filter(([, decision]) => decision === false)
@@ -583,6 +683,16 @@ function ConversationPanelImpl({
       const expectedDurableWrite = Boolean(
         persistenceAllowedRef.current && persistableHistoryRef.current && runPersistenceRef.current,
       )
+      if (sharedChatRef.current?.removeMessage) {
+        try {
+          await sharedChatRef.current.removeMessage(messageId)
+        } catch {
+          await application.alerts.alert(
+            'The message could not be removed from synced history. Try again when the connection is available.',
+          )
+          return
+        }
+      }
       setMessagesSynced((current) => current.filter((candidate) => candidate.id !== messageId))
       const persisted = await flushChatHistory()
       if (expectedDurableWrite && !persisted) {
@@ -597,7 +707,7 @@ function ConversationPanelImpl({
 
   useEffect(() => {
     persistableHistoryRef.current = effectivePersistenceAllowed ? { accountScope, tabId } : null
-    if (effectivePersistenceAllowed) {
+    if (effectivePersistenceAllowed || sharedChatRef.current) {
       historyCheckpointRef.current!.schedule()
     }
   }, [accountScope, effectivePersistenceAllowed, messages, tabId])
@@ -631,7 +741,7 @@ function ConversationPanelImpl({
 
   const handleContextChange = useCallback(
     (next: AssistantContextSelection) => {
-      setContextSelection(next)
+      setContextSelection((previous) => ({ ...next, excerpt: previous.excerpt }))
       persistAssistantContextScope(accountScope, next.scope)
     },
     [accountScope],
@@ -793,7 +903,30 @@ function ConversationPanelImpl({
   // runPrompt separately builds a fresh context exactly once at send time.
   const contextOwnerKey = assistantContextOwnerKey(application, contextSelection.scope)
   useEffect(() => {
-    if (!isActive || !['current-note', 'open-notes'].includes(contextSelection.scope)) {
+    if (!isActive) {
+      return
+    }
+    const capture = () => {
+      const excerpt = captureAssistantTextSelection(application)
+      const anchor = document.getSelection()?.anchorNode
+      const element = anchor?.nodeType === Node.ELEMENT_NODE ? (anchor as Element) : anchor?.parentElement
+      const insideEditor = Boolean(element?.closest('[data-assistant-note-uuid]'))
+      if (excerpt || insideEditor) {
+        setContextSelection((previous) => {
+          if (previous.excerpt?.noteUuid === excerpt?.noteUuid && previous.excerpt?.text === excerpt?.text) {
+            return previous
+          }
+          return { ...previous, excerpt }
+        })
+      }
+    }
+    capture()
+    document.addEventListener('selectionchange', capture)
+    return () => document.removeEventListener('selectionchange', capture)
+  }, [application, isActive, contextOwnerKey])
+
+  useEffect(() => {
+    if (!isActive || !['current-note', 'open-notes', 'selection'].includes(contextSelection.scope)) {
       return
     }
     let previous = contextOwnerKey
@@ -834,6 +967,8 @@ function ConversationPanelImpl({
           const accountChanged = !assistantSessionPrincipalMatches(observedPrincipalRef.current, nextPrincipal)
           observedPrincipalRef.current = nextPrincipal
           if (event === ApplicationEvent.KeyStatusChanged || accountChanged) {
+            setChatTokenUsage(EMPTY_CHAT_TOKEN_USAGE)
+            setTokenWindows(null)
             // Account changes and root-key changes are hard privacy boundaries.
             sessionEpochRef.current += 1
             queueRef.current = []
@@ -873,8 +1008,18 @@ function ConversationPanelImpl({
       setTokenWindows(null)
       return
     }
+    const requestEpoch = sessionEpochRef.current
+    const requestPrincipal = captureAssistantSessionPrincipal(application.sessions)
     try {
       const result = await application.assistantConfigRequest<AssistantUsageResponse>('/v1/assistant/usage')
+      if (
+        !mountedRef.current ||
+        requestEpoch !== sessionEpochRef.current ||
+        !assistantSessionPrincipalMatches(requestPrincipal, captureAssistantSessionPrincipal(application.sessions)) ||
+        application.getPreference(PrefKey.AssistantConnectionMode, 'direct') !== 'proxy'
+      ) {
+        return
+      }
       // Token windows are only present on servers that ship token metering; older
       // servers omit them and the meter simply hides.
       if (result?.tokens && (result.tokens.fiveHour || result.tokens.weekly)) {
@@ -913,7 +1058,8 @@ function ConversationPanelImpl({
       const runSessionEpoch = sessionEpochRef.current
       const isSessionCurrent = () =>
         runSessionEpoch === sessionEpochRef.current &&
-        assistantSessionPrincipalMatches(runPrincipal, captureAssistantSessionPrincipal(application.sessions))
+        assistantSessionPrincipalMatches(runPrincipal, captureAssistantSessionPrincipal(application.sessions)) &&
+        (!runLeaseRef.current || runLeaseRef.current.isCurrent())
       if (!runPrincipal.valid || !isSessionCurrent()) {
         setMessagesSynced((prev) => [
           ...prev,
@@ -949,7 +1095,7 @@ function ConversationPanelImpl({
         return
       }
 
-      const confirmBeforeWrite = application.getPreference(PrefKey.AssistantConfirmBeforeWrite, true)
+      let confirmBeforeWrite = application.getPreference(PrefKey.AssistantConfirmBeforeWrite, true)
       const activeContextSelection: AssistantContextSelection = request.directive
         ? {
             scope: 'collection',
@@ -996,11 +1142,12 @@ function ConversationPanelImpl({
       // Editor directives authorize disclosure of the visible selection only.
       // The source UUID validates that attachment but does not grant a model
       // permission to read or mutate the rest of the note through tools.
-      const selectedNoteUuids = request.directive ? new Set<string>() : resolvedNoteUuids
+      const selectedNoteUuids =
+        request.directive || activeContextSelection.scope === 'selection' ? new Set<string>() : resolvedNoteUuids
       // A selection directive visibly attaches only the selected excerpt. Its
       // note UUID validates the source only; it grants neither model context nor
       // tool access to the rest of that note.
-      const builtContext = request.directive
+      let builtContext = request.directive
         ? buildContextForSelection(application, {
             scope: 'collection',
             collection: { type: 'notes', uuids: [] },
@@ -1011,6 +1158,82 @@ function ConversationPanelImpl({
       achievements.increment(METRICS.aiAssistantMessages)
       runIntentRef.current = promptText
 
+      const controller = new AbortController()
+      abortRef.current = controller
+      setIsRunning(true)
+      const shared = sharedChatRef.current
+      if (shared) {
+        try {
+          if (!shared.ready) {
+            throw new Error('Your encrypted chat history is still loading. Try again shortly.')
+          }
+          const guard = await acquireAssistantChatRun(application, tabId, controller)
+          runLeaseRef.current = guard
+          const canonical = await shared.refresh()
+          if (shared.history && !canonical) {
+            throw new Error('This chat was deleted on another device.')
+          }
+          for (const noteUuid of resolvedNoteUuids) {
+            await flushAssistantNoteEditors(application, noteUuid)
+          }
+          const freshScope = new Set(resolveContextNoteUuids(application, activeContextSelection))
+          if (
+            !isSessionCurrent() ||
+            freshScope.size !== resolvedNoteUuids.size ||
+            [...freshScope].some((uuid) => !resolvedNoteUuids.has(uuid))
+          ) {
+            throw new Error(
+              'The selected note context changed while this chat was connecting. Review the context and send again.',
+            )
+          }
+          expectedNoteSnapshots.clear()
+          for (const noteUuid of freshScope) {
+            const selected = application.items.findItem<SNNote>(noteUuid)
+            if (selected && isNote(selected) && application.isAuthorizedToRenderItem(selected)) {
+              expectedNoteSnapshots.set(noteUuid, captureAssistantNoteSnapshot(selected))
+            }
+          }
+          builtContext = request.directive
+            ? buildContextForSelection(application, { scope: 'collection', collection: { type: 'notes', uuids: [] } })
+            : buildContextForSelection(application, activeContextSelection)
+          confirmBeforeWrite = application.getPreference(PrefKey.AssistantConfirmBeforeWrite, true)
+          if (canonical && isSessionCurrent()) {
+            const restored = hydrateAssistantHistory(canonical.messages)
+            messagesRef.current = restored
+            setMessages(restored)
+            for (const name of canonical.deniedToolNames) {
+              sessionToolDecisionsRef.current.set(name, false)
+            }
+          }
+          if (!isSessionCurrent() || controller.signal.aborted) {
+            await guard.release()
+            runLeaseRef.current = null
+            if (abortRef.current === controller) {
+              abortRef.current = null
+            }
+            setIsRunning(false)
+            return
+          }
+        } catch (error) {
+          await runLeaseRef.current?.release()
+          runLeaseRef.current = null
+          if (abortRef.current === controller) {
+            abortRef.current = null
+          }
+          setIsRunning(false)
+          if (isSessionCurrent()) {
+            setMessagesSynced((previous) => [
+              ...previous,
+              {
+                kind: 'error',
+                id: newId(),
+                text: error instanceof Error ? error.message : 'Could not reserve this chat.',
+              },
+            ])
+          }
+          return
+        }
+      }
       const assistantId = newId()
 
       // History is the transcript BEFORE this prompt (read from the synced ref so
@@ -1033,17 +1256,21 @@ function ConversationPanelImpl({
         { kind: 'user', id: newId(), text: promptText },
         { kind: 'assistant', id: assistantId, text: '', tools: [], streaming: true },
       ]
-      messagesRef.current = messagesWithTurn
-      setMessages(messagesWithTurn)
+      setMessagesSynced(() => messagesWithTurn)
       setTodos([])
       setSafetyReview(null)
       setIsRunning(true)
-      const controller = new AbortController()
-      abortRef.current = controller
       // Make the user's turn durable before the provider request begins; later
       // streaming changes are checkpointed on a bounded throttle.
-      await flushChatHistory()
-      if (!isSessionCurrent() || controller.signal.aborted || abortRef.current !== controller) {
+      const initiallyPersisted = await flushChatHistory()
+      if (
+        (shared && !initiallyPersisted) ||
+        !isSessionCurrent() ||
+        controller.signal.aborted ||
+        abortRef.current !== controller
+      ) {
+        await runLeaseRef.current?.release()
+        runLeaseRef.current = null
         if (abortRef.current === controller) {
           abortRef.current = null
         }
@@ -1087,7 +1314,15 @@ function ConversationPanelImpl({
         }),
       )
 
-      const agentProvider: Provider = buildAssistantProvider(application, controller.signal)
+      const baseProvider = buildAssistantProvider(application, controller.signal, runLeaseRef.current?.proof)
+      const agentProvider: Provider = observeProviderTokenUsage(
+        runLeaseRef.current ? serializeAssistantProvider(baseProvider) : baseProvider,
+        (usage) => {
+          if (mountedRef.current && isSessionCurrent()) {
+            setChatTokenUsage((current) => accumulateChatTokenUsage(current, usage))
+          }
+        },
+      )
       preflightProviderRef.current = agentProvider
 
       // Sub-agent runner backing the "delegate" tool: a focused nested run that
@@ -1283,6 +1518,8 @@ function ConversationPanelImpl({
         // awaiting storage, and the older block can clear/consume the new run's
         // refs or queue.
         await flushChatHistory()
+        await runLeaseRef.current?.release()
+        runLeaseRef.current = null
         if (abortRef.current === controller) {
           abortRef.current = null
           preflightProviderRef.current = null
@@ -1308,6 +1545,7 @@ function ConversationPanelImpl({
     },
     [
       application,
+      tabId,
       flushChatHistory,
       presentPane,
       refreshUsage,
@@ -1526,17 +1764,17 @@ function ConversationPanelImpl({
       </div>
 
       <div className="border-border bg-contrast shrink-0 border-t px-3 py-2">
-        <div className="mb-2 flex flex-col gap-1.5">
+        <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1">
           <ContextSelector
             application={application}
             selection={contextSelection}
             onChange={handleContextChange}
             disabled={isRunning}
           />
-          <label className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs">
-            <span className="text-passive-1 shrink-0 text-[11px] font-medium">Tool permissions</span>
+          <label className="flex max-w-full min-w-0 flex-wrap items-center gap-1 text-xs">
+            <span className="text-passive-1 shrink-0 text-[11px] font-medium">Tools</span>
             <select
-              className="border-border bg-default text-text max-w-full min-w-0 rounded border px-2 py-1 text-xs"
+              className="border-border bg-default text-text max-w-full min-w-0 rounded border px-1.5 py-0.5 text-[11px]"
               value={toolPermissionMode}
               onChange={(event) => {
                 const next = event.target.value as typeof toolPermissionMode
@@ -1627,13 +1865,12 @@ function ConversationPanelImpl({
             <Button primary label="Send" onClick={handleSend} disabled={!input.trim() || !isConfigured} />
           )}
         </div>
-        {tokenWindows && (
-          <AssistantUsageMeter
-            fiveHour={tokenWindows.fiveHour}
-            weekly={tokenWindows.weekly}
-            className="border-border mt-2 border-t pt-2"
-          />
-        )}
+        <AssistantUsageMeter
+          fiveHour={tokenWindows?.fiveHour}
+          weekly={tokenWindows?.weekly}
+          chat={chatTokenUsage}
+          className="border-border mt-2 border-t pt-2"
+        />
       </div>
       {noticeDismissalOpen && (
         <AssistantNoticeDismissal onSelect={dismissNotice} onClose={() => setNoticeDismissalOpen(false)} />

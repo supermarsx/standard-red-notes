@@ -605,6 +605,11 @@ const parseStoredHistory = (value: unknown): ParsedHistory | undefined => {
   return undefined
 }
 
+/** Shared encrypted-item storage uses the same bounded transcript sanitizer as local history. */
+export function sanitizeAssistantChatMessages(messages: unknown[]): PersistedAssistantMessage[] {
+  return cap(messages, true, true, true)
+}
+
 export type AssistantChatHistoryReadResult =
   | { status: 'found'; messages: PersistedAssistantMessage[]; deniedToolNames: string[] }
   | { status: 'missing' }

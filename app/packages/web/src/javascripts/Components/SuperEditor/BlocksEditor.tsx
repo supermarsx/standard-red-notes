@@ -356,6 +356,7 @@ export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
                 <div className="editor z-0 overflow-hidden" ref={onRef}>
                   <ContentEditable
                     id={SuperEditorContentId}
+                    data-assistant-note-uuid={noteUuid}
                     className={classNames(
                       'ContentEditable__root relative overflow-y-auto p-4 text-(length:--font-size) leading-(--line-height) focus:shadow-none focus:outline-none',
                       className,

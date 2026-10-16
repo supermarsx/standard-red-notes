@@ -3,6 +3,7 @@ import { WebApplication } from '@/Application/WebApplication'
 import { DirectProvider } from './DirectProvider'
 import { directEndpointConfigurationError } from './OpenAICompatibleEndpoint'
 import { ProxyProvider } from './ProxyProvider'
+import type { AssistantChatRunProof } from './assistantChatRunLease'
 import { Provider } from './types'
 import {
   composeSystemPromptWithPersona,
@@ -494,7 +495,11 @@ export function resolveActiveProfileOverrides(application: WebApplication): {
   }
 }
 
-export function buildAssistantProvider(application: WebApplication, signal?: AbortSignal): Provider {
+export function buildAssistantProvider(
+  application: WebApplication,
+  signal?: AbortSignal,
+  chatRunLease?: AssistantChatRunProof,
+): Provider {
   const mode = application.getPreference(PrefKey.AssistantConnectionMode, 'direct')
   const overrides = resolveActiveProfileOverrides(application)
   if (mode === 'proxy') {
@@ -507,6 +512,7 @@ export function buildAssistantProvider(application: WebApplication, signal?: Abo
       provider: '',
       model: '',
       signal,
+      chatRunLease,
       postStream: (body, sig) => application.assistantStreamRequest('/v1/assistant/stream', body, sig),
     })
   }

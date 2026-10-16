@@ -4,6 +4,7 @@ import { createRoot, Root } from 'react-dom/client'
 import { buildContextForSelection } from '@/Assistant/assistantContextSource'
 import { useResponsiveAppPane } from '../Panes/ResponsivePaneProvider'
 import ConversationPanel from './ConversationPanel'
+import type { AssistantSharedChatBinding } from '@/Assistant/assistantSyncedChats'
 
 jest.mock('@/Assistant/assistantContextSource', () => ({
   ...jest.requireActual('@/Assistant/assistantContextSource'),
@@ -20,6 +21,14 @@ jest.mock('@/Assistant/assistantContextSource', () => ({
   resolveContextNoteUuids: jest.fn(() => []),
 }))
 jest.mock('../Panes/ResponsivePaneProvider', () => ({ useResponsiveAppPane: jest.fn() }))
+jest.mock('./AssistantMessageActions', () => ({
+  __esModule: true,
+  default: ({
+    children,
+  }: {
+    children: (ref: import('react').RefObject<HTMLDivElement | null>) => import('react').ReactNode
+  }) => <div>{children({ current: null })}</div>,
+}))
 jest.mock('./ContextSelector', () => ({ __esModule: true, default: () => <div data-context-selector /> }))
 jest.mock('./AssistantUsageMeter', () => ({ __esModule: true, default: () => null }))
 jest.mock('./AssistantNoticeDismissal', () => ({
@@ -80,7 +89,7 @@ describe('ConversationPanel context preview cadence', () => {
     },
   }
 
-  const renderPanel = (isActive = true) => {
+  const renderPanel = (isActive = true, sharedChat?: AssistantSharedChatBinding) => {
     act(() => {
       root.render(
         <ConversationPanel
@@ -89,6 +98,7 @@ describe('ConversationPanel context preview cadence', () => {
           accountScope="anonymous:test-app:dock:device-one"
           persistenceAllowed={false}
           isActive={isActive}
+          sharedChat={sharedChat}
         />,
       )
     })
@@ -237,6 +247,39 @@ describe('ConversationPanel context preview cadence', () => {
       expect(container.querySelector('[aria-label="Hide AI privacy reminder"]')).toBeNull()
       act(() => jest.advanceTimersByTime(15 * 24 * 60 * 60 * 1000))
       expect(container.querySelector('[aria-label="Hide AI privacy reminder"]')).not.toBeNull()
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+  it('hydrates live remote messages without echoing them into a follower checkpoint', async () => {
+    jest.useFakeTimers()
+    try {
+      const checkpoint = jest.fn(async () => undefined)
+      const binding: AssistantSharedChatBinding = {
+        ready: true,
+        checkpoint,
+        refresh: async () => undefined,
+        history: {
+          tab: { id: 'chat-one', title: 'Shared', userRenamed: false },
+          messages: [{ id: 'remote-message', kind: 'user', text: 'First remote text' }],
+          deniedToolNames: [],
+        },
+      }
+      renderPanel(true, binding)
+      expect(container.textContent).toContain('First remote text')
+      renderPanel(true, {
+        ...binding,
+        history: {
+          ...binding.history!,
+          messages: [{ id: 'remote-message', kind: 'user', text: 'Updated on another device' }],
+        },
+      })
+      expect(container.textContent).toContain('Updated on another device')
+      expect(container.textContent).not.toContain('First remote text')
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(2000)
+      })
+      expect(checkpoint).not.toHaveBeenCalled()
     } finally {
       jest.useRealTimers()
     }
