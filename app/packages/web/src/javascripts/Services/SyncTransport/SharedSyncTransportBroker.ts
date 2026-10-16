@@ -35,6 +35,7 @@ const BROADCAST = new Set([
   'DIAL_HOLD_ARMED',
   'DIAL_HOLD_ENDED',
   'SESSION_NOT_AUTHORIZED',
+  'LOCAL_STORAGE_HEALTH',
 ])
 
 /** One authenticated session, one runtime, one durable journal/socket owner. */
@@ -298,7 +299,12 @@ export class SharedSyncTransportBroker {
       this.revocationSucceeded = true
     }
     if (BROADCAST.has(message.type)) {
-      if (message.type === 'STATE' || message.type === 'NEGOTIATED' || message.type === 'SAVE_LANE') {
+      if (
+        message.type === 'STATE' ||
+        message.type === 'NEGOTIATED' ||
+        message.type === 'SAVE_LANE' ||
+        message.type === 'LOCAL_STORAGE_HEALTH'
+      ) {
         this.health.set(message.type, message)
       }
       if (message.type === 'SESSION_NOT_AUTHORIZED') {

@@ -11,7 +11,7 @@ class FakeIdbRequest<T> {
   onsuccess: (() => void) | null = null
   onerror: (() => void) | null = null
   result!: T
-  error: { message: string } | null = null
+  error: { message: string; name?: string } | null = null
 }
 
 class FakeStore {
@@ -84,6 +84,12 @@ class FakeTransaction {
   onerror: (() => void) | null = null
   onabort: (() => void) | null = null
   error: Error | null = null
+  private readonly errorListeners: Array<(event: Event) => void> = []
+  addEventListener(type: string, listener: (event: Event) => void): void {
+    if (type === 'abort') {
+      this.errorListeners.push(listener)
+    }
+  }
 
   constructor(
     private readonly rows: Map<string, Lease>,
@@ -92,7 +98,14 @@ class FakeTransaction {
     // A real transaction completes after its last request settles; a macrotask
     // is the closest ordering available here and leaves the awaits in `database()`
     // time to attach their handlers.
-    setTimeout(() => (this.error ? this.onabort?.() : this.oncomplete?.()), 0)
+    setTimeout(() => {
+      if (this.error) {
+        this.errorListeners.forEach((listener) => listener({ target: this } as unknown as Event))
+        this.onabort?.()
+      } else {
+        this.oncomplete?.()
+      }
+    }, 0)
   }
 
   objectStore(name: string): FakeStore | FakeCommandStore {
@@ -144,6 +157,7 @@ class FakeFactory {
   failNextOpen = false
   blockNextOpen = false
   closeOnOpen = false
+  openFailureName = 'UnknownError'
   rows = new Map<string, Lease>()
   commands = new Map<string, SyncOutboxRecord>()
   databases: FakeDatabase[] = []
@@ -170,7 +184,7 @@ class FakeFactory {
         return
       }
       if (failing) {
-        request.error = { message: 'QuotaExceededError' }
+        request.error = { message: 'Could not open database', name: this.openFailureName }
         request.onerror?.()
         return
       }
@@ -254,6 +268,44 @@ describe('IndexedDbSyncOutbox', () => {
     // rejection for the life of the worker.
     await expect(outbox.heldByAnotherOwner(SCOPE, SESSION, 'owner-1', 0)).resolves.toBe(false)
     expect(factory.opens).toBe(2)
+  })
+
+  it('reports bounded storage health for quota failures and successful command writes, never just lease reads', async () => {
+    const factory = new FakeFactory()
+    const report = jest.fn()
+    const outbox = new IndexedDbSyncOutbox(factory as unknown as IDBFactory, report)
+    factory.failNextOpen = true
+    factory.openFailureName = 'QuotaExceededError'
+    await expect(outbox.oldest(SESSION)).rejects.toBeInstanceOf(SyncOutboxUnavailableError)
+    expect(report).toHaveBeenLastCalledWith('quota-exceeded')
+    report.mockClear()
+    await outbox.heldByAnotherOwner(SCOPE, SESSION, 'owner', 0)
+    expect(report).not.toHaveBeenCalled()
+    factory.databases[0].abortNextTransaction = new DOMException('Storage quota exceeded', 'QuotaExceededError')
+    await expect(outbox.oldest(SESSION)).rejects.toMatchObject({ name: 'QuotaExceededError' })
+    expect(report).toHaveBeenLastCalledWith('quota-exceeded')
+    await outbox.put(command('new', 1, 1))
+    expect(report).toHaveBeenLastCalledWith('write-ok')
+    report.mockImplementation(() => {
+      throw new Error('warning callback failed')
+    })
+    await expect(outbox.put(command('next', 2, 2))).resolves.toBeUndefined()
+    outbox.close()
+  })
+
+  it('reports a synchronous quota failure opening IndexedDB without changing the thrown error', async () => {
+    const error = new DOMException('Storage quota exceeded', 'QuotaExceededError')
+    const report = jest.fn()
+    const outbox = new IndexedDbSyncOutbox(
+      {
+        open: () => {
+          throw error
+        },
+      } as unknown as IDBFactory,
+      report,
+    )
+    await expect(outbox.oldest(SESSION)).rejects.toBe(error)
+    expect(report).toHaveBeenCalledWith('quota-exceeded')
   })
 
   it('reports an upgrade blocked by another tab as the store being unavailable', async () => {

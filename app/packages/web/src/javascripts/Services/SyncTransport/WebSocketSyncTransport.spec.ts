@@ -1,6 +1,7 @@
 import type { AccountSyncTransportRequest } from '@standardnotes/services'
 import type { HttpResponse, RawSyncResponse } from '@standardnotes/snjs'
 import { safeErrorLogMetadata } from '@standardnotes/utils'
+import { reportLocalStorageHealth } from '@/Utils/LocalStorageHealth'
 import { LANE_LEDGER_TRANSITION_CAPACITY } from './LaneDegradationLedger'
 import { SharedSyncTransportBroker } from './SharedSyncTransportBroker'
 import { MainToSyncWorkerMessage, SyncWorkerToMainMessage } from './syncTransportProtocol'
@@ -9,6 +10,8 @@ import {
   SyncTransportControlPlane,
   WebSocketSyncTransport,
 } from './WebSocketSyncTransport'
+
+jest.mock('@/Utils/LocalStorageHealth', () => ({ reportLocalStorageHealth: jest.fn() }))
 
 class FakeWorker {
   onmessage: ((event: MessageEvent<SyncWorkerToMainMessage>) => void) | null = null
@@ -59,6 +62,7 @@ describe('WebSocketSyncTransport', () => {
   let controlPlane: jest.Mocked<SyncTransportControlPlane>
 
   beforeEach(() => {
+    jest.mocked(reportLocalStorageHealth).mockClear()
     worker = new FakeWorker()
     controlPlane = {
       getCapabilities: jest.fn().mockResolvedValue({
@@ -157,6 +161,41 @@ describe('WebSocketSyncTransport', () => {
     expect(replacement.terminated).toBe(false)
     replacement.emit({ type: 'SHUTDOWN_COMPLETE' })
     expect(replacement.terminated).toBe(true)
+  })
+
+  it('reports local storage health only from the current worker', async () => {
+    const replacement = new FakeWorker()
+    const previous = worker
+    let created = false
+    const transport = createTransport({
+      workerFactory: () => {
+        if (created) return replacement
+        created = true
+        return previous
+      },
+    })
+    const pending = transport.openAuthenticatedRpcStream({ method: 'GET', path: '/v1/workflows/status' })
+    const rejected = expect(pending).rejects.toMatchObject({ code: 'WORKER_ERROR' })
+    await flush()
+    const oldMessage = previous.onmessage!
+    previous.fail()
+    await rejected
+    const next = transport.openAuthenticatedRpcStream({ method: 'GET', path: '/v1/workflows/status' })
+    const nextRejected = expect(next).rejects.toMatchObject({ code: 'SHUTDOWN' })
+    await flush()
+    oldMessage({
+      data: { type: 'LOCAL_STORAGE_HEALTH', code: 'quota-exceeded' },
+    } as MessageEvent<SyncWorkerToMainMessage>)
+    expect(reportLocalStorageHealth).not.toHaveBeenCalled()
+    replacement.emit({ type: 'LOCAL_STORAGE_HEALTH', code: 'database-unavailable' })
+    replacement.emit({ type: 'LOCAL_STORAGE_HEALTH', code: 'write-ok' })
+    expect(jest.mocked(reportLocalStorageHealth).mock.calls).toEqual([
+      ['database-unavailable', 'outbox'],
+      ['write-ok', 'outbox'],
+    ])
+    transport.deinit()
+    replacement.emit({ type: 'SHUTDOWN_COMPLETE' })
+    await nextRejected
   })
 
   it('arms graceful retirement before posting shutdown, including an immediate acknowledgment', async () => {

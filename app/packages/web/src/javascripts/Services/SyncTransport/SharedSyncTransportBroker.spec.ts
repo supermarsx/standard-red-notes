@@ -32,6 +32,23 @@ describe('shared authenticated socket broker', () => {
     await broker.receive('b', b, { type: 'BROKER_ATTACH', sessionScope: scope, revision: 'build' })
   })
 
+  it('broadcasts local storage health to current clients and replays the latest recovery state to late clients', async () => {
+    const failure: SyncWorkerToMainMessage = { type: 'LOCAL_STORAGE_HEALTH', code: 'quota-exceeded' }
+    broker.publish(failure)
+    expect(last(a)).toEqual(failure)
+    expect(last(b)).toEqual(failure)
+    const late = { postMessage: jest.fn() }
+    await broker.receive('late', late, { type: 'BROKER_ATTACH', sessionScope: scope, revision: 'build' })
+    expect(last(late)).toEqual(failure)
+    const recovered: SyncWorkerToMainMessage = { type: 'LOCAL_STORAGE_HEALTH', code: 'write-ok' }
+    broker.publish(recovered)
+    expect(last(a)).toEqual(recovered)
+    expect(last(late)).toEqual(recovered)
+    const later = { postMessage: jest.fn() }
+    await broker.receive('later', later, { type: 'BROKER_ATTACH', sessionScope: scope, revision: 'build' })
+    expect(last(later)).toEqual(recovered)
+  })
+
   it('isolates colliding tab request IDs and fairly queues both notes through one runtime', async () => {
     const request = (note: string): MainToSyncWorkerMessage => ({
       type: 'EXECUTE',

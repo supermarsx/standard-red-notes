@@ -1,13 +1,9 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { isString, AlertService, uniqueArray } from '@standardnotes/snjs'
+import { reportLocalStorageHealth } from '@/Utils/LocalStorageHealth'
 
 const STORE_NAME = 'items'
 const READ_WRITE = 'readwrite'
-
-const OUT_OF_SPACE =
-  'Unable to save changes locally because your device is out of space. ' +
-  'Please free up some disk space and try again, otherwise, your data may end ' +
-  'up in an inconsistent state.'
 
 const DB_DELETION_BLOCKED =
   'Your browser is blocking Standard Red Notes from deleting the local database. ' +
@@ -140,7 +136,9 @@ export class Database {
     return new Promise((resolve, reject) => {
       request.onerror = (event) => {
         const target = event.target as any
-        if (target.errorCode) {
+        if ((target.error ?? request.error)?.name === QUOTE_EXCEEDED_ERROR) {
+          reportLocalStorageHealth('quota-exceeded', 'items')
+        } else if (target.errorCode) {
           this.showAlert('Offline database issue: ' + target.errorCode)
         } else {
           this.displayOfflineAlert()
@@ -401,7 +399,15 @@ export class Database {
     }
 
     const db = (await this.openDatabase()) as IDBDatabase
-    const transaction = db.transaction(STORE_NAME, READ_WRITE)
+    let transaction: IDBTransaction
+    try {
+      transaction = db.transaction(STORE_NAME, READ_WRITE)
+    } catch (error) {
+      if ((error as { name?: string })?.name === QUOTE_EXCEEDED_ERROR) {
+        reportLocalStorageHealth('quota-exceeded', 'items')
+      }
+      throw error
+    }
     return new Promise((resolve, reject) => {
       /**
        * The transaction may signal failure via onabort (the normal path: a failed
@@ -414,6 +420,7 @@ export class Database {
           return
         }
         settled = true
+        reportLocalStorageHealth('write-ok', 'items')
         /**
          * SAVE INVALIDATION: broadcast the uuids we just durably wrote so peer tabs can
          * invalidate their in-memory copies and reload our newer disk version (instead of
@@ -439,14 +446,18 @@ export class Database {
       transaction.onerror = (event) => {
         const target = event.target as any
         const error = target.error ?? transaction.error ?? new Error('IndexedDB transaction failed')
-        this.showGenericError(error)
+        if (error?.name === QUOTE_EXCEEDED_ERROR) {
+          reportLocalStorageHealth('quota-exceeded', 'items')
+        } else {
+          this.showGenericError(error)
+        }
         settleReject(error)
       }
       transaction.onabort = (event) => {
         const target = event.target as any
         const error = target.error ?? transaction.error ?? new Error('IndexedDB transaction aborted')
         if (error && error.name === QUOTE_EXCEEDED_ERROR) {
-          this.showAlert(OUT_OF_SPACE)
+          reportLocalStorageHealth('quota-exceeded', 'items')
         } else {
           this.showGenericError(error)
         }

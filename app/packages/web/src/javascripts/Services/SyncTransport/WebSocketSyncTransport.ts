@@ -44,6 +44,7 @@ import {
 import { LANE_STATE_CARRIER, LaneDegradationLedger, type LaneLedgerReading } from './LaneDegradationLedger'
 import { OWNER_LEASE_TTL_MS } from './SyncTransportOutbox'
 import { authoredLogMessage } from '@standardnotes/utils'
+import { reportLocalStorageHealth } from '@/Utils/LocalStorageHealth'
 
 /**
  * *** THE REASON A PRODUCTION FAILURE READ `{ errorType: "Error", errorCode: undefined,
@@ -2161,6 +2162,10 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
   }
 
   private async onWorkerMessage(message: SyncWorkerToMainMessage): Promise<void> {
+    if (message.type === 'LOCAL_STORAGE_HEALTH') {
+      reportLocalStorageHealth(message.code, 'outbox')
+      return
+    }
     if (message.type === 'WORKER_BUILD') {
       // Admitted by shape. It is a value from another bundle, and what it is
       // compared with is a commit: anything else is "it did not say".

@@ -37,10 +37,10 @@ import { addToast, ToastContainer, ToastType } from '@standardnotes/toast'
 import {
   estimateStorage,
   formatBytes,
-  isStorageNearlyFull,
   maybeNotifyStorageCapExceeded,
   requestPersistentStorage,
 } from '@/Utils/StorageQuota'
+import { reportStorageEstimate, watchStoragePressure } from '@/Utils/LocalStorageHealth'
 import { log, LoggingDomain } from '@/Logging'
 import FilePreviewModalWrapper from '@/Components/FilePreview/FilePreviewModal'
 import FileContextMenuWrapper from '@/Components/FileContextMenu/FileContextMenu'
@@ -165,14 +165,7 @@ const ensureRobustStorage = async (application: WebApplication): Promise<void> =
           `(${Math.round(estimate.usedFraction * 100)}%).`,
       )
 
-      if (isStorageNearlyFull(estimate)) {
-        addToast({
-          type: ToastType.Error,
-          message:
-            `Storage almost full (${formatBytes(estimate.usage)} of ${formatBytes(estimate.quota)}). ` +
-            'Free up disk space to avoid local save failures.',
-        })
-      }
+      reportStorageEstimate(estimate)
 
       // Standard Red Notes: also check the USER-configured soft cap (Preferences →
       // Storage → Maximum usage; 0 == Unlimited) so the user learns they're over it
@@ -194,6 +187,7 @@ const ensureRobustStorage = async (application: WebApplication): Promise<void> =
 const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicationGroup }) => {
   const platformString = getPlatformString()
   const [launched, setLaunched] = useState(false)
+  useEffect(() => (launched ? watchStoragePressure(estimateStorage) : undefined), [launched])
   const [needsUnlock, setNeedsUnlock] = useState(true)
   const [challenges, setChallenges] = useState<Challenge[]>([])
   // Local passkey app-lock gate: when a passkey is registered, the app stays

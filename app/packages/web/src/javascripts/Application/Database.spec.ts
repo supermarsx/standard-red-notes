@@ -1,6 +1,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Database } from './Database'
 import { WebDevice } from './Device/WebDevice'
+import { reportLocalStorageHealth } from '@/Utils/LocalStorageHealth'
+jest.mock('@/Utils/LocalStorageHealth', () => ({ reportLocalStorageHealth: jest.fn() }))
 
 /**
  * jsdom provides no IndexedDB implementation and `fake-indexeddb` is not a
@@ -128,6 +130,42 @@ const buildDatabaseWithMock = (mockDb: any): Database => {
   ;(database as any).openDatabase = async () => mockDb
   return database
 }
+
+describe('local storage quota warnings', () => {
+  it('reports a synchronous write-transaction quota error without swallowing the original error', async () => {
+    const error = new DOMException('Quota exceeded', 'QuotaExceededError')
+    const database = buildDatabaseWithMock({
+      transaction: () => {
+        throw error
+      },
+    })
+    await expect(database.savePayloads([{ uuid: 'note' }])).rejects.toBe(error)
+    expect(reportLocalStorageHealth).toHaveBeenCalledWith('quota-exceeded', 'items')
+  })
+  it('reports a quota failure opening the item database', async () => {
+    const original = Object.getOwnPropertyDescriptor(window, 'indexedDB')
+    const error = new DOMException('Quota exceeded', 'QuotaExceededError')
+    Object.defineProperty(window, 'indexedDB', {
+      configurable: true,
+      value: {
+        open: () => {
+          const request: any = { error }
+          queueMicrotask(() => request.onerror?.({ target: request }))
+          return request
+        },
+      },
+    })
+    try {
+      const database = new Database('quota-test')
+      database.unlock()
+      await expect(database.openDatabase()).rejects.toThrow('Unable to open db')
+      expect(reportLocalStorageHealth).toHaveBeenCalledWith('quota-exceeded', 'items')
+    } finally {
+      if (original) Object.defineProperty(window, 'indexedDB', original)
+      else delete (window as { indexedDB?: IDBFactory }).indexedDB
+    }
+  })
+})
 
 describe('Database silent-data-loss fixes', () => {
   describe('FIX 1: savePayloads rejects when a put fails', () => {

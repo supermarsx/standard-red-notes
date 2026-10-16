@@ -1024,6 +1024,7 @@ export function syncFallbackDisposition(reason: SyncFallbackReason): SyncFallbac
 }
 
 export type SyncWorkerToMainMessage =
+  | { type: 'LOCAL_STORAGE_HEALTH'; code: 'quota-exceeded' | 'database-unavailable' | 'write-ok' }
   /**
    * Standard Red Notes: the commit the WORKER's own bundle was built from, said
    * once when the worker starts.

@@ -918,6 +918,14 @@ export const DOC_CATEGORIES: DocCategory[] = [
             text: 'The app is offline-first. You can read and write everything while disconnected; changes are stored locally and sync automatically when a connection returns.',
           },
           {
+            type: 'paragraph',
+            text: 'A persistent local-storage warning appears when this device cannot open its sync database or a browser quota limit prevents a write. Free disk space and check browser storage permissions, then retry saving. The Storage settings action opens usage details. Do not clear site data while notes are unsynced. A successful write clears the warning for that same local store; unrelated successful requests or writes do not.',
+          },
+          {
+            type: 'paragraph',
+            text: 'The app also checks estimated browser storage pressure at launch and periodically while visible, with wake-up checks limited to once per minute. This estimate describes the site’s browser quota, not remaining physical disk space. An unknown estimate is not treated as recovery. These warnings concern this browser and device; a storage failure on one computer does not diagnose another collaborator’s read-only state.',
+          },
+          {
             type: 'callout',
             variant: 'warning',
             text: 'While offline, your changes exist only on that device until it syncs. Avoid clearing local data before a successful sync.',

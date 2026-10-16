@@ -1,3 +1,5 @@
+import type { LocalStorageHealthCode } from '@/Utils/LocalStorageHealth'
+
 export type SyncOutboxRecord = {
   /** Durable transport constraint, retained across editor teardown and worker restarts. */
   socketOnly?: boolean
@@ -171,12 +173,41 @@ export class IndexedDbSyncOutbox implements SyncOutboxStore {
   private openAttempt = 0
   private activeDatabase?: IDBDatabase
 
-  constructor(private readonly factory: IDBFactory | undefined = globalThis.indexedDB) {}
+  constructor(
+    private readonly factory: IDBFactory | undefined = globalThis.indexedDB,
+    private readonly onStorageHealth?: (code: LocalStorageHealthCode) => void,
+  ) {}
+
+  protected reportStorageHealth(code: LocalStorageHealthCode): void {
+    try {
+      this.onStorageHealth?.(code)
+    } catch {
+      // A warning must never change persistence or replay decisions.
+    }
+  }
+
+  private reportStorageFailure(error: unknown): void {
+    this.reportStorageHealth(
+      (error as { name?: string })?.name === 'QuotaExceededError' ? 'quota-exceeded' : 'database-unavailable',
+    )
+  }
+
+  protected putCommand(store: IDBObjectStore, record: SyncOutboxRecord): void {
+    try {
+      store.put(record)
+    } catch (error) {
+      if ((error as { name?: string })?.name === 'QuotaExceededError') {
+        this.reportStorageFailure(error)
+      }
+      throw error
+    }
+  }
 
   async put(record: SyncOutboxRecord): Promise<void> {
     const transaction = await this.transaction(COMMAND_STORE, 'readwrite')
-    transaction.objectStore(COMMAND_STORE).put(record)
+    this.putCommand(transaction.objectStore(COMMAND_STORE), record)
     await transactionDone(transaction)
+    this.reportStorageHealth('write-ok')
   }
 
   async oldest(sessionScope: string): Promise<SyncOutboxRecord | undefined> {
@@ -296,13 +327,25 @@ export class IndexedDbSyncOutbox implements SyncOutboxStore {
     for (let attempt = 0; ; attempt++) {
       const database = await this.database()
       try {
-        return database.transaction(stores, mode)
+        const transaction = database.transaction(stores, mode)
+        if (this.onStorageHealth) {
+          const reportStorageError = (event: Event) => {
+            const error = (event.target as IDBRequest | null)?.error ?? transaction.error
+            if (error && ['QuotaExceededError', 'UnknownError', 'InvalidStateError'].includes(error.name)) {
+              this.reportStorageFailure(error)
+            }
+          }
+          transaction.addEventListener('error', reportStorageError)
+          transaction.addEventListener('abort', reportStorageError)
+        }
+        return transaction
       } catch (error) {
         // Firefox can close an IDB handle without a versionchange (for example
         // after storage/process suspension). Creating a transaction on that
         // handle throws synchronously: no request or write has started, so one
         // reopen is safe. Never replay a transaction that already existed.
         if ((error as { name?: string })?.name !== 'InvalidStateError') {
+          this.reportStorageFailure(error)
           throw error
         }
         if (this.activeDatabase === database) {
@@ -311,6 +354,7 @@ export class IndexedDbSyncOutbox implements SyncOutboxStore {
         }
         database.close()
         if (attempt >= 1) {
+          this.reportStorageFailure(error)
           throw error
         }
       }
@@ -319,6 +363,7 @@ export class IndexedDbSyncOutbox implements SyncOutboxStore {
 
   protected database(): Promise<IDBDatabase> {
     if (!this.factory) {
+      this.reportStorageHealth('database-unavailable')
       return Promise.reject(new SyncOutboxUnavailableError('IndexedDB is unavailable'))
     }
     if (this.databasePromise) {
@@ -385,14 +430,19 @@ export class IndexedDbSyncOutbox implements SyncOutboxStore {
       }
       request.onerror = () => {
         settled = true
+        this.reportStorageFailure(request.error)
         reject(new SyncOutboxUnavailableError(request.error?.message ?? 'Could not open sync outbox'))
       }
       request.onblocked = () => {
         settled = true
+        this.reportStorageHealth('database-unavailable')
         reject(new SyncOutboxUnavailableError('Sync outbox upgrade was blocked'))
       }
     }).catch((error: unknown) => {
       forget()
+      if (!(error instanceof SyncOutboxUnavailableError)) {
+        this.reportStorageFailure(error)
+      }
       throw error
     })
     this.databasePromise = pending
@@ -417,8 +467,9 @@ export class ConcurrentIndexedDbSyncOutbox extends IndexedDbSyncOutbox {
     private readonly workerId: string,
     private readonly now: () => number = Date.now,
     factory: IDBFactory | undefined = globalThis.indexedDB,
+    onStorageHealth?: (code: LocalStorageHealthCode) => void,
   ) {
-    super(factory)
+    super(factory, onStorageHealth)
   }
 
   private storageSession(sessionScope: string): string {
@@ -492,8 +543,9 @@ export class ConcurrentIndexedDbSyncOutbox extends IndexedDbSyncOutbox {
       ownerId: this.workerId,
       expiresAt: this.now() + OWNER_LEASE_TTL_MS,
     } satisfies OwnerLease)
-    commands.put(physical)
+    this.putCommand(commands, physical)
     await transactionDone(transaction)
+    this.reportStorageHealth('write-ok')
     this.claims.set(physical.transportScope, physical.sessionScope)
   }
 

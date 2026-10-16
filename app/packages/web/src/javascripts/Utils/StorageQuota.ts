@@ -13,20 +13,10 @@
  */
 
 import { log, LoggingDomain } from '../Logging'
+import { HIGH_USAGE_THRESHOLD, type StorageEstimateResult } from './StorageQuotaTypes'
+export { HIGH_USAGE_THRESHOLD, type StorageEstimateResult } from './StorageQuotaTypes'
 
 const BYTES_PER_GB = 1024 * 1024 * 1024
-
-/** Fraction of quota at/above which we consider storage "almost full". */
-export const HIGH_USAGE_THRESHOLD = 0.8
-
-export type StorageEstimateResult = {
-  /** Bytes currently used by this origin (IndexedDB, caches, etc). */
-  usage: number
-  /** Total bytes available to this origin. */
-  quota: number
-  /** usage / quota in [0, 1]. 0 when quota is unknown/zero. */
-  usedFraction: number
-}
 
 function storageManagerAvailable(): boolean {
   return typeof navigator !== 'undefined' && !!navigator.storage && typeof navigator.storage.estimate === 'function'

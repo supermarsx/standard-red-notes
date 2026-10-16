@@ -15,6 +15,7 @@ import StyledTooltip from '@/Components/StyledTooltip/StyledTooltip'
 import usePreference from '@/Hooks/usePreference'
 import { getIconForItem } from '@/Utils/Items/Icons/getIconForItem'
 import { estimateStorage, formatBytes, StorageEstimateResult } from '@/Utils/StorageQuota'
+import { reportStorageEstimate } from '@/Utils/LocalStorageHealth'
 import { isStorageUsageScanAvailable, scanStorageUsage } from '@/Utils/Storage/StorageUsageManager'
 import { StorageLargestItem, StorageUsageSnapshot } from '@/Utils/Storage/storageUsageWorkerProtocol'
 import { PrefKey } from '@standardnotes/snjs'
@@ -120,6 +121,7 @@ const Storage: FunctionComponent<Props> = ({ application }: Props) => {
           return
         }
         setEstimate(result)
+        reportStorageEstimate(result)
 
         if (!isStorageUsageScanAvailable()) {
           return

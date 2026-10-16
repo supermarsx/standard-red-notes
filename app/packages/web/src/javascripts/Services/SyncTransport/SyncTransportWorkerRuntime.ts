@@ -786,7 +786,15 @@ export class SyncTransportWorkerRuntime {
     this.cancelInterval = dependencies.clearInterval ?? globalThis.clearInterval.bind(globalThis)
     this.subtle = dependencies.subtle ?? crypto.subtle
     this.ownerId = this.uuid()
-    this.outbox = dependencies.outbox ?? new ConcurrentIndexedDbSyncOutbox(this.ownerId, this.now)
+    let lastStorageHealth: string | undefined
+    this.outbox =
+      dependencies.outbox ??
+      new ConcurrentIndexedDbSyncOutbox(this.ownerId, this.now, globalThis.indexedDB, (code) => {
+        if (lastStorageHealth !== code) {
+          lastStorageHealth = code
+          dependencies.postMessage({ type: 'LOCAL_STORAGE_HEALTH', code })
+        }
+      })
   }
 
   async handle(message: MainToSyncWorkerMessage): Promise<void> {
