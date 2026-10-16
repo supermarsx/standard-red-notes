@@ -19,7 +19,14 @@
 import { act, useEffect } from 'react'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
 import { $createListItemNode, $createListNode, ListNode } from '@lexical/list'
-import { $createTextNode, $getRoot, $createParagraphNode, LexicalEditor } from 'lexical'
+import {
+  $createTextNode,
+  $getRoot,
+  $createParagraphNode,
+  $setSelection,
+  $createNodeSelection,
+  LexicalEditor,
+} from 'lexical'
 import { createRoot, Root } from 'react-dom/client'
 import { LocalPrefDefaults, PrefDefaults, PrefKey } from '@standardnotes/snjs'
 import { BlocksEditorComposer } from '../../BlocksEditorComposer'
@@ -88,7 +95,11 @@ const fakeApp = {
   isAuthorizedToRenderItem: () => true,
   vaultLocks: { addEventObserver: () => () => undefined },
   sessions: { getUser: () => ({ uuid: 'alice' }) },
-  items: { streamItems: () => () => undefined, addObserver: () => () => undefined },
+  items: {
+    findItem: () => ({ uuid: 'note-1' }),
+    streamItems: () => () => undefined,
+    addObserver: () => () => undefined,
+  },
   keyboardService: { addCommandHandler: () => () => undefined },
 } as never
 
@@ -107,7 +118,7 @@ afterEach(async () => {
   container.remove()
 })
 
-const mount = async (withChecklist = true, readonly = false) => {
+const mount = async (withChecklist = true, readonly = false, selectChecklist = true) => {
   await act(async () => {
     root.render(
       <ApplicationProvider application={fakeApp}>
@@ -116,9 +127,11 @@ const mount = async (withChecklist = true, readonly = false) => {
             readonly={readonly}
             initialValue={() => {
               if (withChecklist) {
-                $getRoot().append(
-                  $createListNode('check').append($createListItemNode(false).append($createTextNode('Task'))),
-                )
+                const item = $createListItemNode(false).append($createTextNode('Task'))
+                $getRoot().append($createListNode('check').append(item))
+                if (selectChecklist) {
+                  item.selectEnd()
+                }
               } else {
                 $getRoot().append($createParagraphNode())
               }
@@ -132,7 +145,7 @@ const mount = async (withChecklist = true, readonly = false) => {
     )
     await Promise.resolve()
   })
-  if (withChecklist && !readonly) {
+  if (withChecklist && !readonly && selectChecklist) {
     await clickTab('Checklist')
   }
 }
@@ -164,12 +177,9 @@ describe('checklist bulk-completion toolbar group renders', () => {
   it('renders the buttons as reachable toolbar items rather than inert markup', async () => {
     await mount()
     const buttons = Array.from(checklistGroup()!.querySelectorAll('button'))
-    // Every button must be a real, clickable toolbar item. With no checklist
-    // under the (empty) initial document the three bulk actions are aria-disabled
-    // — but they use aria-disabled, NOT the native attribute, so they stay
-    // focusable and their tooltip still explains them.
+    // The caret is inside a real task, so the task-specific actions are ready.
     for (const button of buttons.slice(0, 3)) {
-      expect(button.getAttribute('aria-disabled')).toBe('true')
+      expect(button.getAttribute('aria-disabled')).not.toBe('true')
       expect(button.hasAttribute('disabled')).toBe(false)
     }
     // The settings button is NOT one of them: most of what the subsection hosts
@@ -220,19 +230,19 @@ it('uses ribbon groups for per-item settings and Review, with no duplicate task 
   expect(tasks.querySelectorAll('[aria-label="Selected checklist item"]')).toHaveLength(1)
   await act(async () => tasks.querySelector<HTMLButtonElement>('[aria-label="Item comments"]')!.click())
   expect(findTab('Review')?.getAttribute('aria-selected')).toBe('true')
-  const review = container.querySelector<HTMLElement>('[aria-label="Review tools"]')!
+  const review = container.querySelector<HTMLElement>('[aria-label="Comment tools"]')!
   expect(review.classList.contains('super-toolbar-group')).toBe(true)
   expect(review.closest('[role="toolbar"]')).not.toBeNull()
-  expect(review.querySelectorAll('button')).toHaveLength(2)
+  expect(review.querySelectorAll('button')).toHaveLength(3)
   expect(container.querySelector('[aria-label="Comment draft"]')).toBeNull()
   await clickTab('Home')
-  expect(container.querySelector('[aria-label="Review tools"]')).toBeNull()
+  expect(container.querySelector('[aria-label="Comment tools"]')).toBeNull()
   await clickTab('Review')
   await act(async () => editor.setEditable(false))
   expect(findTab('Review')).toBeUndefined()
   expect(findTab('Checklist')).toBeUndefined()
   expect(findTab('Home')).toBeUndefined()
-  expect(container.querySelector('[aria-label="Review tools"]')).toBeNull()
+  expect(container.querySelector('[aria-label="Comment tools"]')).toBeNull()
   expect(container.querySelector('#super-mobile-toolbar')?.classList.contains('hidden')).toBe(true)
   await act(async () => editor.setEditable(true))
   expect(findTab('Review')?.getAttribute('aria-selected')).toBe('true')
@@ -265,4 +275,54 @@ it('does not offer Checklist or Review during an initially readonly editor lifet
   await act(async () => editor.setEditable(true))
   expect(findTab('Checklist')).toBeDefined()
   expect(findTab('Review')).toBeDefined()
+})
+
+it('offers Checklist only for the current task selection, restores the preceding tab, and retires stale tab state', async () => {
+  await mount(true, false, false)
+  expect(findTab('Checklist')).toBeUndefined()
+  await clickTab('Insert')
+  await act(async () =>
+    editor.update(
+      () => {
+        const item = ($getRoot().getFirstChild() as ListNode).getFirstChild()!
+        item.selectEnd()
+      },
+      { discrete: true },
+    ),
+  )
+  expect(findTab('Checklist')).toBeDefined()
+  await clickTab('Checklist')
+  expect(findTab('Checklist')?.getAttribute('aria-selected')).toBe('true')
+  // Ribbon focus must not discard the task context or flash its tab closed.
+  await act(async () => {
+    findTab('Checklist')!.focus()
+    editor.update(() => $setSelection(null), { discrete: true })
+  })
+  expect(findTab('Checklist')?.getAttribute('aria-selected')).toBe('true')
+  await act(async () =>
+    editor.update(
+      () => {
+        $getRoot().append($createParagraphNode().append($createTextNode('Ordinary prose')))
+        $getRoot().getLastChild()!.selectEnd()
+      },
+      { discrete: true },
+    ),
+  )
+  expect(findTab('Checklist')).toBeUndefined()
+  expect(findTab('Insert')?.getAttribute('aria-selected')).toBe('true')
+  expect(container.querySelector('[aria-label="Checklist tasks"]')).toBeNull()
+  // Selecting the task again offers its tab without reopening an old selection.
+  await act(async () =>
+    editor.update(
+      () => {
+        const item = ($getRoot().getFirstChild() as ListNode).getFirstChild()!
+        const selection = $createNodeSelection()
+        selection.add(item.getKey())
+        $setSelection(selection)
+      },
+      { discrete: true },
+    ),
+  )
+  expect(findTab('Checklist')).toBeDefined()
+  expect(findTab('Insert')?.getAttribute('aria-selected')).toBe('true')
 })

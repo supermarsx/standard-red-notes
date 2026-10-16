@@ -157,9 +157,9 @@ const mount = async () => {
         <AndroidBackHandlerProvider application={fakeApp}>
           <BlocksEditorComposer
             initialValue={() => {
-              $getRoot().append(
-                $createListNode('check').append($createListItemNode(false).append($createTextNode('Task'))),
-              )
+              const item = $createListItemNode(false).append($createTextNode('Task'))
+              $getRoot().append($createListNode('check').append(item))
+              item.selectEnd()
             }}
           >
             <ToolbarPlugin />

@@ -35,7 +35,6 @@ import {
   BaseSelection,
   RangeSelection,
   $isNodeSelection,
-  $nodesOfType,
 } from 'lexical'
 import {
   mergeRegister,
@@ -472,11 +471,8 @@ const ToolbarSeparator = () => (
   <div aria-hidden className="bg-border mx-1 my-1 h-6 w-px flex-shrink-0 self-center" role="separator" />
 )
 
+const HOME_CLIPBOARD_BUTTON_IDS = [ToolbarButtonId.Cut, ToolbarButtonId.Copy, ToolbarButtonId.Paste] as const
 const TOOLBAR_UTILITY_BUTTON_IDS = [
-  ToolbarButtonId.Cut,
-  ToolbarButtonId.Copy,
-  ToolbarButtonId.Paste,
-  ToolbarButtonId.Divider,
   ToolbarButtonId.Undo,
   ToolbarButtonId.Redo,
   ToolbarButtonId.Divider,
@@ -590,15 +586,6 @@ const ToolbarPlugin = ({
   const [editor] = useLexicalComposerContext()
   const [activeEditor, setActiveEditor] = useState(editor)
   const [isEditable, setIsEditable] = useState(() => editor.isEditable())
-  const [hasChecklist, setHasChecklist] = useState(false)
-  useEffect(() => {
-    const refresh = () =>
-      editor.getEditorState().read(() => {
-        setHasChecklist($nodesOfType(ListNode).some((node) => node.getListType() === 'check'))
-      })
-    refresh()
-    return editor.registerUpdateListener(refresh)
-  }, [editor])
 
   const [blockType, setBlockType] = useState<keyof typeof blockTypeToBlockName>('paragraph')
   // The anchor block's stamped inline style string, so the block-style gallery can
@@ -1191,12 +1178,19 @@ const ToolbarPlugin = ({
 
   const $updateToolbar = useCallback(() => {
     const selection = $getSelection()
+    // Checklist controls belong to the selected task(s), not every note that
+    // happens to contain a checklist. Keyboard focus in the ribbon may briefly
+    // clear Lexical's selection; keep its captured context while using controls.
+    if (selection) {
+      setHasChecklistSelection($selectionHasChecklistItems(selection))
+    } else if (!containerRef.current?.contains(document.activeElement)) {
+      setHasChecklistSelection(false)
+    }
     if (!$isRangeSelection(selection)) {
       return
     }
 
     setHasNonCollapsedSelection(!selection.isCollapsed())
-    setHasChecklistSelection($selectionHasChecklistItems(selection))
 
     const anchorNode = selection.anchor.getNode()
     const focusNode = selection.focus.getNode()
@@ -1790,6 +1784,7 @@ const ToolbarPlugin = ({
   }, [editor, $updateToolbar])
 
   useEffect(() => {
+    activeEditor.getEditorState().read($updateToolbar)
     return mergeRegister(
       activeEditor.registerUpdateListener(({ editorState }) => {
         editorState.read(() => {
@@ -2062,9 +2057,14 @@ const ToolbarPlugin = ({
   const buttonRenderers: Partial<Record<ToolbarButtonId, ReactNode>> = {
     [ToolbarButtonId.Cut]: (
       <div className="flex flex-shrink-0 items-center" key="cut">
-        <ToolbarButton name={t('cut')} disabled={!hasNonCollapsedSelection} onSelect={handleClipboardCut}>
+        <ToolbarButton
+          name={t('cut')}
+          aria-label={t('cut')}
+          disabled={!hasNonCollapsedSelection}
+          onSelect={handleClipboardCut}
+        >
           <Icon type="scissors" size="custom" className="super-toolbar-icon" />
-          <span className="ml-1.5 text-sm leading-none">{t('cut')}</span>
+          <span className="sr-only">{t('cut')}</span>
         </ToolbarButton>
         <StyledTooltip showOnHover showOnMobile side="top" label={t('moreCutOptions')}>
           <button
@@ -2085,9 +2085,14 @@ const ToolbarPlugin = ({
     ),
     [ToolbarButtonId.Copy]: (
       <div className="flex flex-shrink-0 items-center" key="copy">
-        <ToolbarButton name={t('copy')} disabled={!hasNonCollapsedSelection} onSelect={handleClipboardCopy}>
+        <ToolbarButton
+          name={t('copy')}
+          aria-label={t('copy')}
+          disabled={!hasNonCollapsedSelection}
+          onSelect={handleClipboardCopy}
+        >
           <Icon type="copy" size="custom" className="super-toolbar-icon" />
-          <span className="ml-1.5 text-sm leading-none">{t('copy')}</span>
+          <span className="sr-only">{t('copy')}</span>
         </ToolbarButton>
         <StyledTooltip showOnHover showOnMobile side="top" label={t('moreCopyOptions')}>
           <button
@@ -2108,9 +2113,9 @@ const ToolbarPlugin = ({
     ),
     [ToolbarButtonId.Paste]: (
       <div className="flex flex-shrink-0 items-center" key="paste">
-        <ToolbarButton name={t('paste')} onSelect={() => void handleClipboardPaste()}>
+        <ToolbarButton name={t('paste')} aria-label={t('paste')} onSelect={() => void handleClipboardPaste()}>
           <Icon type="clipboard" size="custom" className="super-toolbar-icon" />
-          <span className="ml-1.5 text-sm leading-none">{t('paste')}</span>
+          <span className="sr-only">{t('paste')}</span>
         </ToolbarButton>
         <StyledTooltip showOnHover showOnMobile side="top" label={t('morePasteOptions')}>
           <button
@@ -2999,10 +3004,13 @@ const ToolbarPlugin = ({
   // Office-ribbon "super group" tabs: partition the resolved groups into top-level
   // tabs (Home / Insert / AI / Tools) and render only the active tab's groups, so
   // the bar fits without horizontal scroll unless a single tab is itself too tight.
-  const superGroupTabs = groupsBySuperGroup(resolvedGroups).filter((tab) => tab.id !== 'checklistTab' || hasChecklist)
+  const superGroupTabs = groupsBySuperGroup(resolvedGroups).filter(
+    (tab) => tab.id !== 'checklistTab' || hasChecklistSelection,
+  )
   const controlsState = useEditorControlsState()
   const { tabId: activeTabId } = useSyncExternalStore(controlsState.subscribe, controlsState.getSnapshot)
   const setActiveTabId = controlsState.setTab
+  const checklistPreviousTabRef = useRef<string | null>(null)
 
   /**
    * Standard Red Notes (t120) — bookkeeping for the Mermaid contextual tab's
@@ -3034,12 +3042,15 @@ const ToolbarPlugin = ({
    */
   const selectRibbonTab = useCallback(
     (tabId: string) => {
+      if (tabId === 'checklistTab' && activeTabId !== 'checklistTab') {
+        checklistPreviousTabRef.current = activeTabId
+      }
       if (tabId !== CONTEXTUAL_TAB_ID) {
         mermaidTabRestoreRef.current = null
       }
       setActiveTabId(tabId)
     },
-    [setActiveTabId],
+    [setActiveTabId, activeTabId],
   )
 
   // Layout: by DEFAULT the toolbar keeps every group on a single horizontal line
@@ -3447,6 +3458,28 @@ const ToolbarPlugin = ({
       ? []
       : (superGroupTabs.find((tab) => tab.id === effectiveTabId)?.groups ?? resolvedGroups)
   const activeRibbonGroups = activeGroups.filter((group) => !TOOLBAR_UTILITY_GROUP_IDS.has(group.id))
+
+  useEffect(() => {
+    if (effectiveTabId !== 'home') {
+      setIsCutMenuOpen(false)
+      setIsCopyMenuOpen(false)
+      setIsPasteMenuOpen(false)
+    }
+  }, [effectiveTabId])
+
+  useEffect(() => {
+    if (hasChecklistSelection) {
+      return
+    }
+    setIsChecklistSettingsMenuOpen(false)
+    if (activeTabId !== 'checklistTab') {
+      return
+    }
+    const previous = checklistPreviousTabRef.current
+    const validPrevious = previous === 'review' ? Boolean(note) : superGroupTabs.some((tab) => tab.id === previous)
+    setActiveTabId(validPrevious ? previous : null)
+    checklistPreviousTabRef.current = null
+  }, [hasChecklistSelection, activeTabId, setActiveTabId, note, superGroupTabs])
 
   /**
    * Standard Red Notes (t120) — tab ownership around the contextual tab.
@@ -3946,7 +3979,7 @@ const ToolbarPlugin = ({
                 {canShowAllItems
                   ? activeRibbonGroups.map((group) => {
                       // Standard Red Notes: the Block-style group is a vertical stack.
-                      // LINE 1 is a row of three always-visible action buttons — Smart
+                      // LINE 1 starts with Cut / Copy / Paste, followed by Smart
                       // checklist (a TOGGLE bound to autoMoveCompleted), Restore
                       // completed tasks (a plain action), and Edit styles (opens the P3
                       // typography editor modal). LINES 2–3 are the responsive squares
@@ -3978,10 +4011,14 @@ const ToolbarPlugin = ({
                             style={{ maxWidth: `min(100%, ${maximumWidth}px)` }}
                           >
                             <div className="flex flex-col items-stretch justify-center gap-1 md:min-h-[6.25rem]">
-                              {/* Line 1: the three action buttons. */}
+                              {/* Clipboard actions stay in Home, immediately before Smart checklist. */}
                               <div className="flex items-center gap-1.5">
+                                {HOME_CLIPBOARD_BUTTON_IDS.filter((id) => visibleUtilityButtonIds.has(id)).map((id) => (
+                                  <Fragment key={id}>{buttonRenderers[id]}</Fragment>
+                                ))}
                                 <ToolbarButton
                                   name={t('smartChecklist')}
+                                  aria-label={t('smartChecklist')}
                                   iconName="list-check"
                                   active={autoMoveCompleted}
                                   onSelect={toggleAutoMoveCompleted}

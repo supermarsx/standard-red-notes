@@ -126,24 +126,43 @@ describe('the merged clipboard + formatting-tabs bar', () => {
     expect(container.querySelectorAll('[role="tablist"]')).toHaveLength(1)
   })
 
-  it('keeps the clipboard and history actions inside that bar', async () => {
+  it('keeps history in the utility bar and places compact clipboard actions before Smart Checklist on Home only', async () => {
     await mount()
     const tools = clipboardTools()
     expect(tools).not.toBeNull()
     expect(utilityBar()!.contains(tools!)).toBe(true)
 
-    // The labelled clipboard actions. Compared case-insensitively: under test
-    // the i18n layer echoes the raw key ('cut'), in the app it returns 'Cut'.
     const text = (tools!.textContent ?? '').toLowerCase()
-    expect(text).toContain('cut')
-    expect(text).toContain('copy')
-    expect(text).toContain('paste')
-
-    // Undo / Redo / Print are icon-only, so they are proven through the divider
-    // rule instead: a divider renders ONLY when there is a visible button on
-    // both sides of it. Two dividers therefore means all three segments —
-    // cut/copy/paste, undo/redo, and print — are non-empty.
-    expect(tools!.querySelectorAll('[role="separator"]').length).toBeGreaterThanOrEqual(2)
+    expect(text).not.toContain('cut')
+    expect(text).not.toContain('copy')
+    expect(text).not.toContain('paste')
+    expect(tools!.querySelectorAll('[role="separator"]')).toHaveLength(1)
+    const block = group('Block style')!
+    const clipboard = ['cut', 'copy', 'paste'].map((label) =>
+      block.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!,
+    )
+    expect(clipboard.every(Boolean)).toBe(true)
+    // Each split button keeps its dropdown immediately after its icon action.
+    const firstRow = clipboard[0].parentElement!.parentElement!
+    const labels = [...firstRow.querySelectorAll('button')].map((button) => button.getAttribute('aria-label'))
+    expect(labels.slice(0, 6)).toEqual([
+      'cut',
+      'moreCutOptions',
+      'copy',
+      'moreCopyOptions',
+      'paste',
+      'morePasteOptions',
+    ])
+    expect(firstRow.querySelectorAll('button')[6]?.getAttribute('aria-label')).toBe('smartChecklist')
+    for (const button of clipboard) {
+      expect(button.querySelector('.sr-only')).not.toBeNull()
+    }
+    await clickTab('Insert')
+    expect(container.querySelector('button[aria-label="cut"]')).toBeNull()
+    expect(container.querySelector('button[aria-label="copy"]')).toBeNull()
+    expect(container.querySelector('button[aria-label="paste"]')).toBeNull()
+    await clickTab('Home')
+    expect(container.querySelectorAll('button[aria-label="cut"]')).toHaveLength(1)
   })
 
   it('puts the formatting tabs in the same bar, after the actions', async () => {
