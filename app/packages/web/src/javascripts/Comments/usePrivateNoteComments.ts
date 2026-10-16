@@ -11,7 +11,20 @@ export function usePrivateNoteComments(note: SNNote): CommentsApi {
   const [, refresh] = useState(0)
   useEffect(() => {
     const changed = () => refresh((value) => value + 1)
-    const stop = application.items.streamItems([ContentType.TYPES.UserPrefs, ContentType.TYPES.Note], changed)
+    // Read the current state during render. An initial stream push would repeat
+    // that work, and unrelated note saves cannot change this private thread.
+    const stop = application.items.addObserver(
+      [ContentType.TYPES.UserPrefs, ContentType.TYPES.Note],
+      ({ changed: updated, inserted, removed, unerrored }) => {
+        if (
+          [...updated, ...inserted, ...removed, ...unerrored].some(
+            (item) => item.uuid === note.uuid || item.content_type === ContentType.TYPES.UserPrefs,
+          )
+        ) {
+          changed()
+        }
+      },
+    )
     const stopPreferences = application.addEventObserver(async () => changed(), ApplicationEvent.PreferencesChanged)
     return () => {
       stop()

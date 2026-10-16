@@ -4,7 +4,7 @@
 import { webcrypto } from 'node:crypto'
 import { act, createElement } from 'react'
 import { createRoot, Root } from 'react-dom/client'
-import type { SNNote } from '@standardnotes/snjs'
+import { ContentType, type SNNote } from '@standardnotes/snjs'
 import { useApplication } from '@/Components/ApplicationProvider'
 import { useCollaborationRoomAccess } from '@/Components/SuperEditor/Collaboration/useCollaborationRoomAccess'
 import { CommentRelay } from './CommentRelay'
@@ -80,7 +80,7 @@ describe('useNoteComments realtime fallback', () => {
         getUser: () => sessionUser,
       },
       items: {
-        streamItems: () => jest.fn(),
+        addObserver: () => jest.fn(),
       },
       notesController: {
         upsertNoteComment,
@@ -155,7 +155,7 @@ describe('useNoteComments realtime fallback', () => {
     )
     const application = {
       sessions: { getUser: () => sessionUser },
-      items: { streamItems: () => jest.fn() },
+      items: { addObserver: () => jest.fn() },
       notesController: {
         upsertNoteComment,
         removeNoteComment: jest.fn(),
@@ -248,7 +248,7 @@ describe('useNoteComments realtime fallback', () => {
     })
     const application = {
       sessions: { getUser: () => sessionUser },
-      items: { streamItems: () => jest.fn() },
+      items: { addObserver: () => jest.fn() },
       notesController: { upsertNoteComment, removeNoteComment, setNoteCommentResolved },
     } as never
     const existingComment = {
@@ -376,7 +376,7 @@ describe('useNoteComments realtime fallback', () => {
       sessions: { getUser: () => sessionUser },
       items: {
         findItem: (uuid: string) => authoritative.get(uuid),
-        streamItems: () => jest.fn(),
+        addObserver: () => jest.fn(),
       },
       notesController: {
         upsertNoteComment: jest.fn(),
@@ -427,6 +427,64 @@ describe('useNoteComments realtime fallback', () => {
     expect(container.textContent).toBe('')
   })
 
+  it('clears removed-note plaintext and loads a reinserted note from item notifications without a parent render', async () => {
+    const note = {
+      uuid: 'note-current',
+      getAppDomainValue: () => [
+        {
+          id: 'comment-current',
+          authorUuid: 'user-1',
+          authorName: 'Alice',
+          text: 'current note comment',
+          createdAt: new Date(0).toISOString(),
+        },
+      ],
+    } as unknown as SNNote
+    let authoritative: SNNote | undefined = note
+    type ItemChanges = { changed: SNNote[]; inserted: SNNote[]; removed: SNNote[]; unerrored: SNNote[] }
+    let notifyNote: (changes: ItemChanges) => void = () => {}
+    const application = {
+      sessions: { getUser: () => sessionUser },
+      items: {
+        findItem: () => authoritative,
+        addObserver: (type: string, callback: (changes: ItemChanges) => void) => {
+          if (type === ContentType.TYPES.Note) {
+            notifyNote = callback
+          }
+          return jest.fn()
+        },
+      },
+    } as never
+    mockedUseApplication.mockReturnValue(application)
+    mockedUseCollaborationRoomAccess.mockReturnValue({ status: 'disabled', reason: 'offline' } as never)
+    const View = () => {
+      const api = useNoteComments(note)
+      return createElement('div', null, api.comments.map((comment) => comment.text).join(','))
+    }
+    await act(async () => root.render(createElement(View)))
+    expect(container.textContent).toBe('current note comment')
+    await act(async () => {
+      authoritative = undefined
+      notifyNote({ changed: [], inserted: [], removed: [note], unerrored: [] })
+    })
+    expect(container.textContent).toBe('')
+    await act(async () => {
+      authoritative = note
+      notifyNote({ changed: [], inserted: [note], removed: [], unerrored: [] })
+    })
+    expect(container.textContent).toBe('current note comment')
+    await act(async () => {
+      authoritative = undefined
+      notifyNote({ changed: [], inserted: [], removed: [note], unerrored: [] })
+    })
+    expect(container.textContent).toBe('')
+    await act(async () => {
+      authoritative = note
+      notifyNote({ changed: [], inserted: [], removed: [], unerrored: [note] })
+    })
+    expect(container.textContent).toBe('current note comment')
+  })
+
   it('broadcasts the exact mutation-boundary comment after a deferred resolve rebase', async () => {
     let releaseResolve: (() => void) | undefined
     const rebasedComment = {
@@ -452,7 +510,7 @@ describe('useNoteComments realtime fallback', () => {
     )
     const application = {
       sessions: { getUser: () => sessionUser },
-      items: { streamItems: () => jest.fn() },
+      items: { addObserver: () => jest.fn() },
       notesController: {
         upsertNoteComment: jest.fn(),
         removeNoteComment: jest.fn(),

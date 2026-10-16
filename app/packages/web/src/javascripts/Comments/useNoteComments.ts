@@ -228,13 +228,15 @@ export function useNoteComments(note: SNNote): CommentsApi {
       })
     }
     updateDisplayState()
-    const stopNotes = application.items.streamItems(ContentType.TYPES.Note, ({ changed }) => {
-      const updated = changed.find((item) => item.uuid === noteUuid)
-      if (updated) {
-        updateDisplayState()
-      }
-    })
-    const stopContacts = application.items.streamItems(ContentType.TYPES.TrustedContact, () => {
+    const stopNotes = application.items.addObserver(
+      ContentType.TYPES.Note,
+      ({ changed, inserted, removed, unerrored }) => {
+        if ([...changed, ...inserted, ...removed, ...unerrored].some((item) => item.uuid === noteUuid)) {
+          updateDisplayState()
+        }
+      },
+    )
+    const stopContacts = application.items.addObserver(ContentType.TYPES.TrustedContact, () => {
       updateDisplayState()
     })
     return () => {

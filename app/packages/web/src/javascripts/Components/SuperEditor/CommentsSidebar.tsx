@@ -65,9 +65,17 @@ export function CommentsSidebar({ note }: { note: SNNote }) {
       }
     }
     reveal()
-    const stopItems = application.items.streamItems(
+    const stopItems = application.items.addObserver(
       [ContentType.TYPES.Note, ContentType.TYPES.UserPrefs, ContentType.TYPES.TrustedContact],
-      reveal,
+      ({ changed, inserted, removed, unerrored }) => {
+        if (
+          [...changed, ...inserted, ...removed, ...unerrored].some(
+            (item) => item.uuid === note.uuid || item.content_type !== ContentType.TYPES.Note,
+          )
+        ) {
+          reveal()
+        }
+      },
     )
     const stopPreferences = application.addEventObserver(async () => reveal(), ApplicationEvent.PreferencesChanged)
     return () => {

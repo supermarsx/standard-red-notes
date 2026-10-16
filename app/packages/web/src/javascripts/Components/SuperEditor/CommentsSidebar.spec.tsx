@@ -8,16 +8,29 @@ import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext
 import { CommentsSidebar } from './CommentsSidebar'
 import { createEditorControlsState, EditorControlsProvider, useEditorControlsState } from './EditorControlsContext'
 import { $setChecklistTodoId } from './Lexical/Nodes/ChecklistItemNode'
+import { ContentType } from '@standardnotes/snjs'
 let mockCommentsFailure = false
 let mockPrivateComments = 0
 let mockSharedComments = 0
 const mockCommentUpdates = new Set<() => void>()
+type ItemChanges = {
+  changed: { uuid: string; content_type: string }[]
+  inserted: { uuid: string; content_type: string }[]
+  removed: { uuid: string; content_type: string }[]
+  unerrored: { uuid: string; content_type: string }[]
+}
+const mockItemUpdates = new Set<(changes: ItemChanges) => void>()
+const mockReadPrivateComments = jest.fn(() => Array.from({ length: mockPrivateComments }))
+const mockReadSharedComments = jest.fn(() => ({
+  comments: Array.from({ length: mockSharedComments }),
+  quarantinedCount: 0,
+}))
 const mockApplication = {
   items: {
     findItem: (uuid: string) => ({ uuid }),
-    streamItems: (_types: unknown, changed: () => void) => {
-      mockCommentUpdates.add(changed)
-      return () => mockCommentUpdates.delete(changed)
+    addObserver: (_types: unknown, changed: (changes: ItemChanges) => void) => {
+      mockItemUpdates.add(changed)
+      return () => mockItemUpdates.delete(changed)
     },
   },
   isAuthorizedToRenderItem: jest.fn(() => true),
@@ -29,14 +42,21 @@ const mockApplication = {
 
 jest.mock('@/Components/ApplicationProvider', () => ({ useApplication: () => mockApplication }))
 jest.mock('@/Comments/PrivateNoteComments', () => ({
-  readPrivateNoteComments: () => Array.from({ length: mockPrivateComments }),
+  readPrivateNoteComments: (...args: unknown[]) => mockReadPrivateComments(...(args as [])),
 }))
 jest.mock('@/Comments/CommentAuthorship', () => ({
-  readDisplayNoteComments: () => ({ comments: Array.from({ length: mockSharedComments }), quarantinedCount: 0 }),
+  readDisplayNoteComments: (...args: unknown[]) => mockReadSharedComments(...(args as [])),
 }))
 beforeEach(() => {
   mockPrivateComments = 0
   mockSharedComments = 0
+  mockReadPrivateComments.mockImplementation(() => Array.from({ length: mockPrivateComments }))
+  mockReadSharedComments.mockImplementation(() => ({
+    comments: Array.from({ length: mockSharedComments }),
+    quarantinedCount: 0,
+  }))
+  mockReadPrivateComments.mockClear()
+  mockReadSharedComments.mockClear()
   mockApplication.isAuthorizedToRenderItem.mockReturnValue(true)
 })
 
@@ -45,7 +65,9 @@ jest.mock('@/Components/Comments/CommentsPanel', () => ({
   __esModule: true,
   default: ({ anchor }: { anchor?: { todoId?: string } }) => {
     const [value, setValue] = useState('')
-    if (mockCommentsFailure) throw new Error('comments unavailable')
+    if (mockCommentsFailure) {
+      throw new Error('comments unavailable')
+    }
     return (
       <textarea
         aria-label={`Draft ${anchor?.todoId ?? 'note'}`}
@@ -57,6 +79,52 @@ jest.mock('@/Components/Comments/CommentsPanel', () => ({
 }))
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
+it('ignores unrelated note traffic while waiting to reveal comments, but observes note insertion and preference changes', async () => {
+  const editor = createHeadlessEditor({
+    onError: (error) => {
+      throw error
+    },
+  })
+  jest.mocked(useLexicalComposerContext).mockReturnValue([editor, {} as never])
+  const element = document.createElement('div')
+  const root = createRoot(element)
+  const emit = (field: keyof ItemChanges, uuid: string, content_type: string) =>
+    mockItemUpdates.forEach((callback) =>
+      callback({ changed: [], inserted: [], removed: [], unerrored: [], [field]: [{ uuid, content_type }] }),
+    )
+  try {
+    await act(async () =>
+      root.render(
+        <EditorControlsProvider identity={{}}>
+          <CommentsSidebar note={{ uuid: 'current' } as never} />
+        </EditorControlsProvider>,
+      ),
+    )
+    expect(mockReadPrivateComments).toHaveBeenCalledTimes(1)
+    mockReadPrivateComments.mockClear()
+    mockReadSharedComments.mockClear()
+    await act(async () => {
+      for (let index = 0; index < 100; index++) {
+        emit('changed', `other-${index}`, ContentType.TYPES.Note)
+      }
+    })
+    expect(mockReadPrivateComments).not.toHaveBeenCalled()
+    expect(mockReadSharedComments).not.toHaveBeenCalled()
+    await act(async () => emit('inserted', 'current', ContentType.TYPES.Note))
+    expect(mockReadPrivateComments).toHaveBeenCalledTimes(1)
+    await act(async () => emit('removed', 'current', ContentType.TYPES.Note))
+    expect(mockReadPrivateComments).toHaveBeenCalledTimes(2)
+    await act(async () => emit('changed', 'prefs', ContentType.TYPES.UserPrefs))
+    expect(mockReadPrivateComments).toHaveBeenCalledTimes(3)
+    mockSharedComments = 1
+    await act(async () => emit('changed', 'contact', ContentType.TYPES.TrustedContact))
+    expect(element.querySelector('aside')?.hidden).toBe(false)
+  } finally {
+    await act(async () => root.unmount())
+  }
+  expect(mockItemUpdates.size).toBe(0)
+})
+
 it.each(['private', 'shared'] as const)('automatically opens for existing %s comments', async (scope) => {
   const editor = createHeadlessEditor({
     onError: (error) => {
@@ -64,8 +132,11 @@ it.each(['private', 'shared'] as const)('automatically opens for existing %s com
     },
   })
   jest.mocked(useLexicalComposerContext).mockReturnValue([editor, {} as never])
-  if (scope === 'private') mockPrivateComments = 1
-  else mockSharedComments = 1
+  if (scope === 'private') {
+    mockPrivateComments = 1
+  } else {
+    mockSharedComments = 1
+  }
   const element = document.createElement('div')
   const root = createRoot(element)
   try {
@@ -104,8 +175,11 @@ it.each(['private', 'shared'] as const)(
       await act(async () => render(identity, 'first'))
       expect(element.querySelector('aside')).toBeNull()
       await act(async () => {
-        if (scope === 'private') mockPrivateComments = 1
-        else mockSharedComments = 1
+        if (scope === 'private') {
+          mockPrivateComments = 1
+        } else {
+          mockSharedComments = 1
+        }
         mockCommentUpdates.forEach((changed) => changed())
       })
       expect(element.querySelector('aside')?.hidden).toBe(false)
