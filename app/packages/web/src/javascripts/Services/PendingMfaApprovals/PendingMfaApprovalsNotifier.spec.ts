@@ -40,7 +40,7 @@ type SocketObserver = (event: WebSocketsServiceEvent, data?: unknown) => Promise
 type PendingApprovalsResponse = { status: number; data: { pendingApprovals: unknown[] } }
 
 function createApplication(initial: { socketOpen?: boolean; signedIn?: boolean } = {}) {
-  const state = { socketOpen: initial.socketOpen ?? false, signedIn: initial.signedIn ?? true }
+  const state = { socketOpen: initial.socketOpen ?? false, signedIn: initial.signedIn ?? true, uuid: 'user-uuid' }
   const observers: SocketObserver[] = []
   const socketDisposer = jest.fn()
   const listPendingMfaApprovals = jest.fn(async (): Promise<PendingApprovalsResponse> => ({
@@ -55,7 +55,7 @@ function createApplication(initial: { socketOpen?: boolean; signedIn?: boolean }
       },
       isWebSocketConnectionOpen: () => state.socketOpen,
     },
-    sessions: { getUser: () => (state.signedIn ? { uuid: 'user-uuid' } : undefined) },
+    sessions: { getUser: () => (state.signedIn ? { uuid: state.uuid } : undefined) },
     legacyApi: { listPendingMfaApprovals },
     openPreferences: jest.fn(),
   }
@@ -334,6 +334,53 @@ describe('PendingMfaApprovalsNotifier safety-net poll', () => {
 
       notifier.deinit()
     })
+  })
+
+  it.each(['disposed', 'switched'] as const)('ignores a delayed poll after the notifier is %s', async (boundary) => {
+    ;(addToast as jest.Mock).mockClear()
+    const { application, state, listPendingMfaApprovals } = createApplication()
+    let resolve!: (value: PendingApprovalsResponse) => void
+    listPendingMfaApprovals.mockReturnValueOnce(
+      new Promise((done) => {
+        resolve = done
+      }),
+    )
+    const notifier = new PendingMfaApprovalsNotifier(application)
+    await jest.advanceTimersByTimeAsync(CLOSED_INTERVAL)
+    if (boundary === 'disposed') notifier.deinit()
+    else state.uuid = 'other-user'
+    resolve({ status: 200, data: { pendingApprovals: [{ challengeId: 'late-approval' }] } })
+    await jest.advanceTimersByTimeAsync(0)
+    expect(addToast).not.toHaveBeenCalled()
+    if (boundary !== 'disposed') notifier.deinit()
+  })
+
+  it('remembers resolutions received before an initial request or a stale poll', async () => {
+    ;(addToast as jest.Mock).mockClear()
+    const { application, observers, listPendingMfaApprovals } = createApplication()
+    const notifier = new PendingMfaApprovalsNotifier(application)
+    await observers[0](WebSocketsServiceEvent.MfaApprovalResolved, { challengeId: 'already-resolved' })
+    listPendingMfaApprovals.mockResolvedValueOnce({
+      status: 200,
+      data: { pendingApprovals: [{ challengeId: 'already-resolved' }] },
+    })
+    await jest.advanceTimersByTimeAsync(CLOSED_INTERVAL)
+    expect(addToast).not.toHaveBeenCalled()
+    notifier.deinit()
+  })
+
+  it('retires owned toasts at teardown and makes their old Review action inert', async () => {
+    ;(addToast as jest.Mock).mockClear()
+    ;(addToast as jest.Mock).mockReturnValue('owned-toast')
+    ;(dismissToast as jest.Mock).mockClear()
+    const { application, observers } = createApplication()
+    const notifier = new PendingMfaApprovalsNotifier(application)
+    await observers[0](WebSocketsServiceEvent.MfaApprovalRequested, { challengeId: 'owned-challenge' })
+    const options = (addToast as jest.Mock).mock.calls[0][0]
+    notifier.deinit()
+    expect(dismissToast).toHaveBeenCalledWith('owned-toast')
+    expect(() => options.actions[0].handler('owned-toast')).not.toThrow()
+    expect(application.openPreferences).not.toHaveBeenCalled()
   })
 
   it('deinit stops the safety net, the visibility wake and the socket observer', async () => {

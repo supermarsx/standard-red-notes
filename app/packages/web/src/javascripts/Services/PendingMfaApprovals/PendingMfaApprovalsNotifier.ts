@@ -81,6 +81,9 @@ export class PendingMfaApprovalsNotifier {
   private pollTimer?: ReturnType<typeof setInterval>
   private visibilityListener?: () => void
   private polling = false
+  private disposed = false
+  private accountUuid: string | undefined
+  private principalEpoch = 0
   /** Epoch-ms of the last poll that actually went out; cadences are measured from here. */
   private lastPollStartedAt: number
   /** challengeId -> epoch-ms after which the entry may be forgotten. */
@@ -90,8 +93,12 @@ export class PendingMfaApprovalsNotifier {
 
   constructor(private application: WebApplication) {
     this.lastPollStartedAt = Date.now()
+    this.synchronizePrincipal()
 
     this.socketObserverDisposer = this.application.sockets.addEventObserver(async (event, data) => {
+      if (this.disposed || !this.synchronizePrincipal()) {
+        return
+      }
       if (event === WebSocketsServiceEvent.MfaApprovalRequested) {
         this.maybeNotify(data as PendingApprovalLike)
         return
@@ -116,6 +123,9 @@ export class PendingMfaApprovalsNotifier {
   }
 
   deinit(): void {
+    this.disposed = true
+    this.principalEpoch++
+    this.clearNotifications()
     this.socketObserverDisposer?.()
     this.socketObserverDisposer = undefined
     if (this.pollTimer) {
@@ -126,9 +136,31 @@ export class PendingMfaApprovalsNotifier {
       document.removeEventListener('visibilitychange', this.visibilityListener)
     }
     this.visibilityListener = undefined
+  }
+
+  private clearNotifications(): void {
+    for (const toastId of this.toastIdsByChallengeId.values()) {
+      dismissToast(toastId)
+    }
     this.notifiedChallengeIds.clear()
     this.toastIdsByChallengeId.clear()
-    ;(this.application as unknown) = undefined
+  }
+
+  private synchronizePrincipal(): string | undefined {
+    let current: string | undefined
+    try {
+      current = this.application.sessions.getUser()?.uuid
+    } catch {
+      // The application may still be launching or tearing down.
+      return undefined
+    }
+    if (current !== this.accountUuid) {
+      this.accountUuid = current
+      this.principalEpoch++
+      this.polling = false
+      this.clearNotifications()
+    }
+    return current
   }
 
   /**
@@ -142,6 +174,9 @@ export class PendingMfaApprovalsNotifier {
     if (!challengeId) {
       return
     }
+    // A resolution may arrive before the request frame or an older poll result.
+    this.pruneRememberedIds(Date.now())
+    this.notifiedChallengeIds.set(challengeId, Date.now() + DEFAULT_REMEMBER_MS)
     const toastId = this.toastIdsByChallengeId.get(challengeId)
     if (toastId === undefined) {
       return
@@ -158,7 +193,11 @@ export class PendingMfaApprovalsNotifier {
    * Hidden tabs and signed-out sessions never poll.
    */
   private async pollIfDue(trigger: PollTrigger): Promise<void> {
-    if (this.polling) {
+    if (this.disposed) {
+      return
+    }
+    const accountUuid = this.synchronizePrincipal()
+    if (this.polling || !accountUuid) {
       return
     }
     if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
@@ -188,8 +227,12 @@ export class PendingMfaApprovalsNotifier {
 
     this.lastPollStartedAt = now
     this.polling = true
+    const epoch = this.principalEpoch
     try {
       const response = await this.application.legacyApi.listPendingMfaApprovals()
+      if (this.disposed || epoch !== this.principalEpoch || this.application.sessions.getUser()?.uuid !== accountUuid) {
+        return
+      }
       if (isErrorResponse(response)) {
         // Older server / feature unavailable — stay silent (log-gated).
         debugLog('list poll returned an error response')
@@ -203,12 +246,21 @@ export class PendingMfaApprovalsNotifier {
     } catch (error) {
       debugLog('list poll failed', error)
     } finally {
-      this.polling = false
+      if (epoch === this.principalEpoch) {
+        this.polling = false
+      }
     }
   }
 
   /** Raise at most one toast per challenge id; ignore malformed/expired input. */
   private maybeNotify(approval: PendingApprovalLike): void {
+    if (this.disposed) {
+      return
+    }
+    const accountUuid = this.synchronizePrincipal()
+    if (!accountUuid) {
+      return
+    }
     const challengeId = typeof approval?.challengeId === 'string' ? approval.challengeId : undefined
     if (!challengeId) {
       return
@@ -246,7 +298,9 @@ export class PendingMfaApprovalsNotifier {
           handler: (toastId) => {
             this.toastIdsByChallengeId.delete(challengeId)
             dismissToast(toastId)
-            this.application.openPreferences('security')
+            if (!this.disposed && this.application.sessions.getUser()?.uuid === accountUuid) {
+              this.application.openPreferences('security')
+            }
           },
         },
       ],
