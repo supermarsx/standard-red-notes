@@ -7,6 +7,7 @@ import {
   prepareAssistantAttachment,
 } from '@/Assistant/attachments'
 import { AttachmentPreview } from './ComposerAttachments'
+import AssistantMessageContent from './AssistantMessageContent'
 import type { AssistantChatContextSnapshot } from '@/Assistant/assistantDirectiveContext'
 import AssistantComposer from './AssistantComposer'
 import AssistantModeSelector from './AssistantModeSelector'
@@ -2195,13 +2196,11 @@ export const MessageBubble = ({
             </div>
           )}
           {(message.text || message.streaming) && (
-            <div
-              ref={messageTextRef}
-              className="bg-contrast text-text rounded-lg px-2.5 py-1.5 text-sm leading-5 whitespace-pre-wrap"
-            >
-              {message.text}
-              {message.streaming && <span className="ml-0.5 animate-pulse">▍</span>}
-            </div>
+            <AssistantMessageContent
+              text={message.text}
+              streaming={message.streaming}
+              messageTextRef={messageTextRef}
+            />
           )}
         </div>
       )}
@@ -2243,20 +2242,29 @@ export const ToolActivity = ({
             : 'Allowed by permissions'
     : undefined
   return (
-    <div className="border-border bg-contrast text-neutral rounded border px-2 py-1.5 text-xs">
-      <div className="flex items-center gap-1 font-semibold">
-        <Icon type="assistant" size="small" />
-        {presentation.label}
-      </div>
-      {presentation.detail && <div className="text-passive-0 mt-0.5 whitespace-pre-wrap">{presentation.detail}</div>}
-      <div
-        className={classNames(
-          'mt-1 font-medium',
-          tool.outcome === 'failed' || tool.outcome === 'denied' ? 'text-danger' : 'text-passive-1',
+    <details className="border-border bg-contrast text-neutral group rounded border px-2 py-1 text-[11px] leading-4">
+      <summary className="flex min-w-0 cursor-pointer items-center gap-1.5 select-none">
+        <Icon type="chevron-right" size="small" className="shrink-0 transition-transform group-open:rotate-90" />
+        <span className="min-w-0 flex-1 truncate font-medium" title={presentation.label}>
+          {presentation.label}
+        </span>
+        {tool.noteChange && tool.outcome === 'succeeded' && (
+          <span className="shrink-0 tabular-nums">
+            <span className="text-success">+{tool.noteChange.addedLines}</span>{' '}
+            <span className="text-danger">−{tool.noteChange.removedLines}</span>
+          </span>
         )}
-      >
-        {[authorization, state].filter(Boolean).join(' · ')}
-      </div>
+        <span
+          className={classNames(
+            'shrink-0 whitespace-nowrap',
+            tool.outcome === 'failed' || tool.outcome === 'denied' ? 'text-danger' : 'text-passive-1',
+          )}
+        >
+          {state}
+        </span>
+      </summary>
+      {presentation.detail && <div className="text-passive-0 mt-1 whitespace-pre-wrap">{presentation.detail}</div>}
+      {authorization && <div className="text-passive-1 mt-1">{authorization}</div>}
       {tool.noteChange && tool.outcome === 'succeeded' && (
         <div className="border-border mt-2 border-t pt-2">
           <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
@@ -2283,7 +2291,7 @@ export const ToolActivity = ({
               </button>
             </div>
           </div>
-          <details open>
+          <details>
             <summary className="text-passive-0 cursor-pointer select-none">Git-style diff</summary>
             <pre
               className="border-border bg-default mt-1 max-h-72 overflow-auto rounded border p-2 font-mono text-[11px] leading-4"
@@ -2314,7 +2322,7 @@ export const ToolActivity = ({
           )}
         </div>
       )}
-    </div>
+    </details>
   )
 }
 

@@ -23,7 +23,7 @@ describe('assistant note change activity', () => {
     container.remove()
   })
 
-  it('shows the git-style diff and exposes guarded undo and redo controls', () => {
+  it('starts as a compact summary and expands the diff with guarded undo and redo controls', () => {
     const onApply = jest.fn()
     const tool: ToolEntry = {
       id: 'call-1',
@@ -55,6 +55,16 @@ describe('assistant note change activity', () => {
 
     act(() => root.render(<ToolActivity tool={tool} onApplyNoteChange={onApply} />))
 
+    const activity = container.querySelector('details')!
+    expect(activity.open).toBe(false)
+    expect(activity.querySelector('summary')?.textContent).toContain('+1')
+    expect(activity.querySelector('summary')?.textContent).toContain('Completed')
+    act(() => activity.querySelector('summary')!.click())
+    expect(activity.open).toBe(true)
+    const diff = activity.querySelector('details')!
+    expect(diff.open).toBe(false)
+    act(() => diff.querySelector('summary')!.click())
+    expect(diff.open).toBe(true)
     expect(container.textContent).toContain('Changes · +1 −1')
     expect(container.querySelector('pre')?.textContent).toContain('-old+new')
     const [undo, redo] = Array.from(container.querySelectorAll('button'))
@@ -62,5 +72,19 @@ describe('assistant note change activity', () => {
     expect(redo.disabled).toBe(true)
     act(() => undo.click())
     expect(onApply).toHaveBeenCalledWith('call-1', 'undo')
+  })
+
+  it('keeps a failed action visible in the collapsed summary', () => {
+    act(() =>
+      root.render(
+        <ToolActivity
+          tool={{ id: 'failed', name: 'notes.read', args: {}, persistedLabel: 'Read note', outcome: 'failed' }}
+          onApplyNoteChange={jest.fn()}
+        />,
+      ),
+    )
+    expect(container.querySelector('details')?.open).toBe(false)
+    expect(container.querySelector('summary')?.textContent).toContain('Read note')
+    expect(container.querySelector('summary')?.textContent).toContain('Needs attention')
   })
 })
