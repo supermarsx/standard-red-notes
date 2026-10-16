@@ -16,6 +16,10 @@ import {
   $setChecklistTodoId,
 } from '../Lexical/Nodes/ChecklistItemNode'
 
+jest.mock('@/Components/Popover/Popover', () => ({
+  __esModule: true,
+  default: ({ open, children }: { open: boolean; children: React.ReactNode }) => (open ? <div>{children}</div> : null),
+}))
 jest.mock('@/Hooks/useMediaQuery', () => ({
   useMediaQuery: () => false,
   MutuallyExclusiveMediaQueryBreakpoints: { sm: 'sm' },
@@ -285,3 +289,60 @@ it('shows every personal tick, lets you toggle only yours, and preserves shared 
     container.remove()
   }
 })
+
+it.each([false, true])(
+  'organizes from its compact menu after toolbar focus, respecting latest readonly=%s',
+  async (readOnly) => {
+    const editor = createHeadlessEditor({
+      namespace: 'organize-panel',
+      nodes: [ListNode, ListItemNode],
+      onError: (error) => {
+        throw error
+      },
+    })
+    editor.update(
+      () => {
+        const done = $createListItemNode(true).append($createTextNode('Done'))
+        $getRoot().append(
+          $createListNode('check').append(done, $createListItemNode(false).append($createTextNode('Open'))),
+        )
+        done.selectStart()
+      },
+      { discrete: true },
+    )
+    jest.spyOn(editor, 'getRootElement').mockReturnValue(null)
+    jest.mocked(useLexicalComposerContext).mockReturnValue([editor, {} as never])
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root = createRoot(container)
+    await act(async () => root.render(<Sections />))
+    const anchor = container.querySelector<HTMLButtonElement>('[aria-label="Organize completed tasks"]')!
+    expect(anchor).not.toBeNull()
+    await act(async () => anchor.click())
+    expect([...container.querySelectorAll('[role="menuitem"]')].map((node) => node.textContent)).toEqual([
+      'Sink completed within selection',
+      'Sink completed within heading section',
+      'Move section’s completed to Completed tasks',
+    ])
+    // Losing the editor selection to a ribbon control must retain the range the
+    // command was opened for, but never retain an obsolete edit permission.
+    await act(async () => editor.update(() => $setSelection(null), { discrete: true }))
+    if (readOnly) await act(async () => editor.setEditable(false))
+    await act(async () =>
+      [...container.querySelectorAll<HTMLElement>('[role="menuitem"]')]
+        .find((node) => node.textContent === 'Sink completed within heading section')!
+        .click(),
+    )
+    editor
+      .getEditorState()
+      .read(() =>
+        expect(($getRoot().getFirstChild() as ListNode).getChildren().map((node) => node.getTextContent())).toEqual(
+          readOnly ? ['Done', 'Open'] : ['Open', 'Done'],
+        ),
+      )
+    expect(container.querySelector('[role="menuitem"]')).toBeNull()
+    if (!readOnly) expect(flushChanges).toHaveBeenCalled()
+    await act(async () => root.unmount())
+    container.remove()
+  },
+)

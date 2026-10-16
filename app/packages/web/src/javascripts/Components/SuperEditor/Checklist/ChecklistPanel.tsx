@@ -1,3 +1,4 @@
+import { ChecklistOrganizeMenu } from './ChecklistOrganizeMenu'
 import Dropdown from '@/Components/Dropdown/Dropdown'
 import ToolbarButton from '../Plugins/ToolbarPlugin/ToolbarButton'
 import Icon from '@/Components/Icon/Icon'
@@ -264,6 +265,18 @@ export function ChecklistPanel({
           className="text-passive-1 mt-px hidden truncate text-center text-[10px] leading-none font-medium tracking-wide uppercase select-none md:block"
         >
           Item settings
+        </span>
+      </section>
+      <section
+        hidden={activeSection !== 'checklist'}
+        aria-label="Checklist organization"
+        className="super-toolbar-group bg-contrast flex flex-shrink-0 flex-col rounded-lg px-1 py-0.5 text-sm"
+      >
+        <div className="flex flex-1 items-center justify-center md:min-h-[6.25rem]">
+          <ChecklistOrganizeMenu flushChanges={flushChanges} />
+        </div>
+        <span aria-hidden className="text-passive-1 hidden text-center text-[10px] font-medium uppercase md:block">
+          Organize
         </span>
       </section>
     </>
