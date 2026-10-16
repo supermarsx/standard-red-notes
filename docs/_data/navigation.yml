@@ -1060,6 +1060,18 @@
           url: /standard-notes-base.html#what-changes-in-the-fork
         - title: Compatibility notes
           url: /standard-notes-base.html#compatibility-notes
+    - title: Concurrency and performance audit
+      items:
+        - title: Audit overview
+          url: /concurrency-performance-audit.html
+        - title: Confirmed findings
+          url: /concurrency-performance-audit.html#confirmed-findings
+        - title: Regression coverage
+          url: /concurrency-performance-audit.html#evidence-and-regression-coverage
+        - title: Private-comment data loss
+          url: /concurrency-performance-audit.html#open-private-comment-data-loss-issue
+        - title: Open observations
+          url: /concurrency-performance-audit.html#other-unresolved-observations
     - title: Dependency upgrade audit
       items:
         - title: Audit overview
