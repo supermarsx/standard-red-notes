@@ -245,7 +245,7 @@ it('rechecks session identity inside a delayed private mutation rather than writ
 
 it('withholds comment mutations from read-only agents and prevents nonowners purging shared threads', async () => {
   const h = harness({ allowMutatingTools: false })
-  await expect(h.tools.call('comments.manage', add)).rejects.toThrow('Unknown tool')
+  await expect(h.tools.call('comments.manage', add)).rejects.toMatchObject({ code: 'ASSISTANT_ACTION_NOT_ALLOWED' })
   const nonowner = harness()
   nonowner.note.user_uuid = 'another-account'
   await expect(

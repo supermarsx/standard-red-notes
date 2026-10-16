@@ -1,6 +1,7 @@
 import { confirmDialog } from '@standardnotes/ui-services'
 import type { WebApplication } from '@/Application/WebApplication'
 import { webFetch, webSearch } from './webTools'
+import { AssistantActionNotAllowedError } from './AssistantActionNotAllowedError'
 
 export interface ResearchWebSource {
   title: string
@@ -46,6 +47,11 @@ export async function gatherResearchWebEvidence(
     check()
     const result = await confirm(action, value)
     check()
+    if (!result) {
+      throw new AssistantActionNotAllowedError(
+        `The web ${action === 'search' ? 'search' : 'page read'} was not allowed. Research stopped.`,
+      )
+    }
     return result
   }
   const query = topic.trim()
@@ -58,6 +64,9 @@ export async function gatherResearchWebEvidence(
   const search = await webSearch(application, query, { limit: 3, signal: options.signal })
   check()
   if ('error' in search) {
+    if (search.cancelled) {
+      throw new AssistantActionNotAllowedError(search.message ?? search.error)
+    }
     return { sources: [], status: 'unavailable' }
   }
   const sources: ResearchWebSource[] = []
@@ -75,6 +84,9 @@ export async function gatherResearchWebEvidence(
     }
     const page = await webFetch(application, result.url, { signal: options.signal })
     check()
+    if ('error' in page && page.cancelled) {
+      throw new AssistantActionNotAllowedError(page.message ?? page.error)
+    }
     if ('error' in page || !page.text.trim()) {
       failed = true
       continue

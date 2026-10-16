@@ -7,14 +7,44 @@ const makeApplication = (response: unknown) => {
 }
 
 describe('assistant web tools', () => {
+  it.each([401, 403])('marks HTTP %i as a terminal permission refusal for search and fetch', async (status) => {
+    const { application } = makeApplication({ ok: false, status, data: { error: { message: 'Access denied.' } } })
+    await expect(webSearch(application, 'research')).resolves.toMatchObject({
+      cancelled: true,
+      message: 'Access denied.',
+    })
+    await expect(webFetch(application, 'https://example.test')).resolves.toMatchObject({
+      cancelled: true,
+      message: 'Access denied.',
+    })
+  })
+
+  it('treats a blocked host policy as denied while leaving ordinary HTTP 400 errors recoverable', async () => {
+    const { application, serverJsonRequest } = makeApplication({
+      ok: false,
+      status: 400,
+      data: { error: { tag: 'blocked-host', message: 'The requested host is not allowed.' } },
+    })
+    await expect(webFetch(application, 'https://example.test')).resolves.toMatchObject({ cancelled: true })
+    serverJsonRequest.mockResolvedValue({
+      ok: false,
+      status: 400,
+      data: { error: { tag: 'invalid-url', message: 'Invalid URL.' } },
+    })
+    await expect(webFetch(application, 'https://example.test')).resolves.toEqual({ error: 'Invalid URL.' })
+  })
   it('blocks search and page reads before network access when the account setting disables internet', async () => {
     const { application, serverJsonRequest } = makeApplication({ ok: true, status: 200, data: {} })
     application.getPreference = jest.fn().mockReturnValue(false)
     await expect(webSearch(application, 'public research')).resolves.toEqual({
       error: expect.stringContaining('disabled in Assistant settings'),
+      cancelled: true,
+      message: expect.stringContaining('disabled in Assistant settings'),
     })
     await expect(webFetch(application, 'https://example.test')).resolves.toEqual({
       error: expect.stringContaining('disabled in Assistant settings'),
+      cancelled: true,
+      message: expect.stringContaining('disabled in Assistant settings'),
     })
     expect(serverJsonRequest).not.toHaveBeenCalled()
   })

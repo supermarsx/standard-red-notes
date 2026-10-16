@@ -1,3 +1,4 @@
+import { AssistantActionNotAllowedError, isAssistantActionNotAllowedError } from './AssistantActionNotAllowedError'
 import type { AssistantImageAttachment } from './attachments'
 import type { WebApplication } from '@/Application/WebApplication'
 import { run, AgentOptions, AgentResult } from './agent'
@@ -46,7 +47,7 @@ function restrictSession(session: ToolSession, mode: 'chat' | 'plan', isCurrent:
     setAbortSignal: (signal) => (session as AbortAwareSession).setAbortSignal?.(signal),
     async call(name, args, callId) {
       if (!isCurrent() || !available().some((tool) => tool.name === name)) {
-        return { cancelled: true, reason: `This tool is not available in ${mode} mode.` }
+        return { cancelled: true, message: `This tool is not available in ${mode} mode.` }
       }
       return session.call(name, args, callId)
     },
@@ -209,11 +210,19 @@ export async function runConversationMode(
               requestConfirmation: async (action, value) => {
                 check()
                 if (!hasWebTool(action)) {
-                  return false
+                  throw new AssistantActionNotAllowedError('Internet access became unavailable. Research stopped.')
                 }
                 const approved = await guarded(() => extras.requestWebConfirmation!(action, value))
                 check()
-                return approved && hasWebTool(action)
+                if (!approved) {
+                  throw new AssistantActionNotAllowedError(
+                    `The web ${action === 'search' ? 'search' : 'page read'} was not allowed. Research stopped.`,
+                  )
+                }
+                if (!hasWebTool(action)) {
+                  throw new AssistantActionNotAllowedError('Internet access became unavailable. Research stopped.')
+                }
+                return true
               },
             }),
           )
@@ -284,6 +293,14 @@ export async function runConversationMode(
         options.onTextDelta?.(finalText)
       }
       return { finalText, steps: calls, stopReason: failure.stopReason }
+    }
+    if (isAssistantActionNotAllowedError(failure)) {
+      return {
+        finalText: failure.message.slice(0, 2000),
+        steps: calls,
+        stopReason: 'error',
+        errorCode: 'ACTION_NOT_ALLOWED',
+      }
     }
     if (partialFinal && extras.isCurrent()) {
       options.onTextDelta?.(partialFinal)

@@ -1,4 +1,5 @@
 import { run, AgentControl } from './agent'
+import { AssistantActionNotAllowedError } from './AssistantActionNotAllowedError'
 import { ChatMessage, Provider, ProviderEvent, ToolDefinition, ToolSession } from './types'
 
 /**
@@ -218,6 +219,108 @@ describe('run() steering', () => {
     expect(assistantText).toEqual(['done'])
     expect(toolResults).toEqual(['{"ok":true}'])
     expect(JSON.stringify({ assistantText, toolResults })).not.toContain(providerReplay.encodedOutput)
+  })
+
+  it.each(['returned-denial', 'typed-refusal'] as const)(
+    'stops after %s without running another tool or provider step',
+    async (mode) => {
+      const provider = new ScriptedProvider([
+        () => [
+          { kind: 'tool-call', id: 'denied', name: 'echo', args: { first: true } },
+          { kind: 'tool-call', id: 'must-not-run', name: 'echo', args: { second: true } },
+          { kind: 'finish', stopReason: 'tool_use' },
+        ],
+        () => [
+          { kind: 'text-delta', delta: 'must not retry' },
+          { kind: 'finish', stopReason: 'end_turn' },
+        ],
+      ])
+      const call = jest.fn(async () => {
+        if (mode === 'typed-refusal') {
+          throw new AssistantActionNotAllowedError(
+            'Action not allowed: This action is outside your allowed note scope.',
+          )
+        }
+        return { ok: false, cancelled: true, message: 'You declined this action.' }
+      })
+      const session: ToolSession = {
+        tools: () => [{ name: 'echo', description: 'echo', mutating: true, inputSchema: { type: 'object' } }],
+        call,
+      }
+      const onToolCall = jest.fn()
+      const onToolResult = jest.fn()
+      const result = await run([{ role: 'user', content: 'try' }], {
+        provider,
+        session,
+        systemPrompt: 'sys',
+        onToolCall,
+        onToolResult,
+      })
+      expect(result.stopReason).toBe('error')
+      expect(result.finalText).toContain('Action not allowed:')
+      expect(result.finalText.match(/Action not allowed:/g)).toHaveLength(1)
+      expect(result.finalText).toContain(mode === 'typed-refusal' ? 'allowed note scope' : 'declined this action')
+      expect(call).toHaveBeenCalledTimes(1)
+      expect(provider.step).toBe(1)
+      expect(onToolCall).toHaveBeenCalledTimes(1)
+      expect(onToolResult).toHaveBeenCalledWith('denied', expect.any(String), 'denied')
+    },
+  )
+
+  it('bounds the displayed denial reason and never serializes its other fields into the user error', async () => {
+    const provider = new ScriptedProvider([
+      () => [
+        { kind: 'tool-call', id: 'd', name: 'echo', args: {} },
+        { kind: 'finish', stopReason: 'tool_use' },
+      ],
+    ])
+    const session: ToolSession = {
+      tools: () => [],
+      call: async () => ({ ok: false, cancelled: true, message: 'x'.repeat(5000), privateDetail: 'not-user-facing' }),
+    }
+    const result = await run([], { provider, session, systemPrompt: 'sys' })
+    expect(result.stopReason).toBe('error')
+    expect(result.finalText.length).toBeLessThanOrEqual(2020)
+    expect(result.finalText).not.toContain('not-user-facing')
+  })
+
+  it('reports operational failure results truthfully without treating them as permission refusals', async () => {
+    const provider = new ScriptedProvider([
+      () => [
+        { kind: 'tool-call', id: 'f', name: 'echo', args: {} },
+        { kind: 'finish', stopReason: 'tool_use' },
+      ],
+      () => [
+        { kind: 'text-delta', delta: 'Please fix the invalid input.' },
+        { kind: 'finish', stopReason: 'end_turn' },
+      ],
+    ])
+    const session: ToolSession = { tools: () => [], call: async () => ({ ok: false, error: 'Invalid datetime.' }) }
+    const onToolResult = jest.fn()
+    const result = await run([], { provider, session, systemPrompt: 'sys', onToolResult })
+    expect(onToolResult).toHaveBeenCalledWith('f', expect.any(String), 'failed')
+    expect(result.stopReason).toBe('end_turn')
+    expect(provider.step).toBe(2)
+  })
+
+  it('keeps explicit Stop authoritative when a permission-refusing tool settles after cancellation', async () => {
+    const controller = new AbortController()
+    const provider = new ScriptedProvider([
+      () => [
+        { kind: 'tool-call', id: 'd', name: 'echo', args: {} },
+        { kind: 'finish', stopReason: 'tool_use' },
+      ],
+    ])
+    const session: ToolSession = {
+      tools: () => [],
+      call: async () => {
+        controller.abort()
+        throw new AssistantActionNotAllowedError('Denied')
+      },
+    }
+    const result = await run([], { provider, session, systemPrompt: 'sys', signal: controller.signal })
+    expect(result.stopReason).toBe('aborted')
+    expect(provider.step).toBe(1)
   })
 
   it('reports a declined tool as denied rather than completed', async () => {

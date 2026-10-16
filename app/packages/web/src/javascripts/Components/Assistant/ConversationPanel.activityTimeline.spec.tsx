@@ -3,13 +3,14 @@ import { act, type RefObject, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { NoteType } from '@standardnotes/snjs'
 import { runConversationMode } from '@/Assistant/conversationModeRunner'
-import type { AgentOptions, AgentResult } from '@/Assistant/agent'
+import { run, type AgentOptions, type AgentResult } from '@/Assistant/agent'
 import type { AssistantToolContext } from '@/Assistant/tools'
 import { readAssistantChatHistoryResult } from '@/Assistant/assistantChatHistory'
 import ConversationPanel from './ConversationPanel'
 
 let mockToolContext: AssistantToolContext
 jest.mock('@/Assistant/conversationModeRunner', () => ({ runConversationMode: jest.fn() }))
+jest.mock('@/Assistant/agent', () => ({ run: jest.fn() }))
 jest.mock('@/Assistant/tools', () => ({
   TOOL_DEFINITIONS: [],
   AssistantTools: jest.fn().mockImplementation((_application, context) => {
@@ -89,7 +90,7 @@ describe('Assistant conversation activity timeline', () => {
     itemListController: { selectedItemsCount: 0 },
     itemControllerGroup: { itemControllers: [], addActiveControllerChangeObserver: () => () => undefined },
   }
-  const render = (directive = true) =>
+  const render = (directive: boolean | string = true) =>
     root.render(
       <ConversationPanel
         application={application as never}
@@ -104,7 +105,7 @@ describe('Assistant conversation activity timeline', () => {
         directive={
           directive
             ? ({
-                id: 'timeline-action',
+                id: typeof directive === 'string' ? directive : 'timeline-action',
                 accountScope: 'anonymous:activity-test',
                 instruction: 'Help with this task',
                 selectedText: '',
@@ -269,5 +270,58 @@ describe('Assistant conversation activity timeline', () => {
     })
     expect(container.textContent?.match(/Initial narration before guidance\./g)).toHaveLength(1)
     expect(runConversationMode).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows one policy error, stops the run and leaves queued work awaiting an explicit user action', async () => {
+    await act(async () => {
+      render()
+      await flush()
+    })
+    await act(async () => {
+      options.onToolCall?.({ id: 'denied-call', name: 'notes.update', args: { uuid: 'read-only-note' } })
+      render('queued-next-action')
+      await flush()
+    })
+    expect(container.querySelector('[aria-label="Remove from queue"]')).not.toBeNull()
+    await act(async () => {
+      options.onToolResult?.('denied-call', 'Action not allowed: read-only', 'denied')
+      resolveRun({
+        stopReason: 'error',
+        errorCode: 'ACTION_NOT_ALLOWED',
+        finalText: 'Action not allowed: read-only',
+        steps: 1,
+      })
+      await flush()
+    })
+    expect(container.textContent?.match(/Action not allowed: read-only/g)).toHaveLength(1)
+    expect(container.querySelector('summary')?.textContent).toContain('1 denied')
+    expect(container.querySelectorAll('[aria-label="Message display format"]')).toHaveLength(0)
+    expect(Array.from(container.querySelectorAll('button')).some((button) => button.textContent === 'Stop')).toBe(false)
+    expect(Array.from(container.querySelectorAll('button')).some((button) => button.textContent === 'Send')).toBe(true)
+    expect(container.querySelector('[aria-label="Remove from queue"]')).not.toBeNull()
+    expect(runConversationMode).toHaveBeenCalledTimes(1)
+  })
+
+  it('propagates nested agent policy refusals as typed denials rather than a successful tool summary', async () => {
+    await act(async () => {
+      render()
+      await flush()
+    })
+    const nestedRun = mockToolContext.runSubAgent!
+    jest.mocked(run).mockResolvedValue({
+      stopReason: 'error',
+      errorCode: 'ACTION_NOT_ALLOWED',
+      finalText: 'Action not allowed: read-only',
+      steps: 1,
+    })
+    await expect(nestedRun('Attempt the nested task')).rejects.toMatchObject({
+      name: 'AssistantActionNotAllowedError',
+      code: 'ASSISTANT_ACTION_NOT_ALLOWED',
+    })
+    expect(run).toHaveBeenCalledTimes(1)
+    await act(async () => {
+      resolveRun({ finalText: 'Stopped', stopReason: 'aborted', steps: 1 })
+      await flush()
+    })
   })
 })

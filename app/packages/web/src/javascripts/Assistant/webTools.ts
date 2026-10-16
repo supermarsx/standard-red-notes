@@ -45,6 +45,9 @@ export interface WebFetchResponse {
 /** Shape of an error the model can read instead of a thrown exception. */
 export interface WebToolError {
   error: string
+  /** Permission refusals are terminal for an active run, not retryable evidence failures. */
+  cancelled?: true
+  message?: string
 }
 
 interface RawSearchData {
@@ -144,6 +147,14 @@ function describeHttpError(status: number, data: { error?: unknown; message?: un
   return `Web request failed (HTTP ${status}).`
 }
 
+function isPermissionRefusal(status: number, data: { error?: unknown }): boolean {
+  if (status === 401 || status === 403) {
+    return true
+  }
+  const error = data.error
+  return status === 400 && typeof error === 'object' && error !== null && 'tag' in error && error.tag === 'blocked-host'
+}
+
 /**
  * `web.search({ query })` -> `{ results: [{ title, url, snippet }] }`.
  * On any failure resolves to `{ error }` (never throws).
@@ -154,7 +165,11 @@ export async function webSearch(
   options: { limit?: number; signal?: AbortSignal } = {},
 ): Promise<WebSearchResponse | WebToolError> {
   if (!assistantInternetAccessEnabled(application)) {
-    return { error: 'Internet access is disabled in Assistant settings.' }
+    return {
+      error: 'Internet access is disabled in Assistant settings.',
+      cancelled: true,
+      message: 'Internet access is disabled in Assistant settings.',
+    }
   }
   const trimmed = typeof query === 'string' ? query.trim() : ''
   if (!trimmed) {
@@ -176,6 +191,10 @@ export async function webSearch(
     )
 
     if (!ok) {
+      if (isPermissionRefusal(status, data)) {
+        const message = describeHttpError(status, data)
+        return { error: message, cancelled: true, message }
+      }
       return { error: describeHttpError(status, data) }
     }
 
@@ -227,7 +246,11 @@ export async function webFetch(
   options: { signal?: AbortSignal } = {},
 ): Promise<WebFetchResponse | WebToolError> {
   if (!assistantInternetAccessEnabled(application)) {
-    return { error: 'Internet access is disabled in Assistant settings.' }
+    return {
+      error: 'Internet access is disabled in Assistant settings.',
+      cancelled: true,
+      message: 'Internet access is disabled in Assistant settings.',
+    }
   }
   const trimmed = typeof url === 'string' ? url.trim() : ''
   if (!trimmed) {
@@ -251,6 +274,10 @@ export async function webFetch(
     )
 
     if (!ok) {
+      if (isPermissionRefusal(status, data)) {
+        const message = describeHttpError(status, data)
+        return { error: message, cancelled: true, message }
+      }
       return { error: describeHttpError(status, data) }
     }
 

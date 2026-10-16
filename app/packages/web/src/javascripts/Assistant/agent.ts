@@ -1,3 +1,4 @@
+import { isAssistantActionNotAllowedError } from './AssistantActionNotAllowedError'
 import { DEFAULT_SAMPLING_SETTINGS, getMaxRunTimeMs } from './samplingSettings'
 import {
   AssistantToolCall,
@@ -36,6 +37,7 @@ export interface AgentOptions {
 export interface AgentResult {
   finalText: string
   steps: number
+  errorCode?: 'ACTION_NOT_ALLOWED'
   stopReason: 'end_turn' | 'max_tokens' | 'max_steps' | 'time_limit' | 'error' | 'aborted'
 }
 
@@ -48,6 +50,18 @@ function isDeniedToolResult(result: unknown): boolean {
     'cancelled' in result &&
     (result as { cancelled?: unknown }).cancelled === true
   )
+}
+
+function isFailedToolResult(result: unknown): boolean {
+  return typeof result === 'object' && result !== null && 'ok' in result && (result as { ok?: unknown }).ok === false
+}
+
+function actionNotAllowedMessage(detail: unknown): string {
+  const reason = typeof detail === 'string' ? detail.trim().slice(0, 2000) : ''
+  if (reason.startsWith('Action not allowed: ')) {
+    return reason
+  }
+  return reason ? `Action not allowed: ${reason}` : 'The requested action was not allowed. The assistant stopped.'
 }
 
 interface RunCancellation {
@@ -351,7 +365,21 @@ export async function run(messages: ChatMessage[], opts: AgentOptions): Promise<
           const result = await session.call(toolCall.name, toolCall.args, toolCall.id)
           const serialized = typeof result === 'string' ? result : JSON.stringify(result)
           history.push({ role: 'tool', content: serialized, toolCallId: toolCall.id, name: toolCall.name })
-          opts.onToolResult?.(toolCall.id, serialized, isDeniedToolResult(result) ? 'denied' : 'succeeded')
+          const denied = isDeniedToolResult(result)
+          opts.onToolResult?.(
+            toolCall.id,
+            serialized,
+            denied ? 'denied' : isFailedToolResult(result) ? 'failed' : 'succeeded',
+          )
+          if (denied) {
+            checkBoundary()
+            return {
+              finalText: actionNotAllowedMessage((result as { message?: unknown }).message),
+              errorCode: 'ACTION_NOT_ALLOWED',
+              steps: step,
+              stopReason: 'error',
+            }
+          }
           // A non-cancellable local mutation may have committed while Stop was
           // requested. Report that settled result truthfully before stopping;
           // the boundary still prevents every later tool/provider action.
@@ -359,6 +387,11 @@ export async function run(messages: ChatMessage[], opts: AgentOptions): Promise<
         } catch (error) {
           if (error === RUN_CANCELLED || cancellation.signal.aborted) {
             throw RUN_CANCELLED
+          }
+          if (isAssistantActionNotAllowedError(error)) {
+            const message = actionNotAllowedMessage(error.message)
+            opts.onToolResult?.(toolCall.id, message, 'denied')
+            return { finalText: message, errorCode: 'ACTION_NOT_ALLOWED', steps: step, stopReason: 'error' }
           }
           const message = `error: ${error instanceof Error ? error.message : String(error)}`
           history.push({ role: 'tool', content: message, toolCallId: toolCall.id, name: toolCall.name })

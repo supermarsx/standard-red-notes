@@ -100,7 +100,9 @@ it.each(['chat', 'plan'] as const)(
       harness.options,
       harness.extras,
     )
-    expect(result.stopReason).toBe('end_turn')
+    expect(result.stopReason).toBe('error')
+    expect(result.errorCode).toBe('ACTION_NOT_ALLOWED')
+    expect(harness.seen).toHaveLength(1)
     expect(harness.session.call).not.toHaveBeenCalled()
     expect(harness.seen[0].tools.some((tool) => tool.name === 'notes.create')).toBe(false)
     expect(harness.session.setAbortSignal).toHaveBeenCalledWith(expect.any(AbortSignal))
@@ -147,6 +149,26 @@ it.each(['research', 'deep-research'] as const)(
   },
 )
 
+it.each(['research', 'deep-research'] as const)(
+  '%s stops on a denied query or page approval before calling the model',
+  async (mode) => {
+    for (const declined of ['search', 'fetch']) {
+      jest.mocked(webSearch).mockClear()
+      jest.mocked(webFetch).mockClear()
+      const harness = setup()
+      harness.extras.requestWebConfirmation = jest.fn(async (action) => action !== declined)
+      const result = await runConversationMode(mode, [], harness.options, harness.extras)
+      expect(result).toMatchObject({ stopReason: 'error', errorCode: 'ACTION_NOT_ALLOWED' })
+      expect(result.finalText).toContain('was not allowed')
+      expect(harness.seen).toHaveLength(0)
+      expect(webFetch).not.toHaveBeenCalled()
+      if (declined === 'search') {
+        expect(webSearch).not.toHaveBeenCalled()
+      }
+    }
+  },
+)
+
 it('performs no web requests after a denied approval or when the approval path is absent', async () => {
   const harness = setup()
   harness.extras.requestWebConfirmation = jest.fn(async () => false)
@@ -154,6 +176,19 @@ it('performs no web requests after a denied approval or when the approval path i
   expect(webSearch).not.toHaveBeenCalled()
   await runConversationMode('research', [], harness.options, { ...harness.extras, requestWebConfirmation: undefined })
   expect(webSearch).not.toHaveBeenCalled()
+})
+
+it('stops if internet permission disappears while approval is open', async () => {
+  const harness = setup()
+  harness.extras.requestWebConfirmation = jest.fn(async () => {
+    harness.session.tools.mockReturnValue([])
+    return true
+  })
+  const result = await runConversationMode('research', [], harness.options, harness.extras)
+  expect(result).toMatchObject({ stopReason: 'error', errorCode: 'ACTION_NOT_ALLOWED' })
+  expect(harness.seen).toHaveLength(0)
+  expect(webSearch).not.toHaveBeenCalled()
+  expect(webFetch).not.toHaveBeenCalled()
 })
 
 it('rechecks context authorization after web approval and before any disclosure or model call', async () => {

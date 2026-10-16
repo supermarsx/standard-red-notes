@@ -1,7 +1,19 @@
 import { WebApplication } from '@/Application/WebApplication'
 import { createEmailReminder, deleteEmailReminder } from '@/Reminders/emailReminders'
 import { Reminder } from '@/Reminders/reminders'
-import { CollectionSort, ContentType, PrefKey } from '@standardnotes/snjs'
+import {
+  CollectionSort,
+  ContentType,
+  PrefKey,
+  DecryptedPayload,
+  FillItemContent,
+  NoteContent,
+  SNNote,
+  PayloadTimestampDefaults,
+  PayloadSource,
+} from '@standardnotes/snjs'
+import { webcrypto } from 'node:crypto'
+import { TextEncoder as NodeTextEncoder } from 'node:util'
 import { AssistantToolContext, AssistantTools } from './tools'
 
 jest.mock('@/Reminders/emailReminders', () => ({
@@ -11,6 +23,28 @@ jest.mock('@/Reminders/emailReminders', () => ({
 
 const createEmailReminderMock = createEmailReminder as jest.MockedFunction<typeof createEmailReminder>
 const deleteEmailReminderMock = deleteEmailReminder as jest.MockedFunction<typeof deleteEmailReminder>
+
+beforeAll(() => {
+  if (!globalThis.TextEncoder) {
+    Object.defineProperty(globalThis, 'TextEncoder', { configurable: true, value: NodeTextEncoder })
+  }
+  if (!globalThis.crypto?.subtle) {
+    Object.defineProperty(globalThis, 'crypto', { configurable: true, value: webcrypto })
+  }
+})
+
+const createdTemplate = (uuid: string, content: Record<string, unknown>) =>
+  new SNNote(
+    new DecryptedPayload<NoteContent>(
+      {
+        uuid,
+        content_type: ContentType.TYPES.Note,
+        content: FillItemContent<NoteContent>({ ...content }),
+        ...PayloadTimestampDefaults(),
+      },
+      PayloadSource.Constructor,
+    ),
+  )
 
 function makeContext(overrides: Partial<AssistantToolContext> = {}): AssistantToolContext {
   return {
@@ -373,26 +407,17 @@ describe('AssistantTools reminder reconciliation', () => {
 describe('AssistantTools created-note provenance', () => {
   it('does not admit a created UUID when the principal changes before insert resolves', async () => {
     let sessionCurrent = true
-    let createdNote: Record<string, unknown> | undefined
+    let createdNote: SNNote | undefined
     const application = {
       items: {
-        createTemplateItem: (_contentType: string, content: Record<string, unknown>) => ({
-          uuid: 'created-note',
-          content_type: ContentType.TYPES.Note,
-          preview_plain: '',
-          pinned: false,
-          archived: false,
-          starred: false,
-          trashed: false,
-          protected: false,
-          ...content,
-        }),
+        createTemplateItem: (_contentType: string, content: Record<string, unknown>) =>
+          createdTemplate('created-note', content),
         findItem: (uuid: string) => (uuid === createdNote?.uuid ? createdNote : undefined),
         getItems: () => (createdNote ? [createdNote] : []),
         getSortedTagsForItem: () => [],
       },
       mutator: {
-        insertItem: async (template: Record<string, unknown>) => {
+        insertItem: async (template: SNNote) => {
           createdNote = template
           sessionCurrent = false
           return template
@@ -417,19 +442,16 @@ describe('AssistantTools created-note provenance', () => {
   })
 
   it('rejects an insert result whose identity differs from the application template', async () => {
-    let returnedNote: Record<string, unknown> | undefined
+    let returnedNote: SNNote | undefined
     const application = {
       items: {
-        createTemplateItem: (_contentType: string, content: Record<string, unknown>) => ({
-          uuid: 'template-note',
-          content_type: ContentType.TYPES.Note,
-          ...content,
-        }),
+        createTemplateItem: (_contentType: string, content: Record<string, unknown>) =>
+          createdTemplate('template-note', content),
         findItem: (uuid: string) => (uuid === returnedNote?.uuid ? returnedNote : undefined),
       },
       mutator: {
-        insertItem: async (template: Record<string, unknown>) => {
-          returnedNote = { ...template, uuid: 'substituted-note' }
+        insertItem: async (template: SNNote) => {
+          returnedNote = createdTemplate('substituted-note', { ...template.content })
           return returnedNote
         },
       },

@@ -37,17 +37,40 @@ it('approves exactly one topic query and at most three pages before server dispa
 })
 
 it('does not dispatch a declined query or URL', async () => {
-  const declined = await gatherResearchWebEvidence(application, 'topic', {
-    isCurrent: () => true,
-    requestConfirmation: async () => false,
-  })
-  expect(declined.status).toBe('declined')
+  await expect(
+    gatherResearchWebEvidence(application, 'topic', {
+      isCurrent: () => true,
+      requestConfirmation: async () => false,
+    }),
+  ).rejects.toMatchObject({ code: 'ASSISTANT_ACTION_NOT_ALLOWED' })
   expect(search).not.toHaveBeenCalled()
-  await gatherResearchWebEvidence(application, 'topic', {
-    isCurrent: () => true,
-    requestConfirmation: async (action) => action === 'search',
-  })
+  await expect(
+    gatherResearchWebEvidence(application, 'topic', {
+      isCurrent: () => true,
+      requestConfirmation: async (action) => action === 'search',
+    }),
+  ).rejects.toMatchObject({ code: 'ASSISTANT_ACTION_NOT_ALLOWED' })
   expect(fetchPage).not.toHaveBeenCalled()
+})
+
+it.each(['search', 'fetch'])('stops when the server denies the %s request', async (action) => {
+  const denied = {
+    error: 'Server policy denied access.',
+    message: 'Server policy denied access.',
+    cancelled: true as const,
+  }
+  if (action === 'search') {
+    search.mockResolvedValue(denied)
+  } else {
+    fetchPage.mockResolvedValue(denied)
+  }
+  await expect(
+    gatherResearchWebEvidence(application, 'topic', {
+      isCurrent: () => true,
+      requestConfirmation: async () => true,
+    }),
+  ).rejects.toMatchObject({ code: 'ASSISTANT_ACTION_NOT_ALLOWED', message: 'Server policy denied access.' })
+  expect(fetchPage).toHaveBeenCalledTimes(action === 'search' ? 0 : 1)
 })
 
 it('stops after account changes during approval, before any request', async () => {

@@ -9,6 +9,7 @@ import {
 import { AttachmentPreview } from './ComposerAttachments'
 import AssistantMessageContent from './AssistantMessageContent'
 import AssistantActivityGroup from './AssistantActivityGroup'
+import { AssistantActionNotAllowedError } from '@/Assistant/AssistantActionNotAllowedError'
 import type { AssistantChatContextSnapshot } from '@/Assistant/assistantDirectiveContext'
 import AssistantComposer from './AssistantComposer'
 import AssistantModeSelector from './AssistantModeSelector'
@@ -1474,6 +1475,7 @@ function ConversationPanelImpl({
       let hasActiveText = false
       let hasRunText = false
       let textAfterTools = false
+      let actionDenied = false
       let waitingForSteeredResponse = false
       const updateAssistant = (updater: (message: Extract<UIMessage, { kind: 'assistant' }>) => void) => {
         setMessagesSynced((prev) => {
@@ -1573,6 +1575,9 @@ function ConversationPanelImpl({
           maxSteps: 6,
           signal: controller.signal,
         })
+        if (sub.errorCode === 'ACTION_NOT_ALLOWED') {
+          throw new AssistantActionNotAllowedError(sub.finalText)
+        }
         return sub.finalText || '(sub-agent finished with no summary)'
       }
 
@@ -1759,11 +1764,12 @@ function ConversationPanelImpl({
         }
 
         textDeltas.flush()
+        actionDenied = result.errorCode === 'ACTION_NOT_ALLOWED'
         updateAssistant((message) => {
           message.streaming = false
           // An abort just after steering can return the previous response's
           // text. Keep that text in its original bubble instead of repeating it.
-          if (!message.text && (!hasRunText || hasActiveText)) {
+          if (result.stopReason !== 'error' && !message.text && (!hasRunText || hasActiveText)) {
             message.text = result.finalText
           }
         })
@@ -1802,7 +1808,7 @@ function ConversationPanelImpl({
             void refreshUsage()
           }
           // Chain into the next queued prompt unless the user interrupted.
-          if (isSessionCurrent() && !controller.signal.aborted && queueRef.current.length > 0) {
+          if (isSessionCurrent() && !controller.signal.aborted && !actionDenied && queueRef.current.length > 0) {
             const [next, ...rest] = queueRef.current
             queueRef.current = rest
             setQueue(rest)

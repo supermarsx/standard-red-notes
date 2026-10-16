@@ -22,6 +22,7 @@ import { doesItemMatchSearchQuery } from '@/Utils/Items/Search/doesItemMatchSear
 import { GetAllThemesUseCase } from '@standardnotes/ui-services'
 import { AppPaneId } from '@/Components/Panes/AppPaneMetadata'
 import { ToolDefinition, ToolSession } from './types'
+import { AssistantActionNotAllowedError } from './AssistantActionNotAllowedError'
 import { retrieve } from './retrieval'
 import { HeadlessSuperConverter } from '@/Components/SuperEditor/Tools/HeadlessSuperConverter'
 import {
@@ -380,13 +381,16 @@ export class AssistantTools implements ToolSession {
   async call(name: string, rawArgs: unknown, callId?: string): Promise<unknown> {
     this.throwIfAborted()
     if (name.startsWith('web.') && !assistantInternetAccessEnabled(this.application)) {
-      throw new Error('Internet access is disabled in Assistant settings.')
+      throw new AssistantActionNotAllowedError('Internet access is disabled in Assistant settings.')
     }
     const args = (rawArgs ?? {}) as Record<string, unknown>
     // Resolve against the live tool list so a withheld tool (e.g. delegate inside
     // a sub-agent) is rejected as unknown rather than silently executing.
     const definition = this.tools().find((t) => t.name === name)
     if (!definition) {
+      if (TOOL_DEFINITIONS.some((tool) => tool.name === name) || name === DELEGATE_TOOL.name) {
+        throw new AssistantActionNotAllowedError(`The action ${name} is not allowed in this mode or context.`)
+      }
       throw new Error(`Unknown tool: ${name}`)
     }
 
@@ -530,7 +534,9 @@ export class AssistantTools implements ToolSession {
    */
   private assertMutationAuthorized(args: Record<string, unknown>, useToolRevision = false): void {
     if (this.application.sessions?.isCurrentSessionReadOnly?.()) {
-      throw new Error('The current session is read-only, so the assistant cannot make changes.')
+      throw new AssistantActionNotAllowedError(
+        'The current session is read-only, so the assistant cannot make changes.',
+      )
     }
 
     const note = this.findTrustedTargetNote(args)
@@ -550,10 +556,14 @@ export class AssistantTools implements ToolSession {
 
   private assertNoteMutationAuthorized(note: SNNote, enforceExpectedSnapshot = true): void {
     if (this.application.sessions?.isCurrentSessionReadOnly?.()) {
-      throw new Error('The current session is read-only, so the assistant cannot make changes.')
+      throw new AssistantActionNotAllowedError(
+        'The current session is read-only, so the assistant cannot make changes.',
+      )
     }
     if (note.locked || isLitePayload(note.payload) || !this.isReadableNote(note)) {
-      throw new Error('This note is locked, incomplete, or no longer authorized for assistant changes.')
+      throw new AssistantActionNotAllowedError(
+        'This note is locked, incomplete, or no longer authorized for assistant changes.',
+      )
     }
     const expected = enforceExpectedSnapshot ? this.context.expectedNoteSnapshots?.get(note.uuid) : undefined
     if (expected && !assistantNoteSnapshotMatches(note, expected)) {
@@ -561,20 +571,28 @@ export class AssistantTools implements ToolSession {
     }
     const vault = this.application.vaults?.getItemVault?.(note)
     if (vault?.isSharedVaultListing() && this.application.vaultUsers?.isCurrentUserReadonlyVaultMember?.(vault)) {
-      throw new Error('You have read-only access to this shared vault, so the assistant cannot change this note.')
+      throw new AssistantActionNotAllowedError(
+        'You have read-only access to this shared vault, so the assistant cannot change this note.',
+      )
     }
   }
 
   private assertTagMutationAuthorized(tag: SNTag): void {
     if (this.application.sessions?.isCurrentSessionReadOnly?.()) {
-      throw new Error('The current session is read-only, so the assistant cannot make changes.')
+      throw new AssistantActionNotAllowedError(
+        'The current session is read-only, so the assistant cannot make changes.',
+      )
     }
     if (!this.isReadableTag(tag)) {
-      throw new Error('This tag is locked, incomplete, or no longer authorized for assistant changes.')
+      throw new AssistantActionNotAllowedError(
+        'This tag is locked, incomplete, or no longer authorized for assistant changes.',
+      )
     }
     const vault = this.application.vaults?.getItemVault?.(tag)
     if (vault?.isSharedVaultListing() && this.application.vaultUsers?.isCurrentUserReadonlyVaultMember?.(vault)) {
-      throw new Error('You have read-only access to this shared vault, so the assistant cannot change this tag.')
+      throw new AssistantActionNotAllowedError(
+        'You have read-only access to this shared vault, so the assistant cannot change this tag.',
+      )
     }
   }
 
@@ -765,11 +783,11 @@ export class AssistantTools implements ToolSession {
       !this.context.selectedNoteUuids.has(uuid) &&
       !this.createdNoteUuids.has(uuid)
     ) {
-      throw new Error('That note is outside the context selected for this assistant request.')
+      throw new AssistantActionNotAllowedError('That note is outside the context selected for this assistant request.')
     }
     const note = this.requireNote(uuid)
     if (!this.isReadableNote(note)) {
-      throw new Error('The assistant is not authorized to access that note.')
+      throw new AssistantActionNotAllowedError('The assistant is not authorized to access that note.')
     }
     return note
   }
@@ -807,7 +825,7 @@ export class AssistantTools implements ToolSession {
   private requireReadableTag(uuid: unknown): SNTag {
     const tag = this.requireTag(uuid)
     if (!this.isReadableTag(tag)) {
-      throw new Error('The assistant is not authorized to access that tag.')
+      throw new AssistantActionNotAllowedError('The assistant is not authorized to access that tag.')
     }
     return tag
   }
@@ -1487,7 +1505,7 @@ export class AssistantTools implements ToolSession {
     }
     const user = this.application.sessions.getUser()
     if (!user) {
-      throw new Error('Sign in before changing comments.')
+      throw new AssistantActionNotAllowedError('Sign in before changing comments.')
     }
     const commentTarget = action === 'add' ? (args.target ?? 'note') : 'note'
     if (!['note', 'selection', 'section', 'checklist'].includes(String(commentTarget))) {
@@ -1516,7 +1534,7 @@ export class AssistantTools implements ToolSession {
     }
     const owner = noteCommentOwner(this.application, note) === user.uuid
     if (target && action === 'edit' && target.verifiedAuthorUuid !== user.uuid) {
-      throw new Error('Only the verified comment author can edit its text.')
+      throw new AssistantActionNotAllowedError('Only the verified comment author can edit its text.')
     }
     if (
       target &&
@@ -1524,10 +1542,12 @@ export class AssistantTools implements ToolSession {
       target.verifiedAuthorUuid !== user.uuid &&
       !owner
     ) {
-      throw new Error('Only the comment author or note owner can manage this comment.')
+      throw new AssistantActionNotAllowedError('Only the comment author or note owner can manage this comment.')
     }
     if (action === 'purge-all' && visibility === 'collaborative' && !canPurgeAllNoteComments(this.application, note)) {
-      throw new Error('Only the note or shared-vault owner can purge everyone’s shared comments.')
+      throw new AssistantActionNotAllowedError(
+        'Only the note or shared-vault owner can purge everyone’s shared comments.',
+      )
     }
     if (visibility === 'private' && args.notifyOthers === true) {
       throw new Error('Private comments cannot notify collaborators.')
@@ -2028,7 +2048,7 @@ export class AssistantTools implements ToolSession {
   private async appSetPreference(args: Record<string, unknown>) {
     const key = args.key as PrefKey
     if (!ALLOWED_PREFERENCE_KEYS.includes(key)) {
-      throw new Error(`Preference "${String(key)}" is not allowed to be set by the assistant`)
+      throw new AssistantActionNotAllowedError(`Preference "${String(key)}" is not allowed to be set by the assistant`)
     }
     this.validatePreferenceValue(key, args.value)
     await this.application.setPreference(key, args.value as never)

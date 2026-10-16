@@ -1,5 +1,17 @@
 import { WebApplication } from '@/Application/WebApplication'
-import { ContentType } from '@standardnotes/snjs'
+import {
+  ContentType,
+  DecryptedPayload,
+  FillItemContent,
+  NoteMutator,
+  SNNote,
+  NoteContent,
+  MutationType,
+  PayloadSource,
+  PayloadTimestampDefaults,
+} from '@standardnotes/snjs'
+import { webcrypto } from 'node:crypto'
+import { TextEncoder as NodeTextEncoder } from 'node:util'
 import { AssistantToolConfirmation, describeAssistantToolConfirmation } from './assistantPresentation'
 import { shouldConfirmAssistantTool } from './assistantActionReview'
 import { AssistantTools, AssistantToolContext } from './tools'
@@ -19,6 +31,15 @@ function makeContext(runSubAgent?: AssistantToolContext['runSubAgent']): Assista
 
 const fakeApp = {} as unknown as WebApplication
 
+beforeAll(() => {
+  if (!globalThis.TextEncoder) {
+    Object.defineProperty(globalThis, 'TextEncoder', { configurable: true, value: NodeTextEncoder })
+  }
+  if (!globalThis.crypto?.subtle) {
+    Object.defineProperty(globalThis, 'crypto', { configurable: true, value: webcrypto })
+  }
+})
+
 describe('AssistantTools delegate', () => {
   it('withholds web tools under the account lockdown and rechecks it after an open approval', async () => {
     let enabled = false
@@ -36,6 +57,8 @@ describe('AssistantTools delegate', () => {
     expect(tools.tools().some((tool) => tool.name === 'web.search')).toBe(true)
     await expect(tools.call('web.search', { query: 'research' })).resolves.toEqual({
       error: expect.stringContaining('disabled in Assistant settings'),
+      cancelled: true,
+      message: expect.stringContaining('disabled in Assistant settings'),
     })
     expect(serverJsonRequest).not.toHaveBeenCalled()
   })
@@ -59,7 +82,7 @@ describe('AssistantTools delegate', () => {
       false,
     )
     expect(sub.tools().some((t) => t.name === 'delegate')).toBe(false)
-    await expect(sub.call('delegate', { task: 'x' })).rejects.toThrow('Unknown tool')
+    await expect(sub.call('delegate', { task: 'x' })).rejects.toThrow('not allowed')
   })
 
   it('keeps nested research sessions read-only so every mutation stays visible in the parent chat', () => {
@@ -400,36 +423,44 @@ describe('AssistantTools selected note scope', () => {
 
   it('admits only notes created successfully by this tool session for follow-up actions', async () => {
     const tag = { uuid: 'tag-created', title: 'Created', content_type: ContentType.TYPES.Tag }
-    const createdNotes: Array<Record<string, unknown>> = []
+    const createdNotes: SNNote[] = []
     const openNote = jest.fn(async () => undefined)
     const addTagToNote = jest.fn(async () => [tag])
     const scopedApplication = {
       features: { getFeatureStatus: jest.fn() },
       items: {
-        createTemplateItem: (_contentType: string, content: Record<string, unknown>) => ({
-          uuid: 'created-note',
-          content_type: ContentType.TYPES.Note,
-          preview_plain: '',
-          pinned: false,
-          archived: false,
-          starred: false,
-          trashed: false,
-          protected: false,
-          ...content,
-        }),
+        createTemplateItem: (_contentType: string, content: Record<string, unknown>) =>
+          new SNNote(
+            new DecryptedPayload<NoteContent>(
+              {
+                uuid: 'created-note',
+                content_type: ContentType.TYPES.Note,
+                content: FillItemContent<NoteContent>({ ...content }),
+                ...PayloadTimestampDefaults(),
+              },
+              PayloadSource.Constructor,
+            ),
+          ),
         findItem: (uuid: string) =>
           uuid === tag.uuid ? tag : createdNotes.find((candidate) => candidate.uuid === uuid),
         getItems: () => createdNotes,
         getSortedTagsForItem: () => [],
       },
       mutator: {
-        insertItem: async (template: Record<string, unknown>) => {
+        insertItem: async (template: SNNote) => {
           createdNotes.push(template)
           return template
         },
-        changeItem: async (note: Record<string, unknown>, mutate: (value: Record<string, unknown>) => void) => {
-          mutate(note)
-          return note
+        changeItem: async (note: SNNote, mutate: (value: NoteMutator) => void) => {
+          const mutable = new NoteMutator(note, MutationType.UpdateUserTimestamps)
+          mutate(mutable)
+          const updated = new SNNote(mutable.getResult())
+          createdNotes.splice(
+            createdNotes.findIndex((item) => item.uuid === note.uuid),
+            1,
+            updated,
+          )
+          return updated
         },
         addTagToNote,
       },
