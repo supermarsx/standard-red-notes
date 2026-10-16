@@ -297,7 +297,20 @@ export class DecryptionPool implements PayloadDecryptionPoolInterface {
         resolve(response)
       })
       const message: DecryptionWorkerRequest = { type: 'decryptBatch', requestId, jobs }
-      entry.worker.postMessage(message)
+      try {
+        entry.worker.postMessage(message)
+      } catch (error) {
+        // postMessage can reject synchronously (clone failure or a dead worker).
+        // Retire it now; otherwise retries reuse it and its abandoned timer fires
+        // much later, potentially killing a different batch on the same entry.
+        clearTimeout(timer)
+        entry.pending.delete(requestId)
+        const failure = error instanceof Error ? error : new Error('decryption worker refused batch')
+        this.stats.workerErrors++
+        this.stats.lastError = failure.message
+        this.dropWorker(entry, failure)
+        reject(failure)
+      }
     })
   }
 

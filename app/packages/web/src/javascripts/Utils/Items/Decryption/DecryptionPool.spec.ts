@@ -15,6 +15,7 @@ let constructedWorkers = 0
 // timeout/respawn hardening must survive. Default 0 (all workers respond normally), so
 // the existing lazy-spawn tests are unaffected.
 let hangFirstN = 0
+let throwFirstN = 0
 
 class FakeWorker {
   onmessage: ((event: { data: unknown }) => void) | null = null
@@ -27,6 +28,9 @@ class FakeWorker {
   }
 
   postMessage(message: { type: string; requestId: number; jobs: unknown[] }): void {
+    if (this.ordinal <= throwFirstN) {
+      throw new DOMException('Cannot clone batch', 'DataCloneError')
+    }
     if (this.ordinal <= hangFirstN) {
       // Hung worker: swallow the batch, never respond.
       return
@@ -69,6 +73,7 @@ describe('DecryptionPool lazy spawn', () => {
   beforeEach(() => {
     constructedWorkers = 0
     hangFirstN = 0
+    throwFirstN = 0
     ;(global as { Worker?: unknown }).Worker = FakeWorker as unknown
     // Plenty of cores so the max ceiling is large and growth is observable.
     Object.defineProperty(navigator, 'hardwareConcurrency', { value: 40, configurable: true })
@@ -94,6 +99,33 @@ describe('DecryptionPool lazy spawn', () => {
     expect(constructedWorkers).toBe(2)
     expect(pool.stats.spawned).toBe(2)
     pool.destroy()
+  })
+
+  it('retires a worker whose postMessage throws and clears its abandoned timeout before retrying', async () => {
+    jest.useFakeTimers()
+    throwFirstN = 1
+    const terminate = jest.spyOn(FakeWorker.prototype, 'terminate')
+    const pool = new DecryptionPool({ maxWorkers: 1 })
+    try {
+      const result = pool.decrypt(makeJobs(1))
+      // Attach a handler before advancing timers so an original rejection is observable.
+      const outcome = result.then(
+        (results) => ({ results }),
+        (error: Error) => ({ error }),
+      )
+      await jest.advanceTimersByTimeAsync(1000)
+      expect(await outcome).toEqual({ results: [{ uuid: 'x' }] })
+      expect(terminate).toHaveBeenCalledTimes(1)
+      expect(pool.stats.batchTimeouts).toBe(0)
+      expect(jest.getTimerCount()).toBe(0)
+      await jest.advanceTimersByTimeAsync(30_000)
+      expect(pool.stats.batchTimeouts).toBe(0)
+      expect(pool.stats.spawned).toBe(1)
+    } finally {
+      pool.destroy()
+      terminate.mockRestore()
+      jest.useRealTimers()
+    }
   })
 
   it('keeps a small job count to a few workers (no N×WASM init)', async () => {
