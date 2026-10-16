@@ -262,7 +262,7 @@ describe('the lane-degradation ledger on screen', () => {
     // The causes survive the elision, so the ledger still knows what happened even
     // where it no longer knows when.
     expect(rowValue('Degradations with cause ack-timeout')).toBe('80')
-    expect(text).toContain('The socket lane has been falling back and recovering repeatedly')
+    expect(text).toContain('The socket lane has repeatedly fallen back in the last five minutes')
   })
 
   it('counts a refused control-plane read on screen, under the status it was refused with', async () => {
