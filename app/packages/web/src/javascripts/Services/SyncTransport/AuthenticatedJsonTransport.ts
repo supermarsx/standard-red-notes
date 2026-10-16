@@ -1,3 +1,4 @@
+import { isSettingsRpcRequest, settingsRpcAllowsConfigSecrets } from './SettingsRpcPolicy'
 import { AuthenticatedJsonTransport, readSharedServerAccessKey } from '@standardnotes/api'
 import { HttpVerb } from '@standardnotes/responses'
 import { AuthenticatedRpcError, WebSocketSyncTransport } from './WebSocketSyncTransport'
@@ -84,18 +85,21 @@ export function createAuthenticatedJsonTransport(options: {
       return undefined
     }
     const heartbeat = normalized === '/v1/sessions/activity' && request.verb === HttpVerb.Post
+    const settings = isSettingsRpcRequest(request.verb, path, request.params)
+    const mutation = request.verb !== HttpVerb.Get
+    const configSecrets = settings && settingsRpcAllowsConfigSecrets(request.verb, path)
     if (
-      (!heartbeat && (request.verb !== HttpVerb.Get || normalized.startsWith('/v1/sessions'))) ||
+      (!heartbeat && !settings && (request.verb !== HttpVerb.Get || normalized.startsWith('/v1/sessions'))) ||
       normalized.startsWith('/v1/pending-mfa-approvals/') ||
-      excludedFamilies.some((family) => normalized === family || normalized.startsWith(`${family}/`)) ||
-      hasCredentials(request.params) ||
+      (!settings && excludedFamilies.some((family) => normalized === family || normalized.startsWith(`${family}/`))) ||
+      (!configSecrets && hasCredentials(request.params)) ||
       [...url.searchParams.keys()].some((key) => sensitive.test(key))
     ) {
       return undefined
     }
     const headers: Record<string, string> = {
       accept: 'application/json',
-      ...(heartbeat ? { 'content-type': 'application/json' } : {}),
+      ...(mutation ? { 'content-type': 'application/json' } : {}),
       'x-snjs-version': context.snjsVersion,
       'x-application-version': context.applicationVersion,
     }
@@ -114,7 +118,7 @@ export function createAuthenticatedJsonTransport(options: {
         url.searchParams.append(key, String(value))
       }
     }
-    if (heartbeat && !keys.has(request)) {
+    if (mutation && !keys.has(request)) {
       if (!globalThis.crypto?.getRandomValues) {
         return undefined
       }
@@ -123,16 +127,21 @@ export function createAuthenticatedJsonTransport(options: {
     }
     try {
       const response = await transport.openAuthenticatedRpcStream({
-        method: request.verb === HttpVerb.Get ? 'GET' : 'POST',
+        method: request.verb as 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
         path: `${path}${url.search}`,
         headers,
-        ...(heartbeat ? { body: request.params, idempotencyKey: keys.get(request) } : {}),
+        ...(mutation ? { body: request.params, idempotencyKey: keys.get(request) } : {}),
         signal: request.abortSignal,
         stream: false,
         deadlineMs: Math.max(1_000, Math.min(120_000, request.timeoutMs ?? 30_000)),
       })
       if (scope !== options.getAccountScope()) {
         throw new AuthenticatedRpcError('ACCOUNT_CHANGED', false, false)
+      }
+      // Auth's 498 response proves its middleware did not invoke the handler.
+      // A credential-refresh retry is a fresh safe admission, not a cached 498.
+      if (response.status === 498) {
+        keys.delete(request)
       }
       const noBody = [204, 205, 304].includes(response.status)
       return new Response(

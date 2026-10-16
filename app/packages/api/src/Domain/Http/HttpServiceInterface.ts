@@ -9,6 +9,7 @@ export interface HttpServiceInterface {
   setHost(host: string): void
   getHost(): string
   setAuthenticatedJsonTransport?(transport?: AuthenticatedJsonTransport): void
+  setServerResponseStatusObserver?(observer?: (status: number) => void): void
 
   get<T>(path: string, params?: HttpRequestParams, options?: HttpRequestOptions): Promise<HttpResponse<T>>
   getExternal<T>(url: string, params?: HttpRequestParams): Promise<HttpResponse<T>>

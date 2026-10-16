@@ -44,6 +44,30 @@ describe('WebApplication control-plane websocket RPC lane', () => {
   })
 
   it.each([
+    ['PUT', '/v1/admin/server-settings'],
+    ['DELETE', '/v1/admin/email-delivery/queue/entry-1'],
+    ['POST', '/v1/admin/invite-links'],
+    ['PUT', '/v1/users/user-1/settings'],
+  ] as const)('gives reviewed settings %s %s a unique mutation identity without HTTP', async (method, path) => {
+    const transport: TransportMock = {
+      openAuthenticatedRpcStream: jest.fn().mockResolvedValue({ status: 200, headers: {}, body: { ok: true } }),
+    }
+    const application = applicationWith(transport)
+    globalThis.fetch = jest.fn()
+    await (method === 'POST'
+      ? post(application, path, { enabled: true })
+      : WebApplication.prototype.serverJsonRequestWithMethod.call(application, path, method, { enabled: true }))
+    await (method === 'POST'
+      ? post(application, path, { enabled: true })
+      : WebApplication.prototype.serverJsonRequestWithMethod.call(application, path, method, { enabled: true }))
+    const [first, second] = transport.openAuthenticatedRpcStream.mock.calls.map(([request]) => request)
+    expect(first.method).toBe(method)
+    expect(first.idempotencyKey).toMatch(/^[a-f0-9-]{36}$/i)
+    expect(second.idempotencyKey).not.toBe(first.idempotencyKey)
+    expect(globalThis.fetch).not.toHaveBeenCalled()
+  })
+
+  it.each([
     '/v1/web/search',
     '/v1/web/fetch',
     '/v1/assistant/subscription/start',

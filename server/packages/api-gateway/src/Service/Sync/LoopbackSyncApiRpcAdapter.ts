@@ -1,5 +1,6 @@
 import {
   SyncApiRpcRefusalError,
+  isSettingsRpcRequest,
   type SyncApiRpcAdapter,
   type SyncApiRpcRequest,
   type SyncApiRpcResponse,
@@ -74,7 +75,7 @@ export class LoopbackSyncApiRpcAdapter implements SyncApiRpcAdapter {
     //
     // Checked before the method/route allow-list below so a forbidden path answers
     // the same way whatever method asked for it.
-    if (isForbiddenRpcPath(input.path, input.method)) {
+    if (isForbiddenRpcPath(input.path, input.method, input.body)) {
       throw new SyncApiRpcRefusalError('RPC_PATH_FORBIDDEN')
     }
     if (!isAllowedRpcRequest(input, this.negotiatedOperations)) {
@@ -156,6 +157,9 @@ function isAllowedRpcRequest(
   input: SyncApiRpcRequest,
   operations: readonly Extract<SyncNegotiatedOperation, 'API_RPC' | 'STREAM_ASSISTANT'>[],
 ): boolean {
+  if (isSettingsRpcRequest(input.method, input.path, input.body)) {
+    return input.method === 'GET' || !!input.idempotencyKey
+  }
   if (input.method === 'GET') {
     return true
   }
@@ -234,7 +238,10 @@ function normalizeRpcPathname(path: string): string | undefined {
   return collapsed === '' ? '/' : collapsed
 }
 
-function isForbiddenRpcPath(path: string, method: string): boolean {
+function isForbiddenRpcPath(path: string, method: string, body?: unknown): boolean {
+  if (isSettingsRpcRequest(method, path, body)) {
+    return false
+  }
   const pathname = normalizeRpcPathname(path)
   if (pathname === undefined) {
     return true

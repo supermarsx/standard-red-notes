@@ -104,6 +104,53 @@ describe('SDK authenticated JSON over the existing socket', () => {
     expect(rpc).not.toHaveBeenCalled()
   })
 
+  it.each([
+    [
+      HttpVerb.Put,
+      '/v1/admin/server-settings',
+      { ai: { apiKey: 'private-key' }, smtp: { password: 'private-password' } },
+    ],
+    [HttpVerb.Put, '/v1/users/user-1/settings', { name: 'email_backup_frequency', value: 'daily' }],
+    [HttpVerb.Delete, '/v1/admin/groups/group-1/members/user-1', undefined],
+    [HttpVerb.Post, '/v1/admin/email-delivery/test', { recipient: 'me@example.test' }],
+    [HttpVerb.Get, '/v1/users/user-1/subscription-settings/file_upload_bytes_used', undefined],
+    [HttpVerb.Get, '/v1/sessions', undefined],
+  ] as const)(
+    'dispatches reviewed settings %s %s over the socket with its actual method',
+    async (verb, path, params) => {
+      const { bridge, rpc } = fixture()
+      const request = signedRequest({ verb, url: `${host}${path}`, params })
+      await bridge(request, context)
+      expect(rpc).toHaveBeenCalledWith(expect.objectContaining({ method: verb, path }))
+      if (verb !== HttpVerb.Get) {
+        const first = rpc.mock.calls[0][0].idempotencyKey
+        expect(first).toMatch(/^[a-f0-9]{32}$/)
+        await bridge(request, context)
+        expect(rpc.mock.calls[1][0].idempotencyKey).toBe(first)
+        await bridge({ ...request }, context)
+        expect(rpc.mock.calls[2][0].idempotencyKey).not.toBe(first)
+      }
+    },
+  )
+
+  it('does not replay an uncertain settings write over HTTP, and refreshes identity only after a proven auth refusal', async () => {
+    const { bridge, rpc } = fixture()
+    const request = signedRequest({
+      verb: HttpVerb.Put,
+      url: `${host}/v1/admin/server-settings`,
+      params: { ai: { enabled: true } },
+    })
+    rpc.mockRejectedValueOnce(new AuthenticatedRpcError('SOCKET_CLOSED', true, false))
+    const response = await bridge(request, context)
+    expect(response?.status).toBe(503)
+    expect(await response?.json()).toMatchObject({ uncertain: true })
+    rpc.mockResolvedValueOnce({ status: 498, headers: {}, body: {} })
+    await bridge(request, context)
+    const old = rpc.mock.calls.at(-1)![0].idempotencyKey
+    await bridge(request, context)
+    expect(rpc.mock.calls.at(-1)![0].idempotencyKey).not.toBe(old)
+  })
+
   it('keeps the same heartbeat idempotency key across a logical request retry', async () => {
     const { bridge, rpc } = fixture()
     const request = signedRequest({

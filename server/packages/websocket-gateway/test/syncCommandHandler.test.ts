@@ -2249,6 +2249,37 @@ describe('SyncCommandHandler', () => {
     handler.disconnect()
   })
 
+  it.each([
+    ['PUT', '/v1/admin/server-settings'],
+    ['POST', '/v1/admin/email-delivery/test'],
+    ['DELETE', '/v1/admin/invite-links/link-1'],
+    ['PUT', '/v1/users/user-1/settings'],
+  ] as const)(
+    'admits only keyed reviewed settings %s %s and never repeats an uncertain write',
+    async (method, path) => {
+      const apiRpc: SyncApiRpcAdapter = {
+        idempotencyScope: 'shared-durable',
+        ready: () => true,
+        operations: () => ['API_RPC'],
+        execute: vi.fn(async () => ({ status: 200, body: { ok: true } })),
+      }
+      const { handler, socket } = await authenticatedHandler({ apiRpc })
+      const command = { method, path, body: { enabled: true }, idempotencyKey: 'one-settings-intent' }
+      enqueue(handler, rpcFrame(1, { requestId: 'settings-first', ...command }))
+      await vi.waitFor(() => expect(socket.frames.at(-1)?.type).toBe('RPC_END'))
+      enqueue(handler, rpcFrame(2, { requestId: 'settings-duplicate', ...command }))
+      await vi.waitFor(() =>
+        expect(socket.frames.at(-1)?.payload).toEqual({ code: 'DUPLICATE_REQUEST', retryable: false }),
+      )
+      expect(apiRpc.execute).toHaveBeenCalledTimes(1)
+      enqueue(handler, rpcFrame(3, { method, path }))
+      await vi.waitFor(() =>
+        expect(socket.frames.at(-1)?.payload).toEqual({ code: 'IDEMPOTENCY_KEY_REQUIRED', retryable: false }),
+      )
+      expect(apiRpc.execute).toHaveBeenCalledTimes(1)
+      handler.disconnect()
+    },
+  )
   it('completes an exact keyed session heartbeat over the negotiated RPC protocol and rejects neighboring mutations', async () => {
     const apiRpc: SyncApiRpcAdapter = {
       idempotencyScope: 'shared-durable',

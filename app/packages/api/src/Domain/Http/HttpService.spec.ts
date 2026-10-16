@@ -61,6 +61,22 @@ describe('HttpService', () => {
     expect(FetchRequestHandlerMock).toHaveBeenCalledWith('4.5.6', '1.2.3', Environment.Web, logger)
   })
 
+  it('reports internal server status without changing a failed response, excluding external services', async () => {
+    const observer = jest.fn()
+    service.setServerResponseStatusObserver(observer)
+    const failure = { status: 502, data: { error: { message: 'Bad gateway' } } }
+    handleRequest.mockResolvedValue(failure)
+    await expect(service.get('/v1/items')).resolves.toBe(failure)
+    expect(observer).toHaveBeenCalledWith(502)
+    observer.mockClear()
+    await service.getExternal('https://provider.example/test')
+    expect(observer).not.toHaveBeenCalled()
+    service.setServerResponseStatusObserver(() => {
+      throw new Error('UI observer failed')
+    })
+    await expect(service.get('/v1/items')).resolves.toBe(failure)
+  })
+
   describe('host', () => {
     it('should round-trip the host', () => {
       expect(service.getHost()).toBe(HOST)

@@ -35,6 +35,11 @@ export class HttpService implements HttpServiceInterface {
   private requestHandler: FetchRequestHandler
   private authenticatedJsonTransport?: AuthenticatedJsonTransport
   private accountGeneration = 0
+  private serverResponseStatusObserver?: (status: number) => void
+
+  setServerResponseStatusObserver(observer?: (status: number) => void): void {
+    this.serverResponseStatusObserver = observer
+  }
 
   setAuthenticatedJsonTransport(transport?: AuthenticatedJsonTransport): void {
     this.authenticatedJsonTransport = transport
@@ -61,6 +66,7 @@ export class HttpService implements HttpServiceInterface {
   public deinit(): void {
     this.accountGeneration += 1
     this.authenticatedJsonTransport = undefined
+    this.serverResponseStatusObserver = undefined
     ;(this.session as unknown) = undefined
     ;(this.updateMetaCallback as unknown) = undefined
     ;(this.refreshSessionCallback as unknown) = undefined
@@ -216,6 +222,14 @@ export class HttpService implements HttpServiceInterface {
 
     if (this.loggingEnabled && isErrorResponse(response)) {
       this.logger.error('Request failed', safeHttpLogMetadata(httpRequest, response))
+    }
+
+    if (!httpRequest.external) {
+      try {
+        this.serverResponseStatusObserver?.(response.status)
+      } catch {
+        /* Observers cannot change request outcomes. */
+      }
     }
 
     if (response.meta && !httpRequest.external) {

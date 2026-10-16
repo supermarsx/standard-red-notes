@@ -1,3 +1,4 @@
+import { isSettingsRpcRequest } from './settingsRpcPolicy.js'
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import {
   isValidSyncTicketIdentity,
@@ -2942,6 +2943,9 @@ function isAllowedRpcRequest(
   frame: SyncRpcRequestFrame,
   operations: readonly Extract<SyncNegotiatedOperation, 'API_RPC' | 'STREAM_ASSISTANT'>[],
 ): boolean {
+  if (isSettingsRpcRequest(frame.payload.method, frame.payload.path, frame.payload.body)) {
+    return true
+  }
   if (frame.payload.method === 'GET') {
     return true
   }

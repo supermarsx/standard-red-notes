@@ -10,6 +10,43 @@ const identity = {
 }
 
 describe('LoopbackSyncApiRpcAdapter', () => {
+  it.each([
+    ['PUT', '/v1/admin/server-settings'],
+    ['POST', '/v1/admin/email-delivery/test'],
+    ['DELETE', '/v1/admin/invite-links/link-1'],
+    ['PUT', '/v1/users/user-1/settings'],
+    ['GET', '/v1/users/user-1/subscription-settings/file_upload_bytes_used'],
+    ['GET', '/v1/sessions'],
+  ] as const)(
+    'routes reviewed settings %s %s through the existing authenticated HTTP middleware',
+    async (method, path) => {
+      const fetch = jest.fn(async () => Response.json({ accepted: true }))
+      const adapter = new LoopbackSyncApiRpcAdapter({
+        origin: 'http://127.0.0.1:3000',
+        operations: ['API_RPC'],
+        fetch: fetch as typeof globalThis.fetch,
+      })
+      const input = {
+        identity,
+        method,
+        path,
+        headers: {},
+        body: method === 'GET' ? undefined : { enabled: true },
+        idempotencyKey: method === 'GET' ? undefined : 'settings-once',
+        stream: false,
+      }
+      expect((await adapter.execute(input, new AbortController().signal)).status).toBe(200)
+      const calls = fetch.mock.calls as unknown as Array<[string, RequestInit]>
+      expect(String(calls[0][0])).toBe(`http://127.0.0.1:3000${path}`)
+      expect(calls[0][1].method).toBe(method)
+      if (method !== 'GET') {
+        await expect(
+          adapter.execute({ ...input, idempotencyKey: undefined }, new AbortController().signal),
+        ).rejects.toThrow()
+        expect(fetch).toHaveBeenCalledTimes(1)
+      }
+    },
+  )
   it.each(['acquire', 'renew', 'release'])(
     'permits only the exact keyed chat run-lease %s route',
     async (operation) => {
@@ -331,11 +368,8 @@ describe('LoopbackSyncApiRpcAdapter forbidden route families', () => {
   it.each([
     '/v1/users/user-1/mfa-secret',
     '/v1/users/user-1/params',
-    '/v1/users/user-1/settings',
-    '/v1/users/user-1/settings/some-setting',
-    '/v1/users/user-1/subscription',
-    '/v1/users/user-1/features',
-    '/v1/users/me/invite-links',
+    '/v1/users/user-1/settings/mfa_secret',
+    '/v1/users/user-1/attributes/credentials',
   ])('refuses the per-user credential route %s', refusesGet)
 
   it.each([
@@ -343,7 +377,6 @@ describe('LoopbackSyncApiRpcAdapter forbidden route families', () => {
     '/v1/items/item-1',
     '/v1/items/sync-command/command-1',
     '/v1/items/item-1/revisions',
-    '/v1/sessions',
     '/v1/login-params',
     '/v1/users',
   ])('keeps refusing the previously-listed route %s', refusesGet)

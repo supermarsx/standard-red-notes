@@ -1,3 +1,4 @@
+export { isSettingsRpcRequest, settingsRpcAllowsConfigSecrets } from './settingsRpcPolicy.js'
 import { resolveSyncTrafficLimits, SYNC_TRAFFIC_DEFAULTS, type SyncTrafficLimits } from './trafficLimits.js'
 export * from './trafficLimits.js'
 import { type IncomingMessage, type Server as HttpServer, type ServerResponse } from 'node:http'

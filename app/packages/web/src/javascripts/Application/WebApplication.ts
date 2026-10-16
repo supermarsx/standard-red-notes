@@ -1,3 +1,4 @@
+import { isSettingsRpcRequest } from '@/Services/SyncTransport/SettingsRpcPolicy'
 import { WebCrypto } from '@/Application/Crypto'
 import { WebOrDesktopDevice } from '@/Application/Device/WebOrDesktopDevice'
 import {
@@ -108,6 +109,7 @@ import { CrossTabCoordinator } from './CrossTab/CrossTabCoordinator'
 import { reloadForeignDatabasePayloads } from './CrossTab/ReloadForeignDatabasePayloads'
 import { WebDevice } from './Device/WebDevice'
 import { assistantHttpError, assistantJsonHttpError } from '@/Assistant/AssistantHttpError'
+import { ServerAvailabilityAlert, fetchWithServerAvailability } from '@/Services/ServerAvailabilityAlert'
 import {
   AuthenticatedRpcError,
   deriveOpaqueSyncSessionScope,
@@ -175,6 +177,7 @@ export class WebApplication extends SNApplication implements WebApplicationInter
   private _proofOfWorkSolver?: WebProofOfWorkSolver
   /** Dedicated worker owning the websocket account-sync transport. */
   private _webSocketSyncTransport?: WebSocketSyncTransport
+  private serverAvailabilityAlert = new ServerAvailabilityAlert()
   /** Authenticated lifecycle owner for the durable invitation/account-state stream. */
   private _inviteRealtimeLifecycle?: InviteRealtimeApplicationLifecycle
 
@@ -579,6 +582,7 @@ export class WebApplication extends SNApplication implements WebApplicationInter
       },
     })
     this._webSocketSyncTransport = transport
+    this.http?.setServerResponseStatusObserver?.((status) => this.serverAvailabilityAlert.observeStatus(status))
     this.http?.setAuthenticatedJsonTransport?.(
       createAuthenticatedJsonTransport({
         getTransport: () => this._webSocketSyncTransport,
@@ -1509,6 +1513,7 @@ export class WebApplication extends SNApplication implements WebApplicationInter
           stream: true,
           signal,
         })
+        this.serverAvailabilityAlert?.observeStatus(response.status)
         return new Response(assistantRpcResponseBody(response.stream, response.body), {
           status: response.status,
           headers: response.headers,
@@ -1530,7 +1535,7 @@ export class WebApplication extends SNApplication implements WebApplicationInter
 
     const url = `${host.replace(/\/$/, '')}${path}`
 
-    return fetch(url, {
+    return fetchWithServerAvailability(this.serverAvailabilityAlert, url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1585,7 +1590,7 @@ export class WebApplication extends SNApplication implements WebApplicationInter
     const accessToken = extractAccessToken(session)
     const url = `${host.replace(/\/$/, '')}${path}`
 
-    const response = await fetch(url, {
+    const response = await fetchWithServerAvailability(this.serverAvailabilityAlert, url, {
       method: 'GET',
       headers: {
         Accept: 'application/json',
@@ -1640,12 +1645,14 @@ export class WebApplication extends SNApplication implements WebApplicationInter
     const hasBody = body !== undefined
     try {
       const response = await transport.openAuthenticatedRpcStream({
-        // Each explicitly reviewed Assistant command gets its own identity;
-        // retries must not replay ambiguous provider, search or pairing work.
-        ...(method === 'POST' &&
-        /^(?:\/v1\/assistant\/chats\/run-lease\/(?:acquire|renew|release)|\/v1\/web\/(?:search|fetch)|\/v1\/assistant\/subscription\/(?:start|complete|unpair|unpair-all))$/.test(
-          path.split('?')[0],
-        )
+        // Each reviewed mutation gets its own identity; uncertain settings or
+        // Assistant operations are never replayed over HTTP.
+        ...(method !== 'GET' &&
+        (isSettingsRpcRequest(method, path, body) ||
+          (method === 'POST' &&
+            /^(?:\/v1\/assistant\/chats\/run-lease\/(?:acquire|renew|release)|\/v1\/web\/(?:search|fetch)|\/v1\/assistant\/subscription\/(?:start|complete|unpair|unpair-all))$/.test(
+              path.split('?')[0],
+            )))
           ? { idempotencyKey: crypto.randomUUID() }
           : {}),
         method,
@@ -1691,15 +1698,11 @@ export class WebApplication extends SNApplication implements WebApplicationInter
        * so this cannot mask a real auth failure — and no other status is
        * retried, so a healthy lane is never second-guessed.
        *
-       * GET only, and that is not a limitation in practice: a non-GET never
-       * reaches this lane from here at all, because
-       * `normalizeAuthenticatedRpcRequest` refuses one without an idempotency
-       * key — which this helper never sets — and that refusal is already
-       * `safeToFallback`. Retrying is safe on top of that: the gateway's
-       * authentication middleware answers 401 without calling `next()`, so no
-       * handler ran and nothing was applied. That ordering is asserted by
-       * `AdminEmailDeliveryController.endpoint.spec.ts`, not assumed here.
+       * Only GET is eligible for this authentication fallback. Reviewed
+       * settings and Assistant mutations carry idempotency identities, and a
+       * returned/uncertain mutation is never sent a second time over HTTP.
        */
+      this.serverAvailabilityAlert?.observeStatus(response.status)
       if (method === 'GET' && (response.status === 401 || response.status === 498)) {
         // Counted INSIDE the branch that discards the socket's answer, so the
         // counter cannot drift from the degradation it claims to measure. The
@@ -1738,7 +1741,7 @@ export class WebApplication extends SNApplication implements WebApplicationInter
     const accessToken = extractAccessToken(session)
     const url = `${host.replace(/\/$/, '')}${path}`
 
-    const response = await fetch(url, {
+    const response = await fetchWithServerAvailability(this.serverAvailabilityAlert, url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1789,7 +1792,7 @@ export class WebApplication extends SNApplication implements WebApplicationInter
     const url = `${host.replace(/\/$/, '')}${path}`
     const hasBody = body !== undefined
 
-    const response = await fetch(url, {
+    const response = await fetchWithServerAvailability(this.serverAvailabilityAlert, url, {
       method,
       headers: {
         ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
@@ -1833,7 +1836,7 @@ export class WebApplication extends SNApplication implements WebApplicationInter
     const url = `${host.replace(/\/$/, '')}${path}`
     const hasBody = body !== undefined
 
-    const response = await fetch(url, {
+    const response = await fetchWithServerAvailability(this.serverAvailabilityAlert, url, {
       method,
       headers: {
         ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
@@ -1898,7 +1901,7 @@ export class WebApplication extends SNApplication implements WebApplicationInter
     const accessToken = extractAccessToken(session)
     const url = `${host.replace(/\/$/, '')}${path}`
 
-    const response = await fetch(url, {
+    const response = await fetchWithServerAvailability(this.serverAvailabilityAlert, url, {
       method: 'GET',
       headers: {
         Accept: 'application/json',
