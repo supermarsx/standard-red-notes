@@ -56,7 +56,7 @@ const InsertSectionsBar = ({ sections }: InsertSectionsBarProps): ReactElement =
         </div>
         <span
           aria-hidden
-          className="text-passive-1 mt-px hidden truncate text-center text-[10px] leading-none font-medium tracking-wide uppercase select-none md:block"
+          className="text-passive-1 mt-px hidden px-1 text-center text-[10px] leading-none font-medium tracking-wide whitespace-nowrap uppercase select-none md:block"
         >
           {section.caption}
         </span>
