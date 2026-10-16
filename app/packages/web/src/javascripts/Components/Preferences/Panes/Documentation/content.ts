@@ -1315,6 +1315,14 @@ export const DOC_CATEGORIES: DocCategory[] = [
           },
           {
             type: 'paragraph',
+            text: 'Generated answers use Markdown by default. Use Markdown or Plain text on each answer to switch views; copying a message keeps its original text. Action entries above an answer start as compact summaries with status and change counts. Expand an action to inspect its details, diff and Undo/Redo controls.',
+          },
+          {
+            type: 'paragraph',
+            text: 'Agent, Research and Deep Research can search the internet and read pages through the server when a search provider is configured. Settings → Assistant → Search has an encrypted account preference to disable internet access across chats. Admin → AI → Internet access is the server-wide master switch, enabled by default; turning it off rejects web search and page retrieval before any outbound request. An account preference cannot override the server policy. Research asks before sending each query or page URL; Agent follows its selected tool approval policy. Note search remains available with internet access off.',
+          },
+          {
+            type: 'paragraph',
             text: 'The assistant’s data-exposure reminder can be dismissed from its small close control. Choose once, 15 days, or never. Remembered choices apply to this account’s assistant workspace in this browser; hiding the reminder does not change approval requirements or where messages, note excerpts, and web queries are sent.',
           },
           {
