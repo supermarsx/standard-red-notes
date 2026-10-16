@@ -623,7 +623,7 @@ function ConversationPanelImpl({
       }
     }
     if (shared) {
-      if (runLeaseRef.current && !runLeaseRef.current.isCurrent()) {
+      if (runLeaseRef.current && !runLeaseRef.current.canCheckpoint()) {
         throw new Error('Chat generation ownership expired before checkpointing.')
       }
       const acknowledged = await shared.checkpoint(
@@ -1233,12 +1233,15 @@ function ConversationPanelImpl({
       }
       activeRunModeRef.current = runMode
       const promptText = request.providerPrompt
+      const controller = new AbortController()
       const runPrincipal = captureAssistantSessionPrincipal(application.sessions)
       const runSessionEpoch = sessionEpochRef.current
-      const isSessionCurrent = () =>
+      const canFinalizeSession = () =>
         runSessionEpoch === sessionEpochRef.current &&
         assistantSessionPrincipalMatches(runPrincipal, captureAssistantSessionPrincipal(application.sessions)) &&
-        (!runLeaseRef.current || runLeaseRef.current.isCurrent())
+        (!runLeaseRef.current || runLeaseRef.current.canCheckpoint())
+      const isSessionCurrent = () =>
+        !controller.signal.aborted && canFinalizeSession() && (!runLeaseRef.current || runLeaseRef.current.isCurrent())
       if (!runPrincipal.valid || !isSessionCurrent()) {
         setMessagesSynced((prev) => [
           ...prev,
@@ -1293,7 +1296,6 @@ function ConversationPanelImpl({
         ])
         return
       }
-      const controller = new AbortController()
       abortRef.current = controller
       setIsStopping(false)
       setIsRunning(true)
@@ -1363,7 +1365,11 @@ function ConversationPanelImpl({
               throw new Error('Your encrypted chat history is still loading. Try again shortly.')
             }
             const guard = await acquireAssistantChatRun(application, tabId, controller)
-            runLeaseRef.current = guard
+            runLeaseRef.current = {
+              ...guard,
+              // Stop retains terminal-write authority, but auth/key boundaries do not.
+              canCheckpoint: () => runSessionEpoch === sessionEpochRef.current && guard.canCheckpoint(),
+            }
             if (!isSessionCurrent() || controller.signal.aborted) {
               return
             }
@@ -1546,7 +1552,8 @@ function ConversationPanelImpl({
         })
       }
       const textDeltas = createAssistantTextDeltaBatcher((text) => {
-        if (!isSessionCurrent()) {
+        // Flush text received before Stop without accepting late provider callbacks.
+        if (!canFinalizeSession()) {
           return
         }
         updateAssistant((message) => {
@@ -1799,7 +1806,7 @@ function ConversationPanelImpl({
           },
         )
 
-        if (!isSessionCurrent()) {
+        if (!canFinalizeSession()) {
           const expired = new Error('Assistant operation expired when the signed-in account changed.')
           expired.name = 'AbortError'
           throw expired
@@ -1811,13 +1818,18 @@ function ConversationPanelImpl({
           message.streaming = false
           // An abort just after steering can return the previous response's
           // text. Keep that text in its original bubble instead of repeating it.
-          if (result.stopReason !== 'error' && !message.text && (!hasRunText || hasActiveText)) {
+          if (
+            !controller.signal.aborted &&
+            result.stopReason !== 'error' &&
+            !message.text &&
+            (!hasRunText || hasActiveText)
+          ) {
             message.text = result.finalText
           }
         })
         finishRunActivities()
 
-        if (result.stopReason === 'error') {
+        if (!controller.signal.aborted && result.stopReason === 'error') {
           setMessagesSynced((prev) => [
             ...prev,
             { kind: 'error', id: newId(), text: result.finalText || 'The assistant encountered an error.' },
@@ -1825,12 +1837,14 @@ function ConversationPanelImpl({
         }
       } catch (error) {
         textDeltas.flush()
-        if (isSessionCurrent()) {
+        if (canFinalizeSession()) {
           finishRunActivities()
-          setMessagesSynced((prev) => [
-            ...prev,
-            { kind: 'error', id: newId(), text: error instanceof Error ? error.message : String(error) },
-          ])
+          if (!controller.signal.aborted) {
+            setMessagesSynced((prev) => [
+              ...prev,
+              { kind: 'error', id: newId(), text: error instanceof Error ? error.message : String(error) },
+            ])
+          }
         }
       } finally {
         textDeltas.dispose()

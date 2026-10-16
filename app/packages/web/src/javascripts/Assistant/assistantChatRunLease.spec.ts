@@ -55,3 +55,43 @@ it('fails closed when server renewal refuses ownership', async () => {
   await jest.advanceTimersByTimeAsync(10000)
   expect(controller.signal.aborted).toBe(true)
 })
+
+it('allows only a final checkpoint after Stop, bounded by the original expiry and account', async () => {
+  const h = app()
+  h.request.mockResolvedValue({ ok: true, data: { acquired: true, leaseId: 'lease', fence: 1, expiresAt: 130000 } })
+  const controller = new AbortController()
+  const guard = await acquireAssistantChatRun(h.application, 'chat', controller)
+  controller.abort()
+  expect(guard.isCurrent()).toBe(false)
+  expect(guard.canCheckpoint()).toBe(true)
+  const originalGetUser = h.application.sessions.getUser
+  h.application.sessions.getUser = () => ({ uuid: 'changed-account' }) as never
+  expect(guard.canCheckpoint()).toBe(false)
+  h.application.sessions.getUser = originalGetUser
+  await jest.advanceTimersByTimeAsync(29500)
+  expect(guard.canCheckpoint()).toBe(false)
+  expect(h.request).toHaveBeenCalledTimes(1)
+})
+it('does not renew or revoke final checkpoint authority when Stop interrupts an in-flight renewal', async () => {
+  const h = app()
+  let rejectRenew!: (error: Error) => void
+  h.request
+    .mockResolvedValueOnce({ ok: true, data: { acquired: true, leaseId: 'lease', fence: 1, expiresAt: 130000 } })
+    .mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectRenew = reject
+        }),
+    )
+    .mockResolvedValue({ ok: true, data: { released: true } })
+  const controller = new AbortController()
+  const guard = await acquireAssistantChatRun(h.application, 'chat', controller)
+  await jest.advanceTimersByTimeAsync(10000)
+  controller.abort()
+  rejectRenew(new Error('aborted'))
+  await Promise.resolve()
+  await Promise.resolve()
+  expect(guard.canCheckpoint()).toBe(true)
+  await guard.release()
+  expect(guard.canCheckpoint()).toBe(false)
+})

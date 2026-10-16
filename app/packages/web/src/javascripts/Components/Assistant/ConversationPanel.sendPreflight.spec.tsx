@@ -84,6 +84,7 @@ describe('Assistant immediate send feedback and preflight fences', () => {
   })
   const application = {
     identifier: 'preflight-test',
+    serverJsonRequest: jest.fn(),
     storage: {
       getValue: <T,>(key: string): T => values.get(key) as T,
       setValue: (key: string, value: unknown) => {
@@ -141,6 +142,7 @@ describe('Assistant immediate send feedback and preflight fences', () => {
   const guard = () => ({
     proof: { chatId: 'preflight-chat', requestId: 'request', leaseId: 'lease', fence: 1 },
     isCurrent: () => true,
+    canCheckpoint: () => true,
     release: jest.fn(async () => undefined),
   })
 
@@ -275,6 +277,117 @@ describe('Assistant immediate send feedback and preflight fences', () => {
       await flush()
     })
     expect(runConversationMode).toHaveBeenCalledTimes(1)
+  })
+
+  it('persists stopped shared runs with the real lease guard and retains already received text', async () => {
+    const response = deferred<AgentResult>()
+    const actual = jest.requireActual<typeof import('@/Assistant/assistantChatRunLease')>(
+      '@/Assistant/assistantChatRunLease',
+    )
+    application.serverJsonRequest.mockResolvedValue({
+      ok: true,
+      data: { acquired: true, leaseId: 'lease', fence: 1, expiresAt: Date.now() + 30000 },
+    })
+    jest.mocked(acquireAssistantChatRun).mockImplementation(actual.acquireAssistantChatRun)
+    jest.mocked(runConversationMode).mockReturnValue(response.promise)
+    const shared = { ready: true, refresh: jest.fn(async () => undefined), checkpoint: jest.fn(async () => undefined) }
+    await act(async () => {
+      render('shared-stop', shared)
+      await flush()
+    })
+    const options = jest.mocked(runConversationMode).mock.calls[0][2]
+    await act(async () => {
+      options.onTextDelta?.('Received before Stop')
+      options.onToolCall?.({ id: 'pending', name: 'notes.read', args: {} })
+      stop()!.click()
+      // A late callback after cancellation must not enter the persisted transcript.
+      options.onTextDelta?.('Late after Stop')
+      response.resolve({ finalText: '', stopReason: 'aborted', steps: 1 })
+      await flush()
+    })
+    const terminal = shared.checkpoint.mock.calls.at(-1) as unknown as [
+      Array<{ text: string; activities?: Array<{ outcome: string }> }>,
+    ]
+    expect(terminal[0].some((message) => message.text === 'Received before Stop')).toBe(true)
+    expect(terminal[0].flatMap((message) => message.activities ?? []).map((entry) => entry.outcome)).toContain(
+      'interrupted',
+    )
+    expect(container.textContent).not.toContain('could not be saved')
+    expect(container.textContent).not.toContain('Late after Stop')
+    expect(stop()).toBeNull()
+  })
+
+  it.each(['end_turn', 'error'] as const)(
+    'ignores late %s result text after Stop while persisting terminal activity',
+    async (stopReason) => {
+      const response = deferred<AgentResult>()
+      const actual = jest.requireActual<typeof import('@/Assistant/assistantChatRunLease')>(
+        '@/Assistant/assistantChatRunLease',
+      )
+      application.serverJsonRequest.mockResolvedValue({
+        ok: true,
+        data: { acquired: true, leaseId: 'lease', fence: 1, expiresAt: Date.now() + 30000 },
+      })
+      jest.mocked(acquireAssistantChatRun).mockImplementation(actual.acquireAssistantChatRun)
+      jest.mocked(runConversationMode).mockReturnValue(response.promise)
+      const shared = {
+        ready: true,
+        refresh: jest.fn(async () => undefined),
+        checkpoint: jest.fn(async () => undefined),
+      }
+      await act(async () => {
+        render('shared-stop', shared)
+        await flush()
+      })
+      const options = jest.mocked(runConversationMode).mock.calls[0][2]
+      await act(async () => {
+        options.onToolCall?.({ id: 'pending', name: 'notes.read', args: {} })
+        stop()!.click()
+        response.resolve({ finalText: 'Late result after Stop', stopReason, steps: 1 })
+        await flush()
+      })
+      const terminal = shared.checkpoint.mock.calls.at(-1) as unknown as [
+        Array<{ kind: string; text: string; activities?: Array<{ outcome: string }> }>,
+      ]
+      expect(shared.checkpoint.mock.calls.length).toBeGreaterThan(1)
+      expect(terminal[0].every((message) => !message.text.includes('Late result after Stop'))).toBe(true)
+      expect(terminal[0].some((message) => message.kind === 'error')).toBe(false)
+      expect(terminal[0].flatMap((message) => message.activities ?? []).map((entry) => entry.outcome)).toContain(
+        'interrupted',
+      )
+      expect(container.textContent).not.toContain('Late result after Stop')
+      expect(stop()).toBeNull()
+    },
+  )
+
+  it('does not checkpoint a previous key epoch after a key-status boundary', async () => {
+    const response = deferred<AgentResult>()
+    const actual = jest.requireActual<typeof import('@/Assistant/assistantChatRunLease')>(
+      '@/Assistant/assistantChatRunLease',
+    )
+    application.serverJsonRequest.mockResolvedValue({
+      ok: true,
+      data: { acquired: true, leaseId: 'lease', fence: 1, expiresAt: Date.now() + 30000 },
+    })
+    jest.mocked(acquireAssistantChatRun).mockImplementation(actual.acquireAssistantChatRun)
+    jest.mocked(runConversationMode).mockReturnValue(response.promise)
+    const shared = { ready: true, refresh: jest.fn(async () => undefined), checkpoint: jest.fn(async () => undefined) }
+    await act(async () => {
+      render('shared-key-change', shared)
+      await flush()
+    })
+    const checkpointCount = shared.checkpoint.mock.calls.length
+    const options = jest.mocked(runConversationMode).mock.calls[0][2]
+    await act(async () => {
+      options.onTextDelta?.('Before key boundary')
+      await eventObserver(ApplicationEvent.KeyStatusChanged)
+      response.resolve({ finalText: 'Late key result', stopReason: 'end_turn', steps: 1 })
+      await flush()
+    })
+    expect(options.signal?.aborted).toBe(true)
+    expect(shared.checkpoint).toHaveBeenCalledTimes(checkpointCount)
+    expect(container.textContent).not.toContain('Late key result')
+    expect(stop()).toBeNull()
   })
 
   it('removes the pending prompt immediately when the authenticated principal changes', async () => {

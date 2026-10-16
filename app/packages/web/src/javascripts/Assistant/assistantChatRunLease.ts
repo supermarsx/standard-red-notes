@@ -1,6 +1,12 @@
 import type { WebApplication } from '@/Application/WebApplication'
 export type AssistantChatRunProof = { chatId: string; requestId: string; leaseId: string; fence: number }
-export type AssistantChatRunGuard = { proof: AssistantChatRunProof; isCurrent(): boolean; release(): Promise<void> }
+export type AssistantChatRunGuard = {
+  proof: AssistantChatRunProof
+  isCurrent(): boolean
+  /** Final transcript writes retain the existing lease after the user stops model/tool work. */
+  canCheckpoint(): boolean
+  release(): Promise<void>
+}
 
 /** Server authority is required across devices; a socket reconnect never replays a model run. */
 export async function acquireAssistantChatRun(
@@ -40,11 +46,9 @@ export async function acquireAssistantChatRun(
     renewing = false,
     timer: ReturnType<typeof setTimeout> | undefined
   let expiryTimer: ReturnType<typeof setTimeout> | undefined
-  const isCurrent = () =>
-    !released &&
-    !controller.signal.aborted &&
-    application.sessions.getUser()?.uuid === account &&
-    Date.now() < expiresAt - 500
+  const canCheckpoint = () =>
+    !released && application.sessions.getUser()?.uuid === account && Date.now() < expiresAt - 500
+  const isCurrent = () => !controller.signal.aborted && canCheckpoint()
   const lose = () => {
     released = true
     clearTimeout(timer)
@@ -70,6 +74,9 @@ export async function acquireAssistantChatRun(
     renewing = true
     try {
       const response = await request<{ renewed?: boolean; expiresAt?: number }>('renew', proof, controller.signal)
+      if (released || controller.signal.aborted) {
+        return
+      }
       if (
         !response.ok ||
         !response.data.renewed ||
@@ -87,7 +94,11 @@ export async function acquireAssistantChatRun(
       }
       timer = setTimeout(() => void renew(), Math.min(10000, Math.max(1, expiresAt - Date.now() - 1000)))
     } catch {
-      lose()
+      // User cancellation stops work, but a terminal checkpoint may still use
+      // the original unexpired lease. A rejected aborted renewal cannot revoke it.
+      if (!released && !controller.signal.aborted) {
+        lose()
+      }
     } finally {
       renewing = false
     }
@@ -102,6 +113,7 @@ export async function acquireAssistantChatRun(
   return {
     proof,
     isCurrent,
+    canCheckpoint,
     release: async () => {
       released = true
       clearTimeout(timer)
