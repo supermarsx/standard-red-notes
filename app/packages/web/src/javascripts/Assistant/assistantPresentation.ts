@@ -159,6 +159,19 @@ export function describeAssistantTool(name: string, rawArgs: unknown): Assistant
     case 'notes.readSuper':
     case 'notes.readBlocks':
       return { label: 'Reading a note', detail: 'Reviewing the selected note.' }
+    case 'comments.list':
+      return {
+        label: 'Reading note comments',
+        detail:
+          args.visibility === 'private'
+            ? 'Reading your private comments.'
+            : 'Reading shared comments on the selected note.',
+      }
+    case 'comments.manage':
+      return {
+        label: 'Updating note comments',
+        detail: `${humanize(String(args.action ?? 'comment'))} · ${args.visibility === 'private' ? 'private to you' : 'shared with collaborators'}.`,
+      }
     case 'notes.list':
       return { label: 'Reviewing your notes' }
     case 'tags.list':
@@ -215,6 +228,7 @@ export function describeAssistantToolConfirmation({
 export function isIrreversibleAssistantTool({ name, args }: AssistantToolConfirmation): boolean {
   return (
     name === 'notes.delete' ||
+    (name === 'comments.manage' && ['delete', 'purge-mine', 'purge-all'].includes(String(args.action))) ||
     name === 'reminders.clear' ||
     args.action === 'trash' ||
     (name === 'configure_achievements' && args.setting === 'reset')
