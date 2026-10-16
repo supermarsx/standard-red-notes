@@ -118,6 +118,8 @@ saver proof permits an immediate retry; a delayed refusal for an older proof
 cannot revoke its replacement. When another tab opens a note before this tab
 knows it is collaborative, the server identifies the fenced note in its refusal.
 The client protects that note from HTTP replay without pausing unrelated saves.
+The shared worker also scopes a local eligibility refusal to the requesting tab
+and note; it does not pause the tab that holds the valid saving proof.
 A rejected collaborative body is never replayed
 over HTTP. Account-wide restrictions, such as live sync being disabled or
 read-only access, still apply to the whole save lane.

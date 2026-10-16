@@ -234,16 +234,35 @@ export class SharedSyncTransportBroker {
       message = { ...input, requestId: internal }
     }
     if (PRIMARY.has(message.type)) {
-      if (
-        message.type === 'EXECUTE' &&
-        message.body.items.some(
-          (item) =>
-            typeof item === 'object' && item !== null && client.savers.get((item as { uuid: string }).uuid) === false,
-        )
-      ) {
+      const refusedItems =
+        message.type === 'EXECUTE'
+          ? message.body.items.flatMap((item) => {
+              if (typeof item !== 'object' || item === null || typeof (item as { uuid?: unknown }).uuid !== 'string') {
+                return []
+              }
+              const uuid = (item as { uuid: string }).uuid
+              if (client.savers.get(uuid) !== false) {
+                return []
+              }
+              const proof = message.body.collaboration_save_fences?.find((candidate) => candidate.room === uuid)
+              return [{ uuid, ...(proof ? { fenceToken: proof.token } : {}) }]
+            })
+          : []
+      if (message.type === 'EXECUTE' && refusedItems.length > 0) {
+        // Eligibility can change after the page collected a batch. Nothing was
+        // dispatched or journalled: hold only this tab's refused note, so its
+        // next sync can still download and save unrelated items. Do not broadcast
+        // a follower's local refusal to the port that actually holds the proof.
+        port.postMessage({
+          type: 'SAVE_ITEMS_REFUSED',
+          protectItems: true,
+          items: refusedItems,
+          holdForMilliseconds: 30_000,
+        })
         port.postMessage({
           type: 'RECOVERY_REQUIRED',
           clientRequestId: this.owners.get(message.clientRequestId)!.externalId,
+          reason: 'socket-save-refused',
         })
         this.forget(message.clientRequestId)
         return

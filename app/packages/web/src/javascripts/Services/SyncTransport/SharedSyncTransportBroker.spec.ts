@@ -118,10 +118,24 @@ describe('shared authenticated socket broker', () => {
       type: 'EXECUTE',
       clientRequestId: 'follower',
       sessionScope: scope,
-      body: { items: [{ uuid: 'same-note' }] } as never,
+      body: { items: [{ uuid: 'same-note' }, { uuid: 'unrelated-note' }] } as never,
     })
-    expect(last(b)).toEqual({ type: 'RECOVERY_REQUIRED', clientRequestId: 'follower' })
+    expect(last(b)).toEqual({ type: 'RECOVERY_REQUIRED', clientRequestId: 'follower', reason: 'socket-save-refused' })
+    expect(b.postMessage).toHaveBeenCalledWith({
+      type: 'SAVE_ITEMS_REFUSED',
+      protectItems: true,
+      items: [{ uuid: 'same-note' }],
+      holdForMilliseconds: 30_000,
+    })
+    expect(a.postMessage.mock.calls.some(([message]) => message.type === 'SAVE_ITEMS_REFUSED')).toBe(false)
     expect(runtime.handle.mock.calls.some(([message]) => message.type === 'EXECUTE')).toBe(false)
+    await send('b', {
+      type: 'EXECUTE',
+      clientRequestId: 'unrelated',
+      sessionScope: scope,
+      body: { items: [{ uuid: 'unrelated-note' }] } as never,
+    })
+    expect(runtime.handle).toHaveBeenLastCalledWith(expect.objectContaining({ clientRequestId: 'b:unrelated' }))
     await broker.detach('a')
     expect(runtime.handle).toHaveBeenCalledWith({ type: 'SET_COLLABORATION_SAVER', room: 'same-note', canSave: false })
   })
