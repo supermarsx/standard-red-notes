@@ -6,9 +6,7 @@ import { $createMusicStaffNode } from '../../Lexical/Nodes/MusicStaffNode'
 
 export const MusicStaffBlock = {
   name: 'Music Staff',
-  // `file-music` is the only music-related icon in the set; the closest match
-  // for a musical staff / notation block.
-  iconName: 'file-music' as LexicalIconName,
+  iconName: 'music-staff' as LexicalIconName,
   keywords: ['music', 'staff', 'notation', 'abc', 'score', 'sheet', 'notes', 'melody', 'abcjs'],
   onSelect: (editor: LexicalEditor) =>
     editor.update(() => {

@@ -247,6 +247,19 @@ it('shows concise visible labels beside list icons in the Insert Lists group', a
   }
 })
 
+it('gives images a dedicated large Insert control without duplicating URL insertion in Media', async () => {
+  await mount(false)
+  await clickTab('Insert')
+  const images = container.querySelector('[role="group"][aria-label="Images"]')!
+  expect(images).not.toBeNull()
+  const button = images.querySelector<HTMLButtonElement>('[aria-label="Insert image"]')!
+  expect(['true', 'menu']).toContain(button.getAttribute('aria-haspopup'))
+  expect(button.className).toContain('md:h-[7.375rem]')
+  expect(container.querySelectorAll('[aria-label="Insert image"]')).toHaveLength(1)
+  const media = container.querySelector('[role="group"][aria-label="blockCategoryMedia"]')!
+  expect(media.textContent).not.toContain('blockImageFromUrl')
+})
+
 it('uses ribbon groups for per-item settings and Review, with no duplicate task or comment list', async () => {
   await mount(false)
   expect(findTab('Review')).toBeDefined()

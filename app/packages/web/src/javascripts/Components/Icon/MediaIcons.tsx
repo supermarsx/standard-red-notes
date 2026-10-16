@@ -215,3 +215,11 @@ export const OutlineTextIcon = (props: SVGProps<SVGSVGElement>) => (
     />
   </svg>
 )
+
+/** Five staff lines and paired notes, legible at the ribbon's compact icon size. */
+export const MusicStaffIcon = (props: SVGProps<SVGSVGElement>) => (
+  <svg viewBox="0 0 24 24" {...props}>
+    <path d="M2 5h20v1H2zm0 3h20v1H2zm0 3h20v1H2zm0 3h20v1H2zm0 3h20v1H2z" />
+    <path d="M10 3v12.4c-1.8-.5-4 .5-4 2 0 1.2 1.5 1.8 3 1.3 1.2-.4 2-1.2 2-2.2V7l6-1.5v7.9c-1.8-.5-4 .5-4 2 0 1.2 1.5 1.8 3 1.3 1.2-.4 2-1.2 2-2.2V1z" />
+  </svg>
+)

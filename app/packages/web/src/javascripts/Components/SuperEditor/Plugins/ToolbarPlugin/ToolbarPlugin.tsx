@@ -149,6 +149,7 @@ import { $selectAllText } from './selectAllText'
 import { findFontByCss, filterFonts, groupFontsByCategory } from '../../fonts/fontCatalog'
 import CustomizeToolbarDialog from './CustomizeToolbarDialog'
 import { NavigationLayoutSubsection, applyNavigationPatch } from './NavigationLayoutSubsection'
+import { ScreenNavigationControls } from '../../Layout/ScreenNavigationControls'
 import { ChecklistSubsection } from './ChecklistSubsection'
 import { ChecklistPanel } from '../../Checklist/ChecklistPanel'
 import { useEditorControlsState } from '../../EditorControlsContext'
@@ -262,6 +263,7 @@ import {
 import { useTranslation } from 'react-i18next'
 import BlockStyleGalleryBar from './BlockStyleGallery'
 import InsertSectionsBar from './InsertSectionsBar'
+import InsertImagesButton from './InsertImagesButton'
 import TypographyStyleEditorModal from './TypographyStyleEditorModal'
 import {
   GalleryBlockDescriptor,
@@ -4031,32 +4033,53 @@ const ToolbarPlugin = ({
                         const actionButtons: ReactNode[] = group.buttons
                           .filter((button) => actionIds.has(button.id))
                           .map((button) => <Fragment key={button.id}>{buttonRenderers[button.id]}</Fragment>)
-                        const rendered = sections.map((section) => {
+                        const rendered = sections.flatMap((section) => {
                           const caption =
                             section.id === 'others'
                               ? t('blockSectionOthers')
                               : translateBlockCategory(INSERT_SECTION_CAPTION_CATEGORY[section.id], t)
-                          const buttons: ReactNode[] = section.entries.map((entry) => (
-                            <ToolbarButton
-                              key={entry.key}
-                              name={translateBlockName(entry.name, t)}
-                              iconName={entry.iconName}
-                              onSelect={() => entry.onSelect(editor, blockCatalogContext)}
-                            >
-                              {section.id === 'lists' && (
-                                <>
-                                  <Icon type={entry.iconName} size="custom" className="super-toolbar-icon" />
-                                  <span className="ml-1.5 text-xs whitespace-nowrap">
-                                    {translateBlockName(entry.name, t)}
-                                  </span>
-                                </>
-                              )}
-                            </ToolbarButton>
-                          ))
+                          const buttons: ReactNode[] = section.entries
+                            .filter((entry) => entry.key !== 'ImageFromUrl')
+                            .map((entry) => (
+                              <ToolbarButton
+                                key={entry.key}
+                                name={translateBlockName(entry.name, t)}
+                                iconName={entry.iconName}
+                                onSelect={() => entry.onSelect(editor, blockCatalogContext)}
+                              >
+                                {section.id === 'lists' && (
+                                  <>
+                                    <Icon type={entry.iconName} size="custom" className="super-toolbar-icon" />
+                                    <span className="ml-1.5 text-xs whitespace-nowrap">
+                                      {translateBlockName(entry.name, t)}
+                                    </span>
+                                  </>
+                                )}
+                              </ToolbarButton>
+                            ))
                           if (section.id === 'others') {
                             buttons.push(...actionButtons)
                           }
-                          return { key: section.id, caption, rows: splitIntoRows(buttons, 3) }
+                          const normal = { key: section.id, caption, rows: splitIntoRows(buttons, 3) }
+                          const imageFromUrl = section.entries.find((entry) => entry.key === 'ImageFromUrl')
+                          return imageFromUrl
+                            ? [
+                                {
+                                  key: 'images',
+                                  caption: 'Images',
+                                  rows: [
+                                    [
+                                      <InsertImagesButton
+                                        key="images"
+                                        editor={activeEditor}
+                                        fromUrl={() => imageFromUrl.onSelect(editor, blockCatalogContext)}
+                                      />,
+                                    ],
+                                  ],
+                                },
+                                ...(buttons.length ? [normal] : []),
+                              ]
+                            : [normal]
                         })
                         return <InsertSectionsBar key={group.id} sections={rendered} />
                       }
@@ -5162,6 +5185,15 @@ const ToolbarPlugin = ({
           {/* Subsection 4 — Navigation (on-screen document-outline sidebar). Not an
               export band; toggling it shows/hides the live sidebar via the DOM bridge. */}
           <NavigationLayoutSubsection navigation={noteLayout.navigation} onChange={setNavigation} />
+          <ScreenNavigationControls
+            layout={noteLayout}
+            onChange={(patch) => {
+              const next = normalizeNoteLayout({ ...noteLayout, ...patch })
+              saveNoteLayout(activeNoteUuid, next)
+              setNoteLayout(next)
+              window.dispatchEvent(new Event(NOTE_LAYOUT_SETTINGS_CHANGED_EVENT))
+            }}
+          />
 
           <p className="text-passive-1 mt-3 text-xs">
             Tip: put {'{page}'} and {'{total}'} in header/footer text to insert the current page and page count.
