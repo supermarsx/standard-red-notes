@@ -114,14 +114,6 @@ RUN CI=true yarn build
 # =============================================================================
 FROM node:26.5.0-alpine AS runtime
 
-ARG SRN_DEPLOY_REVISION
-ARG SRN_DEPLOY_VERSION
-COPY --from=deployment-identity --chown=0:0 --chmod=0555 /srn-deployment /usr/share/srn-deployment
-COPY --from=deployment-identity --chown=0:0 --chmod=0444 /srn-deployment/deployment.json /usr/share/srn-deployment/deployment.json
-LABEL org.opencontainers.image.revision="${SRN_DEPLOY_REVISION}"
-LABEL org.opencontainers.image.version="${SRN_DEPLOY_VERSION}"
-LABEL org.opencontainers.image.source="https://github.com/supermarsx/standard-red-notes"
-
 ENV NODE_ENV=production
 
 RUN apk add --update --no-cache \
@@ -166,6 +158,17 @@ RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh /usr/local/bin/deployme
   && chown -R srn:srn /opt/server /var/lib/server/logs /opt/shared/uploads
 
 USER srn:srn
+
+# Identity changes independently of package installs and built workspace
+# artifacts. Consume its arguments last so those expensive runtime layers are
+# reusable when only the deployment revision/version changes.
+ARG SRN_DEPLOY_REVISION
+ARG SRN_DEPLOY_VERSION
+COPY --from=deployment-identity --chown=0:0 --chmod=0555 /srn-deployment /usr/share/srn-deployment
+COPY --from=deployment-identity --chown=0:0 --chmod=0444 /srn-deployment/deployment.json /usr/share/srn-deployment/deployment.json
+LABEL org.opencontainers.image.revision="${SRN_DEPLOY_REVISION}"
+LABEL org.opencontainers.image.version="${SRN_DEPLOY_VERSION}"
+LABEL org.opencontainers.image.source="https://github.com/supermarsx/standard-red-notes"
 
 EXPOSE 3000 3104
 

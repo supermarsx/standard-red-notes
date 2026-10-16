@@ -105,6 +105,10 @@ RUN --mount=type=cache,target=/opt/standard-red-notes/app/.yarn/cache,sharing=lo
 # Now bring in the source and build. Only this layer rebuilds on a code change;
 # the dependency layer above stays cached.
 COPY . .
+# Library builds do not embed the deployment revision. Keep their normal
+# topological build (including type checks) before the revision argument so a
+# revision-only rebuild can reuse them. The final web build remains cold below.
+RUN yarn workspaces foreach -pt --topological-dev --verbose -R --from @standardnotes/web --exclude @standardnotes/web run build
 # *** THE WEB BUNDLE IS BUILT COLD, ON PURPOSE. *** This step used to carry
 # `--mount=type=cache,target=…/node_modules/.cache`, which kept webpack's
 # filesystem cache between image builds and saved about four minutes a rebuild.
@@ -121,8 +125,10 @@ COPY . .
 # daemon — of any commit, several at once — read and wrote the one directory.
 # That is a suspicion, not a finding. What is established is the outcome, and an
 # image that runs old code while every identity check says "current" costs far
-# more than a slower build. node_modules is excluded from the build context, so
-# with no mount there is no cache for this step to restore from.
+# more than a slower build. node_modules is excluded from the build context,
+# and the dependency-only pass above never runs the web compiler. Its library
+# webpack configurations use no filesystem cache, so this layer contains no
+# previous web compilation to restore. There is still no shared cache mount.
 #
 # Do not put the mount back without a test that builds two different commits
 # against one cache and compares every emitted file with a cold build.
@@ -135,7 +141,7 @@ COPY . .
 # identity at all. Scoped to this one command — it is not an ENV, so nothing
 # else in the stage is invalidated by it — and empty is still a valid build.
 ARG SRN_DEPLOY_REVISION
-RUN SRN_DEPLOY_REVISION="${SRN_DEPLOY_REVISION}" yarn build:web
+RUN SRN_DEPLOY_REVISION="${SRN_DEPLOY_REVISION}" yarn workspace @standardnotes/web build
 
 # Hardening: run the runtime image as a NON-ROOT user. The unprivileged nginx
 # image is a drop-in for nginx:alpine that runs the master process as the
@@ -145,6 +151,34 @@ RUN SRN_DEPLOY_REVISION="${SRN_DEPLOY_REVISION}" yarn build:web
 # still executes at container start.
 FROM nginxinc/nginx-unprivileged:1.30.3-alpine3.23
 
+# COPY --chown owns incoming files, but an existing destination directory can
+# retain its base-image owner. Runtime sed -i needs the html directory writable
+# too; fix that once in a stable layer before copying the changing bundle.
+USER root
+RUN chown nginx:nginx /usr/share/nginx/html
+USER nginx
+
+# nginx.conf below listens on 8080 (the unprivileged default) instead of :80 so
+# the worker can bind without root. Compose maps the host port to 8080.
+COPY --chown=nginx:nginx docker/nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=build --chown=nginx:nginx /opt/standard-red-notes/app/packages/web/dist /usr/share/nginx/html
+
+# Runtime config templating (e.g. OCR_ENABLED) for the static bundle. Rewrites
+# the window.* globals in index.html from env at container start, then hands off
+# to the stock nginx entrypoint so operators can flip flags without a rebuild.
+# The unprivileged image's entrypoint runs these as the `nginx` user, so the
+# index.html and config are owned by nginx at COPY time, avoiding a recursive
+# chown layer over every freshly built bundle. The entrypoint itself stays
+# root-owned and executable by nginx.
+COPY --chmod=0555 docker/docker-entrypoint.sh /docker-entrypoint.d/40-runtime-config.sh
+# The entrypoint runs as the unprivileged `nginx` user and rewrites BOTH the
+# served index.html (OCR/SYNC templating) AND default.conf (self-healing CSP
+# inline-script hash). conf.d itself is already nginx-writable in the base
+# image, so sed -i can write its temp file there.
+USER nginx
+
+# Stamp only after all runtime setup/artifact layers: changing identity must
+# not invalidate otherwise identical configuration or ownership work.
 ARG SRN_DEPLOY_REVISION
 ARG SRN_DEPLOY_VERSION
 COPY --from=deployment-identity --chown=0:0 --chmod=0555 /srn-deployment /usr/share/srn-deployment
@@ -152,28 +186,6 @@ COPY --from=deployment-identity --chown=0:0 --chmod=0444 /srn-deployment/deploym
 LABEL org.opencontainers.image.revision="${SRN_DEPLOY_REVISION}"
 LABEL org.opencontainers.image.version="${SRN_DEPLOY_VERSION}"
 LABEL org.opencontainers.image.source="https://github.com/supermarsx/standard-red-notes"
-
-# nginx.conf below listens on 8080 (the unprivileged default) instead of :80 so
-# the worker can bind without root. Compose maps the host port to 8080.
-COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
-COPY --from=build /opt/standard-red-notes/app/packages/web/dist /usr/share/nginx/html
-
-# Runtime config templating (e.g. OCR_ENABLED) for the static bundle. Rewrites
-# the window.* globals in index.html from env at container start, then hands off
-# to the stock nginx entrypoint so operators can flip flags without a rebuild.
-# The unprivileged image's entrypoint runs these as the `nginx` user, so the
-# script and index.html must be writable by it (handled while still root below).
-USER root
-COPY docker/docker-entrypoint.sh /docker-entrypoint.d/40-runtime-config.sh
-# The entrypoint runs as the unprivileged `nginx` user and rewrites BOTH the
-# served index.html (OCR/SYNC templating) AND default.conf (self-healing CSP
-# inline-script hash). COPY lands default.conf as root:root, so hand it (and the
-# html) to nginx; conf.d itself is already nginx-writable in the base image, so
-# sed -i can write its temp file there.
-RUN chmod +x /docker-entrypoint.d/40-runtime-config.sh \
-  && chown -R nginx:nginx /usr/share/nginx/html \
-  && chown nginx:nginx /etc/nginx/conf.d/default.conf
-USER nginx
 
 EXPOSE 8080
 
