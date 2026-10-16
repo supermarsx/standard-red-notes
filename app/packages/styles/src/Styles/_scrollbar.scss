@@ -3,11 +3,11 @@
 .linux-web,
 .linux-desktop,
 .force-custom-scrollbar {
-  $thumb-width: 4px;
+  $thumb-width: 2px;
 
   ::-webkit-scrollbar {
-    width: 14px;
-    height: 18px;
+    width: 8px;
+    height: 8px;
     border-left: none;
   }
 
@@ -38,7 +38,7 @@
 
     @media screen and (min-width: 768px) {
       &::-webkit-scrollbar {
-        height: 13px;
+        height: 8px;
       }
     }
   }
@@ -46,6 +46,10 @@
 
 body:not(.chromium),
 .mac-desktop {
-  scrollbar-width: thin;
-  scrollbar-color: var(--sn-stylekit-scrollbar-thumb-color) transparent;
+  &,
+  * {
+    // Width is not inherited: nested editors, sidebars and menus need it too.
+    scrollbar-width: thin;
+    scrollbar-color: var(--sn-stylekit-scrollbar-thumb-color) transparent;
+  }
 }
