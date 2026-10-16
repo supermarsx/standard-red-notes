@@ -1645,7 +1645,10 @@ test("a new worker takes over promptly instead of waiting behind the old one", (
     /if \(!hadControllerAtLoad\)/,
     "the first-visit claim must not be mistaken for an update notice",
   );
-  assert.match(registration, /showAppUpdateToast\(\(\) => window\.location\.reload\(\)\)/);
+  assert.match(
+    registration,
+    /showAppUpdateToast\(\(\) => window\.location\.reload\(\)\)/,
+  );
 });
 
 test("the settings cache reset touches shell caches only, never user-data storage", () => {
@@ -2062,5 +2065,178 @@ test("the docker and LXC CSP inline-script extractors are the same implementatio
       /__CSP_INLINE_SCRIPT_HASH__'; then|__CSP_INLINE_SCRIPT_HASH__'; then|grep -Fq '__CSP_INLINE_SCRIPT_HASH__'/,
       `${where} must refuse a surviving placeholder`,
     );
+  }
+});
+
+// Exercise the actual worker rather than asserting its policy with source regexes.
+function assetWorkerHarness({
+  fetcher,
+  failRead = false,
+  failWrite = false,
+} = {}) {
+  const listeners = new Map();
+  const cached = new Map();
+  const fetched = [];
+  const lifetime = [];
+  const response = (text, status = 200) => {
+    const value = new Response(text, { status });
+    Object.defineProperty(value, "type", { value: "basic" });
+    return value;
+  };
+  const fetchAsset = async (request) => {
+    fetched.push(request.url);
+    return fetcher ? fetcher(request) : response("fresh");
+  };
+  const key = (request) =>
+    typeof request === "string" ? request : request.url;
+  runInNewContext(serviceWorker, {
+    URL,
+    Request,
+    Response,
+    Promise,
+    fetch: fetchAsset,
+    caches: {
+      open: async () => ({
+        match: async (request) => {
+          if (failRead) throw new Error("Cache unavailable");
+          return cached.get(key(request))?.clone();
+        },
+        put: async (request, value) => {
+          if (failWrite) throw new Error("Quota exceeded");
+          cached.set(key(request), value);
+        },
+      }),
+    },
+    self: {
+      location: { origin: "https://notes.example.test" },
+      addEventListener: (type, listener) => listeners.set(type, listener),
+    },
+  });
+  const dispatch = async (path) => {
+    const request = new Request(new URL(path, "https://notes.example.test"));
+    let result;
+    listeners.get("fetch")({
+      request,
+      respondWith: (value) => {
+        result = value;
+      },
+      waitUntil: (value) => {
+        lifetime.push(value);
+      },
+    });
+    return {
+      intercepted: result !== undefined,
+      response: await (result ?? fetchAsset(request)),
+    };
+  };
+  return {
+    cached,
+    fetched,
+    response,
+    dispatch,
+    settle: () => Promise.all(lifetime),
+  };
+}
+
+test("health probes bypass even a previously cached healthy response", async () => {
+  const h = assetWorkerHarness({
+    fetcher: async () => new Response("unavailable", { status: 503 }),
+  });
+  for (const path of [
+    "/health",
+    "/healthcheck",
+    "/healthcheck/readiness",
+    "/healthcheck/liveness",
+  ]) {
+    h.cached.set(
+      `https://notes.example.test${path}`,
+      h.response("old healthy"),
+    );
+    const result = await h.dispatch(path);
+    assert.equal(result.intercepted, false, path);
+    assert.equal(result.response.status, 503, path);
+  }
+});
+
+test("a cached content-hashed WASM is reused without a background fetch", async () => {
+  const h = assetWorkerHarness();
+  const path = "/libsodium-sumo.29dd7daf12daec2afdf7.wasm";
+  h.cached.set(`https://notes.example.test${path}`, h.response("cached wasm"));
+  for (let i = 0; i < 10; i++) {
+    assert.equal(await (await h.dispatch(path)).response.text(), "cached wasm");
+  }
+  assert.equal(h.fetched.length, 0);
+});
+
+test("parallel hashed WASM cache misses share one fetch and have independently readable bodies", async () => {
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const h = assetWorkerHarness({
+    fetcher: async () => {
+      await gate;
+      return h.response("wasm bytes");
+    },
+  });
+  const pending = Array.from({ length: 8 }, () =>
+    h.dispatch("/libsodium-sumo.29dd7daf12daec2afdf7.wasm"),
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(h.fetched.length, 1);
+  release();
+  for (const result of await Promise.all(pending))
+    assert.equal(await result.response.text(), "wasm bytes");
+  await h.settle();
+  assert.equal(h.cached.size, 1);
+});
+
+test("cache storage failure never blocks loading a hashed WASM from the network", async () => {
+  for (const options of [{ failRead: true }, { failWrite: true }]) {
+    const h = assetWorkerHarness(options);
+    const result = await h.dispatch(
+      "/libsodium-sumo.29dd7daf12daec2afdf7.wasm",
+    );
+    assert.equal(await result.response.text(), "fresh");
+    await h.settle();
+  }
+});
+
+test("unhashed assets retain background refresh and failed WASM fetches can retry", async () => {
+  const h = assetWorkerHarness();
+  h.cached.set("https://notes.example.test/logo.svg", h.response("old logo"));
+  assert.equal(
+    await (await h.dispatch("/logo.svg")).response.text(),
+    "old logo",
+  );
+  assert.equal(h.fetched.length, 1);
+  let attempts = 0;
+  const failure = assetWorkerHarness({
+    fetcher: async () => {
+      if (++attempts === 1) throw new Error("Temporary failure");
+      return failure.response("recovered");
+    },
+  });
+  await assert.rejects(failure.dispatch("/sodium.29dd7daf12daec2afdf7.wasm"));
+  assert.equal(
+    await (
+      await failure.dispatch("/sodium.29dd7daf12daec2afdf7.wasm")
+    ).response.text(),
+    "recovered",
+  );
+  assert.equal(attempts, 2);
+});
+
+test("online static assets and bundles stay readable when cache reads or writes fail", async () => {
+  for (const path of ["/logo.svg", "/font.woff2", "/app.js", "/app.css"]) {
+    for (const options of [{ failRead: true }, { failWrite: true }]) {
+      const h = assetWorkerHarness(options);
+      assert.equal(
+        await (await h.dispatch(path)).response.text(),
+        "fresh",
+        path,
+      );
+      await h.settle();
+    }
   }
 });

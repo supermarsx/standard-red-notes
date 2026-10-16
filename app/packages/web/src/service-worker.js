@@ -100,9 +100,65 @@ function revalidating(request) {
   }
 }
 
+// Cache storage is an optional optimization. A quota/access failure must not
+// reject an otherwise valid online response or create unhandled rejections.
+function cacheResponse(request, response, event) {
+  if (!response || response.status !== 200 || response.type !== 'basic') {
+    return
+  }
+  const copy = response.clone()
+  const write = caches
+    .open(CACHE_NAME)
+    .then((cache) => cache.put(request, copy))
+    .catch(() => undefined)
+  event.waitUntil?.(write)
+}
+
+// Content-hashed WASM is immutable. Each crypto worker has its own runtime,
+// but simultaneous loads should share the bytes rather than stampede the server.
+const immutableWasmRequests = new Map()
+function immutableWasmResponse(request, event) {
+  const key = request.url
+  let pending = immutableWasmRequests.get(key)
+  if (!pending) {
+    let cacheWrite = Promise.resolve()
+    pending = (async () => {
+      let cache
+      try {
+        cache = await caches.open(CACHE_NAME)
+        const cached = await cache.match(request)
+        if (cached) {
+          return cached
+        }
+      } catch {
+        // Cache/quota failures must not prevent an online crypto initialization.
+      }
+      const response = await fetch(request)
+      if (cache && response.status === 200 && response.type === 'basic') {
+        cacheWrite = cache.put(request, response.clone()).catch(() => undefined)
+      }
+      return response
+    })()
+    immutableWasmRequests.set(key, pending)
+    const complete = pending
+      .then(() => cacheWrite)
+      .catch(() => undefined)
+      .finally(() => {
+        if (immutableWasmRequests.get(key) === pending) {
+          immutableWasmRequests.delete(key)
+        }
+      })
+    // Keep the cache write alive without holding up delivery of the WASM bytes.
+    event.waitUntil(complete)
+  }
+  // Response bodies are streams; every worker must receive its own readable copy.
+  return pending.then((response) => response.clone())
+}
+
 function isApiRequest(url) {
   // Versioned sync-server endpoints and any auth/subscription/websocket paths.
   return (
+    /^\/(?:health|healthcheck)(?:\/|$)/.test(url.pathname) ||
     /\/v\d+\//.test(url.pathname) ||
     url.pathname.startsWith('/v1') ||
     url.pathname.startsWith('/v2') ||
@@ -141,6 +197,11 @@ self.addEventListener('fetch', (event) => {
     return
   }
 
+  if (/\.[0-9a-f]{16,64}\.wasm$/i.test(url.pathname)) {
+    event.respondWith(immutableWasmResponse(request, event))
+    return
+  }
+
   // HTML navigations: network-first so users get the freshest shell when
   // online, falling back to the cached shell (then index.html) when offline.
   // Revalidated, so "network-first" cannot be answered by a stale HTTP-cache copy.
@@ -154,10 +215,7 @@ self.addEventListener('fetch', (event) => {
           // afterwards under the app CSP, whose inline-script hash pins the REAL
           // index.html — so the error page's own inline script is then blocked).
           // Same gate the asset handlers below already apply.
-          if (response && response.status === 200 && response.type === 'basic') {
-            const copy = response.clone()
-            caches.open(CACHE_NAME).then((cache) => cache.put(request, copy))
-          }
+          cacheResponse(request, response, event)
           return response
         })
         .catch(async () => {
@@ -197,10 +255,7 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       fetch(revalidating(request))
         .then((response) => {
-          if (response && response.status === 200 && response.type === 'basic') {
-            const copy = response.clone()
-            caches.open(CACHE_NAME).then((cache) => cache.put(request, copy))
-          }
+          cacheResponse(request, response, event)
           return response
         })
         .catch(() => caches.open(CACHE_NAME).then((cache) => cache.match(request))),
@@ -212,18 +267,26 @@ self.addEventListener('fetch', (event) => {
   // cache-first, with a background refresh (stale-while-revalidate) so updated
   // files are picked up on the next load without blocking the current one.
   event.respondWith(
-    caches.open(CACHE_NAME).then((cache) =>
-      cache.match(request).then((cached) => {
+    caches
+      .open(CACHE_NAME)
+      .then((cache) => cache.match(request))
+      .catch(() => undefined)
+      .then((cached) => {
         const network = fetch(request)
           .then((response) => {
-            if (response && response.status === 200 && response.type === 'basic') {
-              cache.put(request, response.clone())
-            }
+            cacheResponse(request, response, event)
             return response
           })
-          .catch(() => cached)
+          .catch((error) => {
+            if (cached) {
+              return cached
+            }
+            throw error
+          })
+        if (cached) {
+          event.waitUntil?.(network.then(() => undefined).catch(() => undefined))
+        }
         return cached || network
       }),
-    ),
   )
 })
