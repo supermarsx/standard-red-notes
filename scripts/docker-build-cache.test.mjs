@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
@@ -52,6 +52,88 @@ test("web dependencies build before revision scope; the stamped bundle still bui
   assert.match(
     JSON.parse(read("app/packages/web/package.json")).scripts.build,
     /AssertPortableBundle\.mjs/,
+  );
+});
+
+test("UI-only source changes cannot invalidate the compiled library layer", () => {
+  const source = instructions(read("app/Dockerfile"));
+  const stage = source.slice(
+    source.indexOf("FROM node:"),
+    source.lastIndexOf("FROM "),
+  );
+  const build = stage.indexOf("RUN yarn workspaces foreach");
+  const libraryInputs = stage.slice(0, build);
+  assert.ok(build > 0);
+  assert.doesNotMatch(libraryInputs, /^COPY\s+\.\s+\./m);
+  assert.doesNotMatch(libraryInputs, /^COPY\s+packages\/\s/m);
+  assert.doesNotMatch(
+    libraryInputs,
+    /^COPY\s+packages\/web\/(?!package\.json\s)/m,
+  );
+  assert.ok(
+    stage.indexOf("COPY . .") > build,
+    "the full source overlay belongs after the library build",
+  );
+  assert.ok(
+    stage.indexOf("COPY . .") < stage.indexOf("ARG SRN_DEPLOY_REVISION"),
+  );
+  assert.match(
+    libraryInputs,
+    /^COPY tsconfig\.base\.json UILib\.tsconfig\.json \.\//m,
+  );
+  assert.match(libraryInputs, /^COPY scripts\/ scripts\//m);
+  // The overlay must never replace freshly built outputs with local artifacts.
+  assert.match(read("app/.dockerignore"), /^packages\/\*\/dist$/m);
+  assert.match(read("app/.dockerignore"), /^\*\*\/node_modules$/m);
+});
+
+test("every transitive web workspace has its complete source copied before the library build", () => {
+  const packagesRoot = fileURLToPath(
+    new URL("../app/packages/", import.meta.url),
+  );
+  const workspaces = new Map(
+    readdirSync(packagesRoot)
+      .filter((directory) =>
+        existsSync(`${packagesRoot}/${directory}/package.json`),
+      )
+      .map((directory) => {
+        const manifest = JSON.parse(
+          read(`app/packages/${directory}/package.json`),
+        );
+        return [manifest.name, { directory, manifest }];
+      }),
+  );
+  const visited = new Set();
+  const visit = (name) => {
+    if (visited.has(name)) return;
+    visited.add(name);
+    const { manifest } = workspaces.get(name);
+    for (const dependency of Object.keys({
+      ...manifest.dependencies,
+      ...manifest.devDependencies,
+      ...manifest.optionalDependencies,
+    })) {
+      if (workspaces.has(dependency)) visit(dependency);
+    }
+  };
+  visit("@standardnotes/web");
+  const source = instructions(read("app/Dockerfile"));
+  const libraryInputs = source.slice(
+    source.indexOf("FROM node:"),
+    source.indexOf("RUN yarn workspaces foreach"),
+  );
+  const copied = new Set(
+    [
+      ...libraryInputs.matchAll(/^COPY packages\/(\S+)\/ packages\/\1\/$/gm),
+    ].map((match) => match[1]),
+  );
+  const required = [...visited]
+    .filter((name) => name !== "@standardnotes/web")
+    .map((name) => workspaces.get(name).directory);
+  assert.deepEqual(
+    [...copied].sort(),
+    required.sort(),
+    "keep Docker library sources in sync with the workspace graph",
   );
 });
 

@@ -101,14 +101,36 @@ COPY packages/web/package.json packages/web/
 RUN --mount=type=cache,target=/opt/standard-red-notes/app/.yarn/cache,sharing=locked \
   yarn workspaces focus @standardnotes/web
 
-# --- Source + build layer -----------------------------------------------------
-# Now bring in the source and build. Only this layer rebuilds on a code change;
-# the dependency layer above stays cached.
-COPY . .
-# Library builds do not embed the deployment revision. Keep their normal
-# topological build (including type checks) before the revision argument so a
-# revision-only rebuild can reuse them. The final web build remains cold below.
+# --- Library source + build layer ---------------------------------------------
+# Keep web source out of this layer: a UI-only change must not recompile every
+# SDK/library. Copy complete dependency workspaces (including raw-source entry
+# points and assets), plus their shared build configuration. The cache contract
+# test checks this list against the actual transitive workspace graph.
+COPY tsconfig.base.json UILib.tsconfig.json ./
+COPY scripts/ scripts/
+COPY packages/api/ packages/api/
+COPY packages/encryption/ packages/encryption/
+COPY packages/features/ packages/features/
+COPY packages/filepicker/ packages/filepicker/
+COPY packages/files/ packages/files/
+COPY packages/icons/ packages/icons/
+COPY packages/models/ packages/models/
+COPY packages/responses/ packages/responses/
+COPY packages/services/ packages/services/
+COPY packages/sncrypto-common/ packages/sncrypto-common/
+COPY packages/sncrypto-web/ packages/sncrypto-web/
+COPY packages/snjs/ packages/snjs/
+COPY packages/styles/ packages/styles/
+COPY packages/toast/ packages/toast/
+COPY packages/ui-services/ packages/ui-services/
+COPY packages/utils/ packages/utils/
+# Preserve the ordinary topological build and its type checks. Changes to any
+# copied library/configuration still invalidate this layer automatically.
 RUN yarn workspaces foreach -pt --topological-dev --verbose -R --from @standardnotes/web --exclude @standardnotes/web run build
+# --- Web source + build layer -------------------------------------------------
+# Build output/node_modules are excluded by .dockerignore, so this overlay keeps
+# the freshly compiled libraries while admitting every current web/build input.
+COPY . .
 # *** THE WEB BUNDLE IS BUILT COLD, ON PURPOSE. *** This step used to carry
 # `--mount=type=cache,target=…/node_modules/.cache`, which kept webpack's
 # filesystem cache between image builds and saved about four minutes a rebuild.

@@ -2115,7 +2115,7 @@ export function validateCiContract(files) {
     // rule that silently stopped matching would otherwise pass the gate above
     // by finding nothing.
     "test:ci-tools":
-      "node --test scripts/audit-production-dependencies.test.mjs scripts/validate-ci-contract.test.mjs scripts/validate-docker-hardening.test.mjs scripts/validate-safe-logging.test.mjs scripts/verify-playwright-report.test.mjs scripts/startup-log-context.test.mjs",
+      "node --test scripts/audit-production-dependencies.test.mjs scripts/validate-ci-contract.test.mjs scripts/validate-docker-hardening.test.mjs scripts/docker-build-cache.test.mjs scripts/validate-safe-logging.test.mjs scripts/verify-playwright-report.test.mjs scripts/startup-log-context.test.mjs",
     "test:release-contract:run":
       "node --test scripts/validate-release-contract.test.mjs",
     "test:release-impact:run":
