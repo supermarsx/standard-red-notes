@@ -25,6 +25,19 @@ const allButtonIds = (groups: { buttons: { id: ToolbarButtonId }[] }[]) =>
   groups.flatMap((g) => g.buttons.map((b) => b.id))
 
 describe('applyToolbarConfig', () => {
+  it('groups table of contents navigation, insertion and formatting outside Selection', () => {
+    const groups = applyToolbarConfig(undefined)
+    expect(
+      groups.find((group) => group.id === ToolbarGroupId.TableOfContents)?.buttons.map((button) => button.id),
+    ).toEqual([
+      ToolbarButtonId.InsertTableOfContents,
+      ToolbarButtonId.TableOfContents,
+      ToolbarButtonId.FormatTableOfContents,
+    ])
+    expect(
+      groups.find((group) => group.id === ToolbarGroupId.Selection)?.buttons.map((button) => button.id),
+    ).not.toContain(ToolbarButtonId.TableOfContents)
+  })
   it('returns the full default set unchanged for an empty config (no-op)', () => {
     const result = applyToolbarConfig({ groupOrder: [], hiddenButtonIds: [] })
     expect(result).toEqual(DEFAULT_TOOLBAR_GROUPS)

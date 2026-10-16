@@ -71,6 +71,8 @@ const NON_HOME_BUTTON_IDS: string[] = [
   ToolbarButtonId.FindReplace,
   ToolbarButtonId.FindNext,
   ToolbarButtonId.TableOfContents,
+  ToolbarButtonId.InsertTableOfContents,
+  ToolbarButtonId.FormatTableOfContents,
   ToolbarButtonId.SelectAll,
   ToolbarButtonId.SelectAllText,
   ToolbarButtonId.Deselect,

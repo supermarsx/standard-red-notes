@@ -24,6 +24,7 @@ export enum ToolbarGroupId {
   AI = 'ai',
   Find = 'find',
   Selection = 'selection',
+  TableOfContents = 'tableOfContents',
   FormatPainter = 'formatPainter',
   Toolbar = 'toolbar',
   /** Standard Red Notes: per-note page layout (size, orientation, margins, columns). */
@@ -42,6 +43,8 @@ export enum ToolbarButtonId {
   Print = 'print',
   // Selection (in-note find / replace / select)
   TableOfContents = 'tableOfContents',
+  InsertTableOfContents = 'insertTableOfContents',
+  FormatTableOfContents = 'formatTableOfContents',
   Search = 'search',
   FindReplace = 'findReplace',
   FindNext = 'findNext',
@@ -466,16 +469,32 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
     label: 'Selection',
     caption: 'Selection',
     buttons: [
-      { id: ToolbarButtonId.TableOfContents, label: 'Table of Contents', group: ToolbarGroupId.Selection },
       { id: ToolbarButtonId.SelectAll, label: 'Select all', group: ToolbarGroupId.Selection },
       { id: ToolbarButtonId.SelectAllText, label: 'Select all text only', group: ToolbarGroupId.Selection },
       { id: ToolbarButtonId.Deselect, label: 'Deselect all', group: ToolbarGroupId.Selection },
     ],
     layout: [
-      // Row 0: the plain "Select all" sits first, beside Table of Contents.
-      [ToolbarButtonId.SelectAll, ToolbarButtonId.TableOfContents],
+      [ToolbarButtonId.SelectAll],
       // Row 1: the new text-only select, beside Deselect.
       [ToolbarButtonId.SelectAllText, ToolbarButtonId.Deselect],
+    ],
+  },
+  {
+    id: ToolbarGroupId.TableOfContents,
+    label: 'Table of contents',
+    caption: 'Table of contents',
+    buttons: [
+      {
+        id: ToolbarButtonId.InsertTableOfContents,
+        label: 'Insert table of contents',
+        group: ToolbarGroupId.TableOfContents,
+      },
+      { id: ToolbarButtonId.TableOfContents, label: 'Navigate headings', group: ToolbarGroupId.TableOfContents },
+      {
+        id: ToolbarButtonId.FormatTableOfContents,
+        label: 'Format table of contents',
+        group: ToolbarGroupId.TableOfContents,
+      },
     ],
   },
   {
@@ -536,7 +555,7 @@ export const DEFAULT_SUPER_GROUPS: ToolbarSuperGroupDescriptor[] = [
       ToolbarGroupId.Diagram,
     ],
   },
-  { id: ToolbarSuperGroupId.Insert, label: 'Insert', groups: [ToolbarGroupId.Insert] },
+  { id: ToolbarSuperGroupId.Insert, label: 'Insert', groups: [ToolbarGroupId.TableOfContents, ToolbarGroupId.Insert] },
   { id: ToolbarSuperGroupId.Checklist, label: 'Checklist', groups: [ToolbarGroupId.Checklist] },
   { id: ToolbarSuperGroupId.Layout, label: 'Layout', groups: [ToolbarGroupId.Page] },
   { id: ToolbarSuperGroupId.AI, label: 'AI', groups: [ToolbarGroupId.AI] },

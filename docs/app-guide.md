@@ -445,6 +445,12 @@ Super is the most capable editor. Content is organized into blocks — paragraph
 Related: [editors/mermaid](#editors-mermaid), [editors/checklists](#editors-checklists), [editors/note-types](#editors-note-types)
 
 <a id="editors-markdown"></a>
+#### Table of contents
+
+In the Super editor, open **Insert → Table of contents**. **Insert** adds a live index to the note; **Navigate headings** opens a temporary outline without adding a block. Both follow heading changes automatically.
+
+Use **Format** to choose the inserted index's heading depth (levels 1–6), number its entries, or hide its title. When the note has several indexes, choose which one to format in the dropdown. These settings are saved with each index and shared with the note. Existing indexes retain their original appearance until you change them.
+
 ### Markdown editors
 
 Write in Markdown with a side-by-side or toggled preview.

@@ -1,5 +1,7 @@
 import ToolbarButton from './ToolbarButton'
+import TableOfContentsFormatButton from './TableOfContentsFormatButton'
 import { ReviewTools } from './ReviewTools'
+import { TableOfContentsBlock } from '../Blocks/TableOfContents'
 import Icon from '@/Components/Icon/Icon'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
 import useModal from '../../Lexical/Hooks/useModal'
@@ -2134,8 +2136,18 @@ const ToolbarPlugin = ({
         active={isTOCOpen}
         onSelect={() => setIsTOCOpen(!isTOCOpen)}
         ref={tocAnchorRef}
-      />
+      >
+        <Icon type="toc" size="small" />
+        <span className="ml-1.5 text-sm">Navigate headings</span>
+      </ToolbarButton>
     ) : null,
+    [ToolbarButtonId.InsertTableOfContents]: canShowAllItems ? (
+      <ToolbarButton name="Insert table of contents" onSelect={() => TableOfContentsBlock.onSelect(editor)}>
+        <Icon type="toc" size="small" />
+        <span className="ml-1.5 text-sm">Insert</span>
+      </ToolbarButton>
+    ) : null,
+    [ToolbarButtonId.FormatTableOfContents]: canShowAllItems ? <TableOfContentsFormatButton /> : null,
     [ToolbarButtonId.Search]: canShowAllItems ? (
       <ToolbarButton name={t('search')} onSelect={() => editor.dispatchCommand(OPEN_SUPER_SEARCH_COMMAND, undefined)}>
         <Icon type="search" size="custom" className="super-toolbar-icon" />
@@ -4246,9 +4258,6 @@ const ToolbarPlugin = ({
               <Menu a11yLabel={t('tableOfContentsLower')} className="!px-0">
                 {tableOfContents.map(([key, text, tag]) => {
                   const level = parseInt(tag.slice(1)) || 1
-                  if (level > 3) {
-                    return null
-                  }
                   return (
                     <MenuItem
                       key={key}

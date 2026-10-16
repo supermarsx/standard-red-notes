@@ -27,6 +27,29 @@ import { TableOfContentsPlugin, TableOfContentsEntry } from '@lexical/react/Lexi
 /** Maximum heading level (h1..h6) shown in the index. */
 const MAX_TOC_LEVEL = 6
 
+export type TableOfContentsFormat = {
+  maxLevel: number
+  numbered: boolean
+  showTitle: boolean
+}
+
+export const DEFAULT_TABLE_OF_CONTENTS_FORMAT: TableOfContentsFormat = {
+  maxLevel: 6,
+  numbered: false,
+  showTitle: true,
+}
+
+export function normalizeTableOfContentsFormat(value?: Partial<TableOfContentsFormat>): TableOfContentsFormat {
+  return {
+    maxLevel:
+      typeof value?.maxLevel === 'number' && Number.isFinite(value.maxLevel)
+        ? Math.max(1, Math.min(MAX_TOC_LEVEL, Math.trunc(value.maxLevel)))
+        : MAX_TOC_LEVEL,
+    numbered: value?.numbered === true,
+    showTitle: value?.showTitle !== false,
+  }
+}
+
 function levelOf(tag: string): number {
   const level = parseInt(tag.slice(1), 10)
   return Number.isFinite(level) && level >= 1 ? level : 1
@@ -54,11 +77,13 @@ function scrollToHeading(editor: LexicalEditor, key: NodeKey): void {
 function TableOfContentsList({
   entries,
   editor,
+  format,
 }: {
   entries: Array<TableOfContentsEntry>
   editor: LexicalEditor
+  format: TableOfContentsFormat
 }): React.JSX.Element {
-  const headings = entries.filter(([, , tag]) => levelOf(tag) <= MAX_TOC_LEVEL)
+  const headings = entries.filter(([, , tag]) => levelOf(tag) <= format.maxLevel)
 
   if (headings.length === 0) {
     return (
@@ -74,7 +99,7 @@ function TableOfContentsList({
 
   return (
     <ul className="m-0 list-none p-0">
-      {headings.map(([key, text, tag]) => {
+      {headings.map(([key, text, tag], index) => {
         const indent = levelOf(tag) - minLevel
         return (
           <li key={key} style={{ paddingLeft: `${indent * 1}rem` }}>
@@ -86,6 +111,7 @@ function TableOfContentsList({
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => scrollToHeading(editor, key)}
             >
+              {format.numbered ? `${index + 1}. ` : ''}
               {text || 'Untitled heading'}
             </button>
           </li>
@@ -95,7 +121,7 @@ function TableOfContentsList({
   )
 }
 
-function TableOfContentsComponent(): React.JSX.Element {
+function TableOfContentsComponent({ format }: { format: TableOfContentsFormat }): React.JSX.Element {
   const [editor] = useLexicalComposerContext()
   return (
     <div
@@ -103,39 +129,51 @@ function TableOfContentsComponent(): React.JSX.Element {
       data-table-of-contents-block="true"
       data-super-widget-layout="compact"
     >
-      <div className="border-border text-passive-1 border-b px-3 py-1 text-xs font-semibold uppercase">
-        Table of Contents
-      </div>
+      {format.showTitle && (
+        <div className="border-border text-passive-1 border-b px-3 py-1 text-xs font-semibold uppercase">
+          Table of Contents
+        </div>
+      )}
       <div className="py-1">
         <TableOfContentsPlugin>
-          {(entries) => <TableOfContentsList entries={entries} editor={editor} />}
+          {(entries) => <TableOfContentsList entries={entries} editor={editor} format={format} />}
         </TableOfContentsPlugin>
       </div>
     </div>
   )
 }
 
-export type SerializedTableOfContentsNode = SerializedLexicalNode
+export type SerializedTableOfContentsNode = SerializedLexicalNode & { format?: TableOfContentsFormat }
 
 export class TableOfContentsNode extends DecoratorNode<React.JSX.Element> {
+  __format: TableOfContentsFormat
   static getType(): string {
     return 'table-of-contents'
   }
 
   static clone(node: TableOfContentsNode): TableOfContentsNode {
-    return new TableOfContentsNode(node.__key)
+    return new TableOfContentsNode(node.__key, node.__format)
   }
 
-  constructor(key?: NodeKey) {
+  constructor(key?: NodeKey, format?: Partial<TableOfContentsFormat>) {
     super(key)
+    this.__format = normalizeTableOfContentsFormat(format)
   }
 
   static importJSON(_serializedNode: SerializedTableOfContentsNode): TableOfContentsNode {
-    return $createTableOfContentsNode()
+    return new TableOfContentsNode(undefined, _serializedNode.format)
   }
 
   exportJSON(): SerializedTableOfContentsNode {
-    return { type: 'table-of-contents', version: 1 }
+    return { type: 'table-of-contents', version: 1, format: this.getFormat() }
+  }
+
+  getFormat(): TableOfContentsFormat {
+    return this.getLatest().__format
+  }
+
+  setFormat(format: Partial<TableOfContentsFormat>): void {
+    this.getWritable().__format = normalizeTableOfContentsFormat({ ...this.getFormat(), ...format })
   }
 
   createDOM(): HTMLElement {
@@ -157,7 +195,7 @@ export class TableOfContentsNode extends DecoratorNode<React.JSX.Element> {
   }
 
   decorate(_editor: LexicalEditor, _config: EditorConfig): React.JSX.Element {
-    return <TableOfContentsComponent />
+    return <TableOfContentsComponent format={this.__format} />
   }
 }
 
