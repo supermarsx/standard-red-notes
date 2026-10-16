@@ -53,6 +53,7 @@ import { AssistantChangeDecorationsPlugin } from './Plugins/AssistantChangeDecor
 import { EditorResumePlugin } from './Plugins/EditorResume/EditorResumePlugin'
 import { editorResumeStorageKey } from './Plugins/EditorResume/EditorResumeStorage'
 import { CommentsSidebar } from './CommentsSidebar'
+import { EditorNavigationAids } from './Plugins/EditorNavigationAids/EditorNavigationAids'
 
 type BlocksEditorProps = {
   /** Exact note lifetime owned by this composer; required for aggregate todo mutations. */
@@ -348,7 +349,7 @@ export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
       */}
       <div className="relative flex min-h-0 flex-grow flex-row overflow-hidden">
         <NavigationSidebar />
-        <div className="relative min-h-0 min-w-0 flex-grow">
+        <EditorNavigationAids noteUuid={noteUuid}>
           <RichTextPlugin
             contentEditable={
               <div id="blocks-editor" className="editor-scroller h-full min-h-0">
@@ -374,7 +375,7 @@ export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
             }
             ErrorBoundary={LexicalErrorBoundary}
           />
-        </div>
+        </EditorNavigationAids>
         {commentNote && <CommentsSidebar note={commentNote} />}
       </div>
       {isMobile && <ToolbarPlugin noteUuid={noteUuid} note={commentNote} flushChanges={flushWithBypass} />}

@@ -152,6 +152,9 @@ export type NavigationSettings = {
 }
 
 export type NoteLayout = {
+  /** Screen-only visual line gutter and document minimap; exports ignore both. */
+  lineNumbers: boolean
+  minimap: boolean
   /** Id from PAGE_SIZE_OPTIONS. */
   pageSizeId: string
   /** Portrait page dimensions in millimetres, used for the custom size. */
@@ -183,6 +186,8 @@ export type NoteLayout = {
 }
 
 export const DEFAULT_NOTE_LAYOUT: NoteLayout = {
+  lineNumbers: false,
+  minimap: false,
   pageSizeId: DEFAULT_PAGE_SIZE_ID,
   customPageWidthMm: 210,
   customPageHeightMm: 297,
@@ -322,6 +327,8 @@ export function normalizeNoteLayout(raw: unknown): NoteLayout {
   const marginId = isKnownMargin ? (candidate.marginId as string) : DEFAULT_NOTE_LAYOUT.marginId
 
   return {
+    lineNumbers: candidate.lineNumbers === true,
+    minimap: candidate.minimap === true,
     pageSizeId,
     customPageWidthMm: normalizePageDimension(candidate.customPageWidthMm, DEFAULT_NOTE_LAYOUT.customPageWidthMm),
     customPageHeightMm: normalizePageDimension(candidate.customPageHeightMm, DEFAULT_NOTE_LAYOUT.customPageHeightMm),

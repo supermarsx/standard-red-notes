@@ -41,6 +41,8 @@ it('applies all configured defaults only to notes without explicit layout overri
     },
     footer: { enabled: true, text: 'Footer', align: 'right', fontId: 'mono', fontSizePt: 10, color: '#654321' },
     navigation: { visible: true, showBookmarks: false },
+    lineNumbers: true,
+    minimap: true,
   })
   expect(saveLayoutDefaults(defaults)).toBe(true)
   expect(loadLayoutDefaults()).toEqual(defaults)
@@ -89,4 +91,14 @@ it('prints explicit custom dimensions with orientation applied once, without inv
     '431.8mm 279.4mm',
   )
   expect(resolvePageCssSize(DEFAULT_NOTE_LAYOUT)).toBe('A4 portrait')
+})
+
+it('keeps screen navigation off by default, strictly validates persisted toggles, and excludes them from print', () => {
+  expect(normalizeNoteLayout(undefined)).toMatchObject({ lineNumbers: false, minimap: false })
+  expect(normalizeNoteLayout({ lineNumbers: 'true', minimap: 1 })).toMatchObject({ lineNumbers: false, minimap: false })
+  saveNoteLayout('screen-tools', normalizeNoteLayout({ lineNumbers: true, minimap: true }))
+  expect(loadNoteLayout('screen-tools')).toMatchObject({ lineNumbers: true, minimap: true })
+  const on = applyPrintLayout('screen-tools').textContent
+  const off = applyPrintLayout('no-tools').textContent
+  expect(on).toEqual(off)
 })

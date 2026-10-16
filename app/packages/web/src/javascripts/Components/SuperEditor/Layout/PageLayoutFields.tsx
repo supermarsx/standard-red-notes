@@ -356,6 +356,12 @@ export function PageLayoutFields({
       <fieldset className="border-border flex flex-col gap-2 rounded border p-3">
         <legend className="px-1 text-sm font-semibold">On-screen navigation</legend>
         <Toggle
+          label="Show line numbers"
+          value={layout.lineNumbers}
+          onChange={(lineNumbers) => onChange({ lineNumbers })}
+        />
+        <Toggle label="Show minimap" value={layout.minimap} onChange={(minimap) => onChange({ minimap })} />
+        <Toggle
           label="Show document outline"
           value={layout.navigation.visible}
           onChange={(visible) => onChange({ navigation: { ...layout.navigation, visible } })}
