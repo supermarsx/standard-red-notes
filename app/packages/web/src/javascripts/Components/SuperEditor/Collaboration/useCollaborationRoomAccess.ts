@@ -50,6 +50,8 @@ export function describeRoomDenial(reason: RoomDeniedReason): string {
       return 'The collaboration gateway relay is unavailable right now. Live collaboration will retry.'
     case 'capability-invalid':
       return 'The collaboration gateway rejected the edit authorization for this note. Edit permission is required.'
+    case 'capability-expired':
+      return 'The collaboration authorization expired. Checking current access and renewing the encrypted room.'
     case 'room-full':
       return 'This note already has the maximum number of live collaborators. Live collaboration will retry.'
     case 'reservation-expired':

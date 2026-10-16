@@ -553,7 +553,7 @@ describe('RoomRegistry + handleRelayFrame', () => {
     rooms.evictExpired()
 
     expect(rooms.isMember('n1', conn)).toBe(false)
-    expect(conn.sent).toContain(denied('n1', undefined, 'capability-invalid'))
+    expect(conn.sent).toContain(denied('n1', undefined, 'capability-expired'))
   })
 
   it.each([
@@ -576,7 +576,7 @@ describe('RoomRegistry + handleRelayFrame', () => {
     expect(rooms.isMember('n1', conn)).toBe(true)
     now = 2_001
     expect(rooms.isMember('n1', conn)).toBe(false)
-    expect(conn.sent).toContain(denied('n1', 'short-lease', 'capability-invalid'))
+    expect(conn.sent).toContain(denied('n1', 'short-lease', 'capability-expired'))
   })
 
   it('leaveAll removes a connection from every room', async () => {
@@ -2038,7 +2038,7 @@ describe('handleRelayFrame yjs/awareness send-path membership gate', () => {
     const current = fakeConn('current')
     const authorize = (userUuid: string, _room: string, capability?: string) => ({
       authorized: true as const,
-      expiresAt: userUuid === 'expiring' ? 2_000 : 5_000,
+      expiresAt: userUuid === 'expiring' && capability !== 'renewed-request' ? 2_000 : 5_000,
       serverUpdatedAtTimestamp: 1,
       collaborationProtocolVersion: COLLABORATION_PROTOCOL_VERSION,
       roomEpoch: TEST_ROOM_EPOCH,
@@ -2084,7 +2084,7 @@ describe('handleRelayFrame yjs/awareness send-path membership gate', () => {
       payload: 'after-expiry',
     })
     expect(receiveReach).toBe(0)
-    expect(expiring.sent).toContain(denied('n1', 'expiring-request', 'capability-invalid'))
+    expect(expiring.sent).toContain(denied('n1', 'expiring-request', 'capability-expired'))
     expect(rooms.isMember('n1', expiring)).toBe(false)
 
     const sendReach = await handleRelayFrame(rooms, expiring, {
@@ -2094,6 +2094,26 @@ describe('handleRelayFrame yjs/awareness send-path membership gate', () => {
     })
     expect(sendReach).toBe(0)
     expect(current.sent).not.toContain(JSON.stringify({ t: 'yjs', room: 'n1', payload: 'expired-injection' }))
+    expect(expiring.sent).not.toContain(denied('n1', 'expiring-request', 'capability-invalid'))
+
+    await handleRelayFrame(
+      rooms,
+      expiring,
+      {
+        t: 'room-join',
+        room: 'n1',
+        requestId: 'renewed-request',
+        cap: 'renewed-request',
+        role: 'editor',
+        protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+        expectedRoomEpoch: TEST_ROOM_EPOCH,
+      },
+      authorize,
+    )
+    expect(rooms.requestLease('n1', expiring, 'expiring-request')).toBeUndefined()
+    expect(rooms.requestLease('n1', expiring, 'renewed-request')?.role).toBe('editor')
+    expect(await handleRelayFrame(rooms, expiring, { t: 'yjs', room: 'n1', payload: 'renewed-edit' })).toBe(1)
+    expect(current.sent).toContain(JSON.stringify({ t: 'yjs', room: 'n1', payload: 'renewed-edit' }))
   })
 
   it("drops a non-member connection's awareness frame (fake presence)", async () => {

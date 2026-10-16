@@ -110,6 +110,7 @@ export type RoomDeniedReason =
   | 'rate-limited'
   | 'relay-unhealthy'
   | 'capability-invalid'
+  | 'capability-expired'
   | 'room-full'
   | 'reservation-expired'
   | 'room-limit'
@@ -1211,12 +1212,12 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
       if (lease.expiresAt <= now) {
         this.removeYjsResponseGrants(room, conn, requestId)
         membership.requestIds.delete(requestId)
-        this.sendDenied(conn, room, requestId, 'capability-invalid')
+        this.sendDenied(conn, room, requestId, 'capability-expired')
       }
     }
     if (membership.legacyLease !== undefined && membership.legacyLease.expiresAt <= now) {
       membership.legacyLease = undefined
-      this.sendDenied(conn, room, undefined, 'capability-invalid')
+      this.sendDenied(conn, room, undefined, 'capability-expired')
     }
     if (membership.requestIds.size > 0 || membership.legacyLease !== undefined) {
       return true

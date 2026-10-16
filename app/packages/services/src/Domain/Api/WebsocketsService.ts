@@ -21,6 +21,7 @@ export type RoomDeniedReason =
   | 'rate-limited'
   | 'relay-unhealthy'
   | 'capability-invalid'
+  | 'capability-expired'
   | 'room-full'
   | 'reservation-expired'
   | 'room-limit'

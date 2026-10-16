@@ -1711,6 +1711,112 @@ describe('EncryptedYjsProvider convergence', () => {
     }
   })
 
+  it.each(['granted', 'revoked'] as const)(
+    'renews an expired production lease through authoritative access, retaining the document when access is %s',
+    async (access) => {
+      const error = jest.spyOn(console, 'error').mockImplementation(() => undefined)
+      let inbound: ((frame: CollabFrame) => void) | undefined
+      const sent: CollabFrame[] = []
+      const initialLease = {
+        requestId: 'expiring-active-lease',
+        shouldBootstrap: true,
+        protocolVersion: 3 as const,
+        maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+        roomEpoch: TEST_ROOM_EPOCH,
+        release: jest.fn(),
+      }
+      const freshLease = { ...initialLease, requestId: 'fresh-authoritative-lease', release: jest.fn() }
+      let finishAuthorization!: (
+        result: typeof freshLease | { reason: string; denial: { reason: 'security-revoked' } },
+      ) => void
+      const reactivate = jest.fn(
+        () =>
+          new Promise<typeof freshLease | { reason: string; denial: { reason: 'security-revoked' } }>((resolve) => {
+            finishAuthorization = resolve
+          }),
+      )
+      const authorize = jest.fn()
+      const onFatal = jest.fn()
+      const onBootstrapRetry = jest.fn()
+      const doc = new Y.Doc()
+      doc.getText('draft').insert(0, 'retained draft')
+      const provider = new EncryptedYjsProvider(
+        doc,
+        'expiry-room',
+        {
+          isConnected: () => true,
+          authorize,
+          subscribe: (listener) => {
+            inbound = listener
+            return () => {
+              inbound = undefined
+            }
+          },
+          send: (frame) => {
+            sent.push(frame)
+            if (frame.t === 'yjs' && frame.transferId)
+              inbound?.({ t: 'yjs-accepted', room: frame.room, transferId: frame.transferId, protocolVersion: 3 })
+          },
+        },
+        createTestTransportCipher(),
+        undefined,
+        initialLease.requestId,
+        {
+          activeLease: initialLease,
+          shouldBootstrap: true,
+          validateAttachment: () => true,
+          reactivate,
+          onFatal,
+          onBootstrapRetry,
+        },
+      )
+      try {
+        provider.connect()
+        await settle(provider)
+        expect(provider.isRoomJoined()).toBe(true)
+        sent.length = 0
+        inbound?.({
+          t: 'room-denied',
+          room: 'expiry-room',
+          requestId: initialLease.requestId,
+          reason: 'capability-expired',
+        })
+        expect(reactivate).toHaveBeenCalledTimes(1)
+        expect(authorize).not.toHaveBeenCalled()
+        expect(initialLease.release).toHaveBeenCalledTimes(1)
+        expect(provider.isRoomJoined()).toBe(false)
+        doc.getText('draft').insert(doc.getText('draft').length, ' + during renewal')
+        await provider.flush()
+        expect(sent.some((frame) => frame.t === 'yjs')).toBe(false)
+        expect(onFatal).not.toHaveBeenCalled()
+        finishAuthorization(
+          access === 'granted' ? freshLease : { reason: 'Denied', denial: { reason: 'security-revoked' } },
+        )
+        await settle(provider)
+        expect(provider.doc).toBe(doc)
+        expect(doc.getText('draft').toString()).toBe('retained draft + during renewal')
+        expect(onBootstrapRetry).not.toHaveBeenCalled()
+        if (access === 'granted') {
+          expect(provider.isRoomJoined()).toBe(true)
+          expect(provider.getActiveEditorLeaseIdentity()?.leaseId).toBe(freshLease.requestId)
+          expect(onFatal).not.toHaveBeenCalled()
+          const state = sent.find((frame): frame is Extract<CollabFrame, { t: 'yjs' }> => frame.t === 'yjs')!
+          const recovered = new Y.Doc()
+          Y.applyUpdate(recovered, new Uint8Array(Buffer.from(state.payload, 'base64')))
+          expect(recovered.getText('draft').toString()).toBe('retained draft + during renewal')
+          recovered.destroy()
+        } else {
+          expect(provider.isRoomJoined()).toBe(false)
+          expect(onFatal).toHaveBeenCalledWith(expect.stringContaining('revoked or its encryption key changed'))
+          expect(sent.some((frame) => frame.t === 'yjs')).toBe(false)
+        }
+      } finally {
+        provider.destroy()
+        error.mockRestore()
+      }
+    },
+  )
+
   it.each(['policy', 'security-revoked', 'capability-invalid', 'typed-api-denial'] as const)(
     'does not rejoin a typed %s denial on cooldown, visibility or socket readiness',
     async (reason) => {
@@ -2526,59 +2632,62 @@ describe('EncryptedYjsProvider convergence', () => {
     }
   })
 
-  it('reauthorizes with the same logical lease after an accepted membership expires', async () => {
-    const sent: CollabFrame[] = []
-    let inbound: ((frame: CollabFrame) => void) | undefined
-    const authorize = jest.fn().mockResolvedValue('renewed-capability')
-    const channel: CollabChannel = {
-      isConnected: () => true,
-      authorize,
-      subscribe: (handler) => {
-        inbound = handler
-        return () => undefined
-      },
-      send: (frame) => sent.push(frame),
-    }
-    const doc = new Y.Doc()
-    const provider = new EncryptedYjsProvider(
-      doc,
-      'expiring-room',
-      channel,
-      createTestTransportCipher(),
-      'initial-capability',
-    )
-    provider.connect()
-    const firstJoin = sent[0] as Extract<CollabFrame, { t: 'room-join' }>
-    inbound?.({ t: 'room-joined', room: 'expiring-room', requestId: firstJoin.requestId })
-    await provider.flush()
+  it.each(['reservation-expired', 'capability-expired'] as const)(
+    'reauthorizes after an accepted membership expires with %s',
+    async (reason) => {
+      const sent: CollabFrame[] = []
+      let inbound: ((frame: CollabFrame) => void) | undefined
+      const authorize = jest.fn().mockResolvedValue('renewed-capability')
+      const channel: CollabChannel = {
+        isConnected: () => true,
+        authorize,
+        subscribe: (handler) => {
+          inbound = handler
+          return () => undefined
+        },
+        send: (frame) => sent.push(frame),
+      }
+      const doc = new Y.Doc()
+      const provider = new EncryptedYjsProvider(
+        doc,
+        'expiring-room',
+        channel,
+        createTestTransportCipher(),
+        'initial-capability',
+      )
+      provider.connect()
+      const firstJoin = sent[0] as Extract<CollabFrame, { t: 'room-join' }>
+      inbound?.({ t: 'room-joined', room: 'expiring-room', requestId: firstJoin.requestId })
+      await provider.flush()
 
-    inbound?.({
-      t: 'room-denied',
-      room: 'expiring-room',
-      requestId: firstJoin.requestId,
-      reason: 'reservation-expired',
-    })
-    await Promise.resolve()
-    await Promise.resolve()
-    const joins = sent.filter((frame): frame is Extract<CollabFrame, { t: 'room-join' }> => frame.t === 'room-join')
+      inbound?.({
+        t: 'room-denied',
+        room: 'expiring-room',
+        requestId: firstJoin.requestId,
+        reason,
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+      const joins = sent.filter((frame): frame is Extract<CollabFrame, { t: 'room-join' }> => frame.t === 'room-join')
 
-    expect(authorize).toHaveBeenCalledWith('expiring-room')
-    expect(joins).toHaveLength(2)
-    expect(joins[1]).toMatchObject({
-      cap: 'renewed-capability',
-      requestId: firstJoin.requestId,
-    })
-    expect(provider.isRoomJoined()).toBe(false)
+      expect(authorize).toHaveBeenCalledWith('expiring-room')
+      expect(joins).toHaveLength(2)
+      expect(joins[1]).toMatchObject({
+        cap: 'renewed-capability',
+        requestId: firstJoin.requestId,
+      })
+      expect(provider.isRoomJoined()).toBe(false)
 
-    doc.getText('content').insert(0, 'edited during renewal')
-    await provider.flush()
-    expect(sent.filter((frame) => frame.t === 'yjs')).toHaveLength(1)
-    inbound?.({ t: 'room-joined', room: 'expiring-room', requestId: firstJoin.requestId })
-    await provider.flush()
-    expect(provider.isRoomJoined()).toBe(true)
-    expect(sent.filter((frame) => frame.t === 'yjs')).toHaveLength(2)
-    provider.destroy()
-  })
+      doc.getText('content').insert(0, 'edited during renewal')
+      await provider.flush()
+      expect(sent.filter((frame) => frame.t === 'yjs')).toHaveLength(1)
+      inbound?.({ t: 'room-joined', room: 'expiring-room', requestId: firstJoin.requestId })
+      await provider.flush()
+      expect(provider.isRoomJoined()).toBe(true)
+      expect(sent.filter((frame) => frame.t === 'yjs')).toHaveLength(2)
+      provider.destroy()
+    },
+  )
 
   it('fails closed without sticking or rejecting when a room-join send throws', async () => {
     const authorize = jest.fn().mockResolvedValue('renewed-capability')

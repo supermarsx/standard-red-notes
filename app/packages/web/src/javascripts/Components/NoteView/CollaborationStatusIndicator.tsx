@@ -356,7 +356,7 @@ const CollaborationStatusIndicator: FunctionComponent<Props> = ({ note }) => {
       animateIcon: false,
       summary: `Encrypted collaboration unavailable. ${state.status.reason}`,
       heading: 'Encrypted collaboration unavailable',
-      detail: `${state.status.reason} Check your access before retrying.`,
+      detail: state.status.reason,
     }
   }
   const attendance = describeAttendance(collaborators, state?.status.kind === 'active')

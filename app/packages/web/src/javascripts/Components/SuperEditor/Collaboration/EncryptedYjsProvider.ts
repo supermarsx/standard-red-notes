@@ -694,9 +694,7 @@ export class EncryptedYjsProvider implements Provider {
       if ('reason' in lease) {
         this.recordLeaseFailure(lease.reason)
         if (lease.recovery === 'terminal' || this.isTerminalDenial(lease.denial?.reason)) {
-          this.fatal(
-            'Live collaboration stopped because the server denied edit permission. Check access before retrying.',
-          )
+          this.fatal(this.terminalDenialMessage(lease.denial?.reason))
         } else if (lease.requiresRemount) {
           this.options.onBootstrapRetry?.()
         } else if (this.connected && this.channel.isConnected()) {
@@ -1982,9 +1980,7 @@ export class EncryptedYjsProvider implements Provider {
           this.clearRemoteAwareness('room-denied')
           this.emit('sync', false as never)
           if (this.isTerminalDenial(deniedReason)) {
-            this.fatal(
-              'Live collaboration stopped because the server denied edit permission. Check access before retrying.',
-            )
+            this.fatal(this.terminalDenialMessage(deniedReason))
             break
           }
           if (shouldReauthorize && this.connected) {
@@ -3121,6 +3117,16 @@ export class EncryptedYjsProvider implements Provider {
 
   private isTerminalDenial(reason: RoomDenial['reason'] | undefined): boolean {
     return reason === 'policy' || reason === 'security-revoked' || reason === 'capability-invalid'
+  }
+
+  private terminalDenialMessage(reason: RoomDenial['reason'] | undefined): string {
+    if (reason === 'security-revoked') {
+      return 'Live collaboration stopped because access to this note was revoked or its encryption key changed. Check note access before reconnecting.'
+    }
+    if (reason === 'capability-invalid') {
+      return 'The server rejected this note’s collaboration authorization. Check note access before reconnecting.'
+    }
+    return 'The server did not authorize live editing for this note. Check note access before reconnecting.'
   }
 
   private scheduleJoinRetry(): void {

@@ -202,7 +202,7 @@ describe('default (production) room authorization is fail-closed', () => {
 
     expect(reached).toBe(0)
     expect(rooms.isMember('note-1', conn)).toBe(false)
-    expect(conn.sent).toContain(denied('note-1', 'join-request', 'capability-invalid'))
+    expect(conn.sent).toContain(denied('note-1', 'join-request', 'capability-expired'))
   })
 
   it('DENIES an otherwise-valid capability when the frame expects another room epoch', async () => {

@@ -407,7 +407,8 @@ describe('the session states, in the chip and at the top of the popup', () => {
     await click(chip())
 
     const session = popup()?.firstElementChild
-    expect(session?.textContent).toContain('Check your access before retrying')
+    expect(session?.textContent).toContain('relay is unavailable right now')
+    expect(session?.textContent).not.toContain('Check your access')
     expect(session?.textContent).not.toContain('return to this tab or edit the note')
   })
 
@@ -1231,13 +1232,13 @@ describe('bounded presentation grace for established rooms', () => {
         kind: 'unavailable',
         readonly: true,
         recovery: 'terminal',
-        reason: 'Edit permission was revoked.',
+        reason: 'Edit permission was revoked. Check note access before reconnecting.',
       }),
     )
     expect(label()).toContain('permission was revoked')
     expect(dot()?.dataset.collaborationStatusDot).toBe('warning')
     await click(chip())
-    expect(popup()?.textContent).toContain('Check your access')
+    expect(popup()?.textContent?.match(/Check note access/g)).toHaveLength(1)
     expect(popup()?.textContent).not.toContain('saved as usual')
   })
 
