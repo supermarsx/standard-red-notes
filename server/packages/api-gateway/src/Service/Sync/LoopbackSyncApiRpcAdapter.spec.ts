@@ -10,6 +10,34 @@ const identity = {
 }
 
 describe('LoopbackSyncApiRpcAdapter', () => {
+  it.each(['acquire', 'renew', 'release'])(
+    'permits only the exact keyed chat run-lease %s route',
+    async (operation) => {
+      const fetch = jest.fn(async () => Response.json({ accepted: true }))
+      const adapter = new LoopbackSyncApiRpcAdapter({
+        origin: 'http://127.0.0.1:3000',
+        operations: ['API_RPC'],
+        fetch: fetch as typeof globalThis.fetch,
+      })
+      const input = {
+        identity,
+        method: 'POST' as const,
+        path: `/v1/assistant/chats/run-lease/${operation}`,
+        headers: {},
+        body: { chatId: 'legacy', requestId: 'request' },
+        idempotencyKey: `lease-${operation}`,
+        stream: false,
+      }
+      expect((await adapter.execute(input, new AbortController().signal)).status).toBe(200)
+      await expect(
+        adapter.execute({ ...input, path: `${input.path}/other` }, new AbortController().signal),
+      ).rejects.toThrow()
+      await expect(
+        adapter.execute({ ...input, idempotencyKey: undefined }, new AbortController().signal),
+      ).rejects.toThrow()
+      expect(fetch).toHaveBeenCalledTimes(1)
+    },
+  )
   it('permits only an idempotency-keyed authenticated POST on the activity route while keeping other session operations blocked', async () => {
     const fetch = jest.fn(async () => Response.json({ data: { active: true } }))
     const adapter = new LoopbackSyncApiRpcAdapter({

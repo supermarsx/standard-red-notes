@@ -2271,6 +2271,32 @@ describe('SyncCommandHandler', () => {
     handler.disconnect()
   })
 
+  it.each(['acquire', 'renew', 'release'])(
+    'allows only exact keyed chat run-lease %s RPC requests',
+    async (operation) => {
+      const apiRpc: SyncApiRpcAdapter = {
+        idempotencyScope: 'shared-durable',
+        ready: () => true,
+        operations: () => ['API_RPC'],
+        execute: vi.fn(async () => ({ status: 200, body: { accepted: true } })),
+      }
+      const { handler, socket } = await authenticatedHandler({ apiRpc })
+      const path = `/v1/assistant/chats/run-lease/${operation}`
+      enqueue(
+        handler,
+        rpcFrame(1, { method: 'POST', path, body: { chatId: 'legacy' }, idempotencyKey: `lease-${operation}` }),
+      )
+      await vi.waitFor(() => expect(socket.frames.at(-1)?.type).toBe('RPC_END'))
+      expect(apiRpc.execute).toHaveBeenCalledTimes(1)
+      enqueue(handler, rpcFrame(2, { method: 'POST', path: `${path}/other`, idempotencyKey: 'neighbor' }))
+      await vi.waitFor(() =>
+        expect(socket.frames.at(-1)?.payload).toEqual({ code: 'OPERATION_UNAVAILABLE', retryable: true }),
+      )
+      expect(apiRpc.execute).toHaveBeenCalledTimes(1)
+      handler.disconnect()
+    },
+  )
+
   it('fails closed for unavailable adapters, file reads, unsupported verbs, and unkeyed reviewed writes', async () => {
     const unavailableAdapters: Array<SyncApiRpcAdapter | undefined> = [
       undefined,

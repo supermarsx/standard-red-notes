@@ -3,6 +3,14 @@ import { createHash } from 'node:crypto'
 import { inject, optional } from 'inversify'
 import { BaseHttpController, controller, httpGet, httpPost } from 'inversify-express-utils'
 import * as IORedis from 'ioredis'
+import {
+  AssistantChatRunProof,
+  CHAT_RUN_LEASE_RENEW_MS,
+  CHAT_RUN_STREAM_MAX_MS,
+  isAssistantChatRunIdentity,
+  isAssistantChatRunProof,
+  RedisAssistantChatRunLease,
+} from '../../Service/Assistant/RedisAssistantChatRunLease'
 import { RoleName, SettingName } from '@standardnotes/domain-core'
 import { Role } from '@standardnotes/security'
 
@@ -57,7 +65,30 @@ import {
   RedisAssistantRequestQuota,
 } from '../../Service/Assistant/AssistantRequestQuota'
 
+/** A misbehaving upstream iterator must not retain a synced chat past cancellation. */
+async function nextProviderEventWithAbort(
+  iterator: AsyncIterator<ProviderEvent>,
+  signal: AbortSignal,
+): Promise<IteratorResult<ProviderEvent>> {
+  if (signal.aborted) {
+    throw new Error('Assistant chat stream cancelled.')
+  }
+  let onAbort: (() => void) | undefined
+  const cancelled = new Promise<never>((_resolve, reject) => {
+    onAbort = () => reject(new Error('Assistant chat stream cancelled.'))
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+  try {
+    return await Promise.race([iterator.next(), cancelled])
+  } finally {
+    if (onAbort) {
+      signal.removeEventListener('abort', onAbort)
+    }
+  }
+}
+
 interface StreamRequestBody {
+  chatRunLease?: unknown
   provider?: string
   model?: string
   /** Standard Red Notes: select a named profile by id (overrides `provider`). */
@@ -481,6 +512,70 @@ export class AssistantController extends BaseHttpController {
         apiKey: profile.apiKey,
       }),
     )
+  }
+
+  private async chatRunLeaseOperation(
+    action: 'acquire' | 'renew' | 'release',
+    request: Request,
+    response: Response,
+  ): Promise<void> {
+    response.setHeader('Cache-Control', 'no-store')
+    const userUuid = (response.locals.user as { uuid?: unknown } | undefined)?.uuid
+    if (typeof userUuid !== 'string' || !userUuid) {
+      response.status(401).json({ error: { tag: 'unauthorized', message: 'Sign in to coordinate this chat.' } })
+      return
+    }
+    const body: unknown = request.body
+    if (!(action === 'acquire' ? isAssistantChatRunIdentity(body) : isAssistantChatRunProof(body))) {
+      response
+        .status(400)
+        .json({ error: { tag: 'invalid-chat-run-lease', message: 'Invalid assistant chat run lease.' } })
+      return
+    }
+    try {
+      if (!this.redis) {
+        throw new Error('unavailable')
+      }
+      const store = new RedisAssistantChatRunLease(this.redis)
+      const result =
+        action === 'acquire'
+          ? await store.acquire(userUuid, body as AssistantChatRunProof)
+          : action === 'renew'
+            ? await store.renew(userUuid, body as AssistantChatRunProof)
+            : await store.release(userUuid, body as AssistantChatRunProof)
+      response.json(result)
+    } catch {
+      response.status(503).json({
+        error: { tag: 'chat-run-lease-unavailable', message: 'Chat run coordination is temporarily unavailable.' },
+      })
+    }
+  }
+
+  @httpPost(
+    '/chats/run-lease/acquire',
+    TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware,
+    TYPES.ApiGateway_UserRateLimitMiddleware,
+  )
+  async acquireChatRunLease(request: Request, response: Response): Promise<void> {
+    await this.chatRunLeaseOperation('acquire', request, response)
+  }
+
+  @httpPost(
+    '/chats/run-lease/renew',
+    TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware,
+    TYPES.ApiGateway_UserRateLimitMiddleware,
+  )
+  async renewChatRunLease(request: Request, response: Response): Promise<void> {
+    await this.chatRunLeaseOperation('renew', request, response)
+  }
+
+  @httpPost(
+    '/chats/run-lease/release',
+    TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware,
+    TYPES.ApiGateway_UserRateLimitMiddleware,
+  )
+  async releaseChatRunLease(request: Request, response: Response): Promise<void> {
+    await this.chatRunLeaseOperation('release', request, response)
   }
 
   @httpGet('/usage', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
@@ -966,6 +1061,21 @@ export class AssistantController extends BaseHttpController {
     const userUuid = (response.locals.user as { uuid: string }).uuid
     const limits = this.resolveUserLimits(response)
 
+    const chatProof = body.chatRunLease
+    if (chatProof !== undefined && !isAssistantChatRunProof(chatProof)) {
+      response
+        .status(400)
+        .json({ error: { tag: 'invalid-chat-run-lease', message: 'Invalid assistant chat run lease.' } })
+      return
+    }
+    const chatLeaseStore = chatProof && this.redis ? new RedisAssistantChatRunLease(this.redis) : undefined
+    if (chatProof && !chatLeaseStore) {
+      response.status(503).json({
+        error: { tag: 'chat-run-lease-unavailable', message: 'Chat run coordination is temporarily unavailable.' },
+      })
+      return
+    }
+
     // 1) Hard disable: if AI is explicitly disabled for this user, refuse.
     if (limits.aiEnabled === false) {
       response.status(403).json({
@@ -1130,6 +1240,35 @@ export class AssistantController extends BaseHttpController {
       return
     }
 
+    let chatStreamId: string | undefined
+    if (chatProof && chatLeaseStore) {
+      try {
+        chatStreamId = await chatLeaseStore.beginStream(userUuid, chatProof as AssistantChatRunProof)
+      } catch {
+        await Promise.all([
+          this.releaseQuotaReservation(quotaReservation),
+          this.releaseTokenQuotaReservation(tokenQuotaReservation),
+        ])
+        response.status(503).json({
+          error: { tag: 'chat-run-lease-unavailable', message: 'Chat run coordination is temporarily unavailable.' },
+        })
+        return
+      }
+      if (!chatStreamId) {
+        await Promise.all([
+          this.releaseQuotaReservation(quotaReservation),
+          this.releaseTokenQuotaReservation(tokenQuotaReservation),
+        ])
+        response.status(409).json({
+          error: {
+            tag: 'chat-run-lease-lost',
+            message: 'Another device is running this chat, or its run lease expired.',
+          },
+        })
+        return
+      }
+    }
+
     response.setHeader('Content-Type', 'text/event-stream')
     response.setHeader('Cache-Control', 'no-cache, no-transform')
     response.setHeader('Connection', 'keep-alive')
@@ -1146,16 +1285,21 @@ export class AssistantController extends BaseHttpController {
     let iteratorCancellationRequested = false
     let clientClosed = request.aborted === true
     let quotaLeaseLost = false
+    let chatLeaseLost = false
+    let chatStreamTimedOut = false
     let streamCancelled = false
-    const cancelProvider = (reason: 'client' | 'quota'): void => {
+    const cancelProvider = (reason: 'client' | 'quota' | 'chat' | 'chat-timeout'): void => {
       if (streamCancelled) {
         return
       }
       streamCancelled = true
       if (reason === 'client') {
         clientClosed = true
-      } else {
+      } else if (reason === 'quota') {
         quotaLeaseLost = true
+      } else {
+        chatLeaseLost = true
+        chatStreamTimedOut = reason === 'chat-timeout'
       }
       outcome.markFailed()
       upstreamAbortController.abort()
@@ -1186,6 +1330,30 @@ export class AssistantController extends BaseHttpController {
       tokenQuotaReservation?.startHeartbeat(() => cancelProvider('quota'))
     }
 
+    let chatHeartbeat: ReturnType<typeof setInterval> | undefined
+    let chatWatchdog: ReturnType<typeof setTimeout> | undefined
+    let chatRenewal: Promise<void> | undefined
+    if (chatStreamId && chatProof && chatLeaseStore && !clientClosed) {
+      const ownedStream = chatStreamId
+      chatWatchdog = setTimeout(() => cancelProvider('chat-timeout'), CHAT_RUN_STREAM_MAX_MS)
+      chatHeartbeat = setInterval(() => {
+        if (chatRenewal || streamCancelled) {
+          return
+        }
+        chatRenewal = chatLeaseStore
+          .renewStream(userUuid, chatProof as AssistantChatRunProof, ownedStream)
+          .then((renewed) => {
+            if (!renewed) {
+              cancelProvider('chat')
+            }
+          })
+          .catch(() => cancelProvider('chat'))
+          .finally(() => {
+            chatRenewal = undefined
+          })
+      }, CHAT_RUN_LEASE_RENEW_MS)
+    }
+
     // Token accounting for this request: prefer the provider's REAL usage tokens
     // (OpenAI include_usage / Gemini / Cohere emit a `usage` event); otherwise
     // fall back to an ESTIMATE from prompt + streamed-completion text length,
@@ -1206,7 +1374,16 @@ export class AssistantController extends BaseHttpController {
       })
       providerIterator = stream[Symbol.asyncIterator]()
       const cancellableStream: AsyncIterable<ProviderEvent> = {
-        [Symbol.asyncIterator]: () => providerIterator as AsyncIterator<ProviderEvent>,
+        [Symbol.asyncIterator]: () =>
+          chatStreamId
+            ? {
+                next: () =>
+                  nextProviderEventWithAbort(
+                    providerIterator as AsyncIterator<ProviderEvent>,
+                    upstreamAbortController.signal,
+                  ),
+              }
+            : (providerIterator as AsyncIterator<ProviderEvent>),
       }
 
       for await (const event of cancellableStream) {
@@ -1231,15 +1408,32 @@ export class AssistantController extends BaseHttpController {
       }
     } catch (error) {
       outcome.markFailed()
-      if (!clientClosed && !quotaLeaseLost) {
+      if (!clientClosed && !quotaLeaseLost && !chatLeaseLost) {
         writeEvent({ kind: 'error', message: (error as Error).message })
         writeEvent({ kind: 'finish', stopReason: 'error' })
       }
     } finally {
       providerIterator = undefined
+      clearInterval(chatHeartbeat)
+      clearTimeout(chatWatchdog)
+      await chatRenewal
+      if (chatStreamId && chatProof && chatLeaseStore) {
+        await chatLeaseStore
+          .endStream(userUuid, chatProof as AssistantChatRunProof, chatStreamId)
+          .catch(() => undefined)
+      }
       await Promise.all([quotaReservation?.stopHeartbeat(), tokenQuotaReservation?.stopHeartbeat()])
       if (quotaLeaseLost && !clientClosed) {
         writeEvent({ kind: 'error', message: 'AI request quota could not be renewed. Please try again.' })
+        writeEvent({ kind: 'finish', stopReason: 'error' })
+      }
+      if (chatLeaseLost && !clientClosed) {
+        writeEvent({
+          kind: 'error',
+          message: chatStreamTimedOut
+            ? 'This chat generation exceeded the five-minute server limit. Resume from its synced history.'
+            : 'This chat run lost its server lease. Stop here and resume from its synced history.',
+        })
         writeEvent({ kind: 'finish', stopReason: 'error' })
       }
       response.end()

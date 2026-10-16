@@ -2945,6 +2945,7 @@ function isAllowedRpcRequest(
   const pathname = new URL(frame.payload.path, 'http://rpc.invalid').pathname
   return (
     (pathname === '/v1/assistant/stream' && operations.includes('STREAM_ASSISTANT')) ||
+    /^\/v1\/assistant\/chats\/run-lease\/(acquire|renew|release)$/.test(pathname) ||
     pathname === '/v1/collaboration/authorize' ||
     pathname === '/v1/sessions/activity' ||
     pathname === '/v1/collaboration/save-fence'
