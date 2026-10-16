@@ -18,6 +18,13 @@
   background-color: rgba(255, 255, 255, 0.05);
 }
 
+// The existing box supplies the divider; a little extra space keeps a closed
+// section from running directly into the block that follows it.
+.ContentEditable__root .Collapsible__container:not([open]),
+.ContentEditable__root .Collapsible__container.Collapsible__collapsed {
+  margin-block-end: 12px;
+}
+
 .Collapsible__title {
   cursor: pointer;
   padding: 5px 5px 5px 20px;
