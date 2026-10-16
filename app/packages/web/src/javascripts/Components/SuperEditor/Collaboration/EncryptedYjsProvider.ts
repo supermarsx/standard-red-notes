@@ -1952,7 +1952,14 @@ export class EncryptedYjsProvider implements Provider {
         })
         break
       case 'room-denied':
-        if (frame.requestId === this.joinRequestId) {
+        if (
+          frame.requestId === this.joinRequestId &&
+          (!this.options || this.currentLease?.requestId === frame.requestId)
+        ) {
+          // Retiring a production lease starts a new authoritative reserve/join
+          // flow. Delayed denials for that retired request must not cancel the
+          // replacement generation or revoke its authorization. Current-lease
+          // denials and the replacement flow's own access decision still apply.
           const shouldReauthorize = this.joined
           // Contract C1: the room rotated under this lease (its epoch moved on) or the
           // security epoch was revoked. This provider's cipher is bound to the epoch it

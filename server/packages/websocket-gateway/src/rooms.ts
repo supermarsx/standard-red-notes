@@ -1960,6 +1960,13 @@ export async function handleRelayFrame<S extends SendableSocket>(
       return 0
     case 'room-presence-heartbeat': {
       const lease = rooms.requestLease(frame.room, conn, frame.requestId)
+      if (lifecycle?.heartbeatPresence && !lease) {
+        // Sleep can outlive an otherwise valid editor's room membership while
+        // its socket remains open. requestLease may already have announced the
+        // expiry while pruning; never turn that recoverable condition into a
+        // second, terminal authorization refusal.
+        return deny(frame.room, frame.requestId, 'capability-expired')
+      }
       if (
         !lifecycle?.heartbeatPresence ||
         lease?.role !== 'editor' ||

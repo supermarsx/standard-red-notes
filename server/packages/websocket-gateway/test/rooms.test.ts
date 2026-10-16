@@ -2261,6 +2261,36 @@ describe('handleRelayFrame t92 contracts', () => {
     ).then(() => undefined)
   })
 
+  it('treats a sleeping editor heartbeat after lease expiry as recoverable, never a policy rejection', async () => {
+    let now = 1_000
+    const rooms = new RoomRegistry(() => now)
+    const conn = fakeConn('waking-editor')
+    const lifecycle = { ...fakeLifecycle(), heartbeatPresence: vi.fn() }
+    rooms.join('n1', conn, 2_000, 'old-lease', 'editor', false, TEST_ROOM_EPOCH, TEST_SECURITY_EPOCH)
+    now = 3_000
+    await handleRelayFrame(
+      rooms,
+      conn,
+      {
+        t: 'room-presence-heartbeat',
+        room: 'n1',
+        requestId: 'old-lease',
+        expectedRoomEpoch: TEST_ROOM_EPOCH,
+        protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+        clientId: 1,
+      },
+      grantAuthorizer(),
+      undefined,
+      lifecycle,
+    )
+    const denials = conn.sent.map((frame) => JSON.parse(frame)).filter((frame) => frame.t === 'room-denied')
+    expect(denials.length).toBeGreaterThan(0)
+    expect(denials.every((frame) => frame.requestId === 'old-lease' && frame.reason === 'capability-expired')).toBe(
+      true,
+    )
+    expect(lifecycle.heartbeatPresence).not.toHaveBeenCalled()
+  })
+
   it('C1: every registry-side funnel names its reason', async () => {
     let now = 1_000
     const rooms = new RoomRegistry(() => now)

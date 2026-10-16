@@ -1785,6 +1785,17 @@ describe('EncryptedYjsProvider convergence', () => {
         expect(authorize).not.toHaveBeenCalled()
         expect(initialLease.release).toHaveBeenCalledTimes(1)
         expect(provider.isRoomJoined()).toBe(false)
+        // A heartbeat racing expiry can produce a second denial for the retired
+        // request. It must neither terminally revoke nor invalidate the new attempt.
+        inbound?.({
+          t: 'room-denied',
+          room: 'expiry-room',
+          requestId: initialLease.requestId,
+          reason: 'capability-expired',
+        })
+        inbound?.({ t: 'room-denied', room: 'expiry-room', requestId: initialLease.requestId, reason: 'policy' })
+        expect(reactivate).toHaveBeenCalledTimes(1)
+        expect(onFatal).not.toHaveBeenCalled()
         doc.getText('draft').insert(doc.getText('draft').length, ' + during renewal')
         await provider.flush()
         expect(sent.some((frame) => frame.t === 'yjs')).toBe(false)
