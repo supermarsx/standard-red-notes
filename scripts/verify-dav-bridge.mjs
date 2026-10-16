@@ -5,7 +5,7 @@
 //     --topology single --base http://127.0.0.1:3991 --container srn-davtest-single-app-1
 //
 // It drives a running Standard Red Notes stack (built from a clean export of
-// one commit, joined to the test network of docker-compose.dav-test.yml)
+// one commit, joined to the test network of dev/compose/docker-compose.dav-test.yml)
 // through its public API, exactly as a client would, and judges the outcome
 // with scripts/dav-bridge/observer.mjs, which talks to the CalDAV servers
 // directly and reads their access logs.

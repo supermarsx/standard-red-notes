@@ -1,4 +1,4 @@
-# Radicale for the DAV bridge test stack (docker-compose.dav-test.yml).
+# Radicale for the DAV bridge test stack (dev/compose/docker-compose.dav-test.yml).
 # TEST FIXTURE: the users file beside this one holds published passwords.
 
 [server]

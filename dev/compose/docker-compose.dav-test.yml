@@ -9,9 +9,9 @@
 # observer that talks to those servers directly and not through the bridge.
 # This file starts the servers; scripts/verify-dav-bridge.mjs drives them.
 #
-#   docker compose -f docker-compose.dav-test.yml up -d --wait
+#   docker compose -f dev/compose/docker-compose.dav-test.yml up -d --wait
 #   node scripts/verify-dav-bridge.mjs --help
-#   docker compose -f docker-compose.dav-test.yml down -v
+#   docker compose -f dev/compose/docker-compose.dav-test.yml down -v
 #
 # Three CalDAV servers, chosen to disagree with each other:
 #
@@ -30,8 +30,8 @@
 #              refused" is then a count of zero here, not a status code there.
 #
 # NETWORK. One bridge network with a fixed private subnet. An SRN stack under
-# test joins it (see docker-compose.dav-test.single.yml and
-# docker-compose.dav-test.multi.yml) and reaches these servers by NAME over
+# test joins it (see dev/compose/docker-compose.dav-test.single.yml and
+# dev/compose/docker-compose.dav-test.multi.yml) and reaches these servers by NAME over
 # plain http, which the bridge allows only for origins on the operator's list.
 # So the test stack itself exercises that list: with the list empty the same
 # address must be refused and the canary must have recorded no hit.
@@ -61,7 +61,7 @@ services:
     security_opt:
       - "no-new-privileges:true"
     volumes:
-      - ./e2e/dav-fixtures/radicale:/config:ro
+      - ../../e2e/dav-fixtures/radicale:/config:ro
     tmpfs:
       # Collections live in memory: every `up` starts from an empty server.
       - /data:uid=2999,gid=2999,mode=0700
@@ -119,7 +119,7 @@ services:
     # image's own entrypoint.
     entrypoint: ["/bin/sh", "/fixture/start.sh"]
     volumes:
-      - ./e2e/dav-fixtures/baikal:/fixture:ro
+      - ../../e2e/dav-fixtures/baikal:/fixture:ro
       - baikal-config:/var/www/baikal/config
       - baikal-data:/var/www/baikal/Specific
     ports:
@@ -148,7 +148,7 @@ services:
       - "no-new-privileges:true"
     command: ["node", "/fixture/canary.mjs"]
     volumes:
-      - ./e2e/dav-fixtures/canary:/fixture:ro
+      - ../../e2e/dav-fixtures/canary:/fixture:ro
     ports:
       - "127.0.0.1:${DAVTEST_CANARY_PORT:-3996}:8080"
     networks:

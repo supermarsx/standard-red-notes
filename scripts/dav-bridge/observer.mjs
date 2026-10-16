@@ -1,7 +1,7 @@
 // The independent observer for the DAV bridge test stack.
 //
 // Everything in this file talks to the CalDAV servers of
-// docker-compose.dav-test.yml DIRECTLY, on their loopback host ports, and never
+// dev/compose/docker-compose.dav-test.yml DIRECTLY, on their loopback host ports, and never
 // through Standard Red Notes. That is the point of it: a check that reads a
 // server's state through the code under test can only ever agree with that
 // code. What the bridge did is judged from here.
@@ -26,7 +26,7 @@ export const BRIDGE_USER_AGENT = 'StandardRedNotes-DavBridge/1'
 
 const port = (name, fallback) => Number(process.env[name] ?? fallback)
 
-/** The test stack as docker-compose.dav-test.yml defines it. Every password is a published fixture. */
+/** The test stack as dev/compose/docker-compose.dav-test.yml defines it. Every password is a published fixture. */
 export const DAVTEST = Object.freeze({
   project: 'srn-davtest',
   network: 'srn-davtest-net',

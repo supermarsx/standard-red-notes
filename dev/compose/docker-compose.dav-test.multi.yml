@@ -1,13 +1,13 @@
 # =============================================================================
 # TEST-ONLY overlay: the multi-container Standard Red Notes stack, with its
 # `server` container joined to the DAV bridge test network
-# (docker-compose.dav-test.yml) and the bridge on.
+# (dev/compose/docker-compose.dav-test.yml) and the bridge on.
 #
 # It is an OVERLAY for docker-compose.yml, never used by itself:
 #
-#   docker compose -f docker-compose.dav-test.yml up -d --wait
+#   docker compose -f dev/compose/docker-compose.dav-test.yml up -d --wait
 #   docker compose -p srn-davtest-multi --env-file <generated env> \
-#     -f docker-compose.yml -f docker-compose.dav-test.multi.yml \
+#     -f docker-compose.yml -f dev/compose/docker-compose.dav-test.multi.yml \
 #     up -d --build --wait
 #
 # scripts/verify-dav-bridge.mjs does both, from a clean export of one commit,

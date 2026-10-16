@@ -1,5 +1,5 @@
 #!/bin/sh
-# Baikal for the DAV bridge test stack (docker-compose.dav-test.yml).
+# Baikal for the DAV bridge test stack (dev/compose/docker-compose.dav-test.yml).
 #
 # Baikal normally asks a person to click through an install wizard before it
 # serves anything. A test stack cannot do that, so this writes the two things

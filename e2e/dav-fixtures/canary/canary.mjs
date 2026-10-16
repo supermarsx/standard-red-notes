@@ -1,4 +1,4 @@
-// Canary listener for the DAV bridge test stack (docker-compose.dav-test.yml).
+// Canary listener for the DAV bridge test stack (dev/compose/docker-compose.dav-test.yml).
 //
 // It is NOT a CalDAV server. It records every request it receives so that a
 // network-policy check can be judged by what actually arrived here: zero
