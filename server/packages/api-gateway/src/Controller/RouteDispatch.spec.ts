@@ -299,6 +299,10 @@ describe('versioned route controllers', () => {
       'UsersController.verifyEmailConfirmation (/email-confirmation/verify)',
       // Public, unauthenticated reads.
       'ActionsController.serverMetadata (/meta)',
+      // Fixed facade revision/version only, already public at the static
+      // /.well-known/srn-deployment.json marker. No request-selected target,
+      // account state, configuration values, or credentials are returned.
+      'WebDeploymentController.web (/web)',
       'AssistantController.transcriptionModelList (/transcription/models)',
       'PluginsController.component (/component/{*splat})',
       // Static websocket-sync feature discovery. The handler ignores the request
