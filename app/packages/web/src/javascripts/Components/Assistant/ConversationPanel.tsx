@@ -1,3 +1,4 @@
+import AssistantComposer from './AssistantComposer'
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { observer } from 'mobx-react-lite'
 import { ApplicationEvent, ContentType, PrefKey, SNNote, isNote } from '@standardnotes/snjs'
@@ -1837,34 +1838,16 @@ function ConversationPanelImpl({
             ))}
           </div>
         )}
-        <div className="flex items-end gap-2">
-          <textarea
-            className="border-border bg-default focus:border-info min-h-[2.5rem] flex-grow resize-none rounded border px-3 py-2 text-sm focus:outline-none"
-            placeholder={isRunning ? 'Steer the task, or queue a follow-up…' : 'Message the assistant…'}
-            value={input}
-            rows={1}
-            onChange={(event) => setInput(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && !event.shiftKey) {
-                event.preventDefault()
-                if (isRunning) {
-                  handleSteer()
-                } else {
-                  handleSend()
-                }
-              }
-            }}
-          />
-          {isRunning ? (
-            <div className="flex items-center gap-1">
-              <Button primary label="Steer" onClick={handleSteer} disabled={!input.trim()} />
-              <Button label="Queue" onClick={handleQueue} disabled={!input.trim()} />
-              <Button label="Stop" onClick={handleStop} />
-            </div>
-          ) : (
-            <Button primary label="Send" onClick={handleSend} disabled={!input.trim() || !isConfigured} />
-          )}
-        </div>
+        <AssistantComposer
+          input={input}
+          running={isRunning}
+          configured={isConfigured}
+          onInput={setInput}
+          onSend={handleSend}
+          onSteer={handleSteer}
+          onQueue={handleQueue}
+          onStop={handleStop}
+        />
         <AssistantUsageMeter
           fiveHour={tokenWindows?.fiveHour}
           weekly={tokenWindows?.weekly}
