@@ -1061,7 +1061,7 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
   async refreshLeases(): Promise<void> {
     const now = Date.now()
     let refreshFailed = false
-    const policyFailureRooms = new Map<string, RoomDeniedReason>()
+    const policyFailures: Array<{ localId: string; lease: LocalLease<S>; reason: RoomDeniedReason }> = []
     await Promise.all(
       [...this.leases.entries()].map(async ([localId, lease]) => {
         if (Number.isFinite(lease.expiresAt) && lease.expiresAt <= now) {
@@ -1075,14 +1075,29 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
         } catch (rawError) {
           const error = asLifecycleError(rawError)
           if (isLeasePolicyError(error)) {
-            policyFailureRooms.set(lease.room, roomDeniedReasonFor(error))
+            // A released lease can finish refreshing after the room has rejoined.
+            // Its deterministic refusal says nothing about replacement editors.
+            if (this.leases.get(localId) !== lease) {
+              return
+            }
+            policyFailures.push({ localId, lease, reason: roomDeniedReasonFor(error) })
           } else {
+            // Transport errors still invalidate shared relay health, including
+            // failures observed by an operation whose local lease has departed.
             refreshFailed = true
           }
           this.warnDenial('lease-refresh', error)
         }
       }),
     )
+    const policyFailureRooms = new Map<string, RoomDeniedReason>()
+    for (const failure of policyFailures) {
+      // Other room refreshes may have stayed pending after this one failed.
+      // Recheck at the point of denial, after that complete snapshot settles.
+      if (this.leases.get(failure.localId) === failure.lease) {
+        policyFailureRooms.set(failure.lease.room, failure.reason)
+      }
+    }
     await Promise.all([...policyFailureRooms].map(([room, reason]) => this.denyAndReleaseRoom(room, reason)))
     if (refreshFailed) {
       this.handleCommandUnavailable()

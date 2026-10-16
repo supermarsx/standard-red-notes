@@ -1739,6 +1739,99 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
     ).resolves.toEqual({ shouldBootstrap: true })
   })
 
+  it.each([false, true])(
+    'handles an older refresh after replacement without hiding Redis transport failure=%s',
+    async (transportFailure) => {
+      const redis = new FakeRedisNetwork()
+      const rooms = new RoomRegistry<SendableSocket>()
+      const commands = redis.client()
+      const bridge = new CollaborationRedisBridge(
+        rooms,
+        commands as never,
+        redis.client() as never,
+        logger,
+        replicaId('stale-refresh'),
+      )
+      const member = connection('stale-refresh-member')
+      const room = 'stale-refresh-room'
+      const expiry = Date.now() + 60_000
+      const old = await bridge.reserveEditorLease(
+        member,
+        room,
+        'old-lease',
+        expiry,
+        COLLABORATION_PROTOCOL_VERSION,
+        1,
+        TEST_ROOM_EPOCH,
+        TEST_SECURITY_EPOCH,
+      )
+      await bridge.activateEditorLease(
+        member,
+        room,
+        'old-lease',
+        expiry,
+        COLLABORATION_PROTOCOL_VERSION,
+        1,
+        old.bootstrapChallenge,
+        TEST_ROOM_EPOCH,
+        TEST_SECURITY_EPOCH,
+      )
+      rooms.join(room, member, expiry, 'old-lease', 'editor', true)
+      let resume!: () => void
+      const gate = new Promise<void>((resolve) => {
+        resume = resolve
+      })
+      const evaluate = commands.eval.bind(commands)
+      vi.spyOn(commands, 'eval').mockImplementationOnce(async (...args) => {
+        await gate
+        if (transportFailure) {
+          throw new Error('Redis transport unavailable')
+        }
+        return evaluate(...args)
+      })
+      const refreshing = bridge.refreshLeases()
+      await Promise.resolve()
+      await bridge.releaseLease(member, room, 'old-lease')
+      rooms.leave(room, member, 'old-lease')
+      let epoch = TEST_ROOM_EPOCH
+      const replacement = await reserveAfterRequiredEpochRotation((roomEpoch) => {
+        epoch = roomEpoch
+        return bridge.reserveEditorLease(
+          member,
+          room,
+          'new-lease',
+          expiry,
+          COLLABORATION_PROTOCOL_VERSION,
+          1,
+          roomEpoch,
+          TEST_SECURITY_EPOCH,
+        )
+      })
+      await bridge.activateEditorLease(
+        member,
+        room,
+        'new-lease',
+        expiry,
+        COLLABORATION_PROTOCOL_VERSION,
+        1,
+        replacement.bootstrapChallenge,
+        epoch,
+        TEST_SECURITY_EPOCH,
+      )
+      rooms.join(room, member, expiry, 'new-lease', 'editor', true)
+      resume()
+      await refreshing
+      expect(rooms.isMember(room, member)).toBe(!transportFailure)
+      if (transportFailure) {
+        expect(member.send).toHaveBeenCalledWith(expect.stringContaining('"reason":"relay-unhealthy"'))
+      } else {
+        expect(redis.leases.size).toBe(1)
+        expect(member.send).not.toHaveBeenCalledWith(expect.stringContaining('"t":"room-denied"'))
+      }
+      await bridge.stop()
+    },
+  )
+
   it('fails an active room closed after Redis loses election state instead of repairing a stale bootstrap lease', async () => {
     const redis = new FakeRedisNetwork()
     const rooms = new RoomRegistry<SendableSocket>()
