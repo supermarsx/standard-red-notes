@@ -257,7 +257,15 @@ import { useTranslation } from 'react-i18next'
 import BlockStyleGalleryBar from './BlockStyleGallery'
 import InsertSectionsBar from './InsertSectionsBar'
 import TypographyStyleEditorModal from './TypographyStyleEditorModal'
-import { GalleryBlockDescriptor, applyTypographyBlockToSelection, orderGalleryBlocks } from './typographyGallery'
+import {
+  GalleryBlockDescriptor,
+  GALLERY_LEADING_INDICATOR_WIDTH,
+  GALLERY_SQUARE_GAP,
+  GALLERY_SQUARE_WIDTH,
+  applyTypographyBlockToSelection,
+  orderGalleryBlocks,
+  resolveActiveGalleryKey,
+} from './typographyGallery'
 import { resolveActiveTypographyProfile } from '@/Utils/typographyProfiles'
 import { printActiveNote } from '@/Components/NoteView/Print/PrintNote'
 
@@ -3935,12 +3943,27 @@ const ToolbarPlugin = ({
                       // menu, and the squares track grows to fill the group width so it
                       // degrades gracefully.
                       if (group.id === ToolbarGroupId.BlockStyle) {
+                        const activeGalleryKey = resolveActiveGalleryKey({
+                          blockType,
+                          style: activeBlockStyle,
+                          profile: activeTypographyProfile,
+                        })
+                        const previewCount = orderedGalleryBlocks.filter(({ key }) => key !== activeGalleryKey).length
+                        // Grow only until all previews fit. Unbounded flex growth
+                        // left a large empty group on wide editor panes.
+                        // Include the group's 4px padding on each side.
+                        const maximumWidth =
+                          GALLERY_LEADING_INDICATOR_WIDTH +
+                          previewCount * GALLERY_SQUARE_WIDTH +
+                          Math.max(0, previewCount - 1) * GALLERY_SQUARE_GAP +
+                          8
                         return (
                           <div
                             key={group.id}
                             role="group"
                             aria-label={group.label}
                             className="super-toolbar-group bg-contrast flex min-w-[12rem] flex-grow flex-col rounded-lg px-1 py-0.5"
+                            style={{ maxWidth: `min(100%, ${maximumWidth}px)` }}
                           >
                             <div className="flex flex-col items-stretch justify-center gap-1 md:min-h-[6.25rem]">
                               {/* Line 1: the three action buttons. */}
