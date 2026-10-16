@@ -291,6 +291,8 @@ export async function applyAssistantNoteChange(
   application: WebApplication,
   change: AssistantNoteChange,
   direction: AssistantNoteChangeDirection,
+  /** Caller owns serialization; audit metadata commits with the same snapshot. */
+  mutateMetadata?: (mutator: NoteMutator, current: SNNote) => void,
 ): Promise<AssistantNoteChangeResult> {
   await flushAssistantNoteEditors(application, change.noteUuid)
   const candidate = application.items.findItem<SNNote>(change.noteUuid)
@@ -302,24 +304,28 @@ export async function applyAssistantNoteChange(
   const expected = direction === 'undo' ? change.after : change.before
   const target = direction === 'undo' ? change.before : change.after
   const position = direction === 'undo' ? 'before' : 'after'
-  if (assistantNoteSnapshotMatches(candidate, target)) {
+  const alreadyApplied = assistantNoteSnapshotMatches(candidate, target)
+  if (alreadyApplied && !mutateMetadata) {
     return { position, alreadyApplied: true }
   }
-  if (!assistantNoteSnapshotMatches(candidate, expected)) {
+  if (!alreadyApplied && !assistantNoteSnapshotMatches(candidate, expected)) {
     throw new Error('The note changed again after this assistant action. Review the latest note before replacing it.')
   }
 
   await application.mutator.changeItem<NoteMutator, SNNote>(
     candidate,
     (mutator) => {
-      mutator.title = target.title
-      mutator.text = target.text
-      mutator.preview_plain = target.previewPlain
-      mutator.preview_html = target.previewHtml
-      mutator.noteType = target.noteType
-      mutator.editorIdentifier = target.editorIdentifier
+      if (!alreadyApplied) {
+        mutator.title = target.title
+        mutator.text = target.text
+        mutator.preview_plain = target.previewPlain
+        mutator.preview_html = target.previewHtml
+        mutator.noteType = target.noteType
+        mutator.editorIdentifier = target.editorIdentifier
+      }
+      mutateMetadata?.(mutator, candidate)
     },
-    MutationType.UpdateUserTimestamps,
+    alreadyApplied ? MutationType.NoUpdateUserTimestamps : MutationType.UpdateUserTimestamps,
     PayloadEmitSource.AssistantChanged,
   )
   try {
@@ -327,5 +333,5 @@ export async function applyAssistantNoteChange(
   } catch (error) {
     console.error('Assistant history action sync failed', error)
   }
-  return { position, alreadyApplied: false }
+  return { position, alreadyApplied }
 }

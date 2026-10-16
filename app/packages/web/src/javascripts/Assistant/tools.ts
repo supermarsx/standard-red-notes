@@ -454,11 +454,11 @@ export class AssistantTools implements ToolSession {
       case 'comments.manage':
         return this.commentsManage(args)
       case 'notes.create':
-        return this.notesCreate(args)
+        return this.notesCreate(args, callId)
       case 'notes.update':
         return this.notesUpdate(args, callId)
       case 'notes.createSuper':
-        return this.notesCreateSuper(args)
+        return this.notesCreateSuper(args, callId)
       case 'notes.updateSuper':
         return this.notesUpdateSuper(args, callId)
       case 'notes.readSuper':
@@ -981,6 +981,101 @@ export class AssistantTools implements ToolSession {
     }
   }
 
+  private async noteChangeRecord(change: AssistantNoteChange, callId?: string, created = false) {
+    const { before, after } = change
+    const changeId = generateAssistantChangeId('change')
+    const effects = []
+    if (before.title !== after.title) {
+      effects.push({
+        type: 'update-attrs' as const,
+        summary: created ? 'Created note title' : 'Updated note title',
+        affected: [],
+        beforeFragment: before.title,
+        afterFragment: after.title,
+      })
+    }
+    if (before.text !== after.text) {
+      effects.push({
+        type: 'replace-text' as const,
+        summary: created ? 'Created note content' : 'Updated note content',
+        affected: [],
+        beforeFragment: extractPlaintextFromNoteText(before.text, before.noteType),
+        afterFragment: extractPlaintextFromNoteText(after.text, after.noteType),
+      })
+    }
+    if (before.noteType !== after.noteType || before.editorIdentifier !== after.editorIdentifier) {
+      effects.push({ type: 'update-attrs' as const, summary: 'Changed note editor', affected: [] })
+    }
+    return createAssistantChangeRecord({
+      changeId,
+      noteUuid: change.noteUuid,
+      source: {
+        assistantMessageId:
+          this.context.getAssistantMessageId?.() ?? this.context.assistantMessageId ?? `assistant-message-${changeId}`,
+        assistantRunId: this.context.assistantRunId ?? `assistant-run-${changeId}`,
+        ...(callId ? { toolCallId: callId } : {}),
+      },
+      baseRevision: await assistantSuperRevision(before.text),
+      newRevision: await assistantSuperRevision(after.text),
+      effects,
+      undo: change,
+    })
+  }
+
+  /** Commit the content and its encrypted audit record as one item mutation. */
+  private async commitNoteChange(note: SNNote, change: AssistantNoteChange, callId?: string): Promise<SNNote> {
+    const { before, after } = change
+    const record = await this.noteChangeRecord(change, callId)
+    return withAssistantChangeLedgerMutation(this.application, note.uuid, async () => {
+      const current = await this.requireUnchangedWritableNote(note.uuid, before)
+      this.throwIfAborted()
+      const updated = await this.application.mutator.changeItem<NoteMutator, SNNote>(
+        current,
+        (mutator) => {
+          mutator.title = after.title
+          mutator.text = after.text
+          mutator.preview_plain = after.previewPlain
+          mutator.preview_html = after.previewHtml
+          mutator.noteType = after.noteType
+          mutator.editorIdentifier = after.editorIdentifier
+          mutator.setAppDataItem(NoteAssistantChangesKey, appendAssistantChangeRecord(current, record))
+        },
+        MutationType.UpdateUserTimestamps,
+        PayloadEmitSource.AssistantChanged,
+      )
+      this.recordExpectedNoteSnapshot(updated)
+      this.syncInBackground()
+      this.publishNoteChange(callId, change)
+      return updated
+    })
+  }
+
+  /** Seed nonempty creation content and its history in the same insertion. */
+  private async insertNoteWithAudit(template: SNNote, callId?: string): Promise<SNNote> {
+    const after = captureAssistantNoteSnapshot(template)
+    const before = createAssistantNoteSnapshot({
+      ...after,
+      title: '',
+      text: '',
+      previewPlain: '',
+      previewHtml: undefined,
+    })
+    const change = buildAssistantNoteChange({ noteUuid: template.uuid, before, after })
+    let recordedTemplate = template
+    if (change) {
+      this.assertDurableAssistantNoteChange(change, after)
+      const record = await this.noteChangeRecord(change, callId, true)
+      const mutator = new NoteMutator(template, MutationType.NoUpdateUserTimestamps)
+      mutator.setAppDataItem(NoteAssistantChangesKey, appendAssistantChangeRecord(template, record))
+      recordedTemplate = new SNNote(mutator.getResult())
+    }
+    this.throwIfAborted()
+    this.assertMutationAuthorized({})
+    const note = await this.application.mutator.insertItem<SNNote>(recordedTemplate)
+    this.recordCreatedNote(template, note)
+    return note
+  }
+
   private async superNoteMarkdown(note: SNNote): Promise<string> {
     if (note.noteType !== NoteType.Super) {
       return note.text
@@ -992,11 +1087,11 @@ export class AssistantTools implements ToolSession {
     }
   }
 
-  private async notesCreate(args: Record<string, unknown>) {
+  private async notesCreate(args: Record<string, unknown>, callId?: string) {
     // `format: 'super'` routes to the Markdown -> Super conversion path so the
     // model never has to hand-write Lexical JSON.
     if (args.format === 'super') {
-      return this.notesCreateSuper(args)
+      return this.notesCreateSuper(args, callId)
     }
 
     const title = typeof args.title === 'string' ? args.title : ''
@@ -1019,8 +1114,7 @@ export class AssistantTools implements ToolSession {
       references: [],
       editorIdentifier,
     })
-    const note = await this.application.mutator.insertItem<SNNote>(template)
-    this.recordCreatedNote(template, note)
+    const note = await this.insertNoteWithAudit(template, callId)
     return { ok: true, note: noteSummary(note), editorIdentifier: editorIdentifier ?? null }
   }
 
@@ -1052,24 +1146,7 @@ export class AssistantTools implements ToolSession {
     if (!change) {
       return { ok: true, note: noteSummary(note), unchanged: true }
     }
-    const updated = await this.application.mutator.changeItem<NoteMutator, SNNote>(
-      note,
-      (mutator) => {
-        if (typeof args.title === 'string') {
-          mutator.title = args.title
-        }
-        if (typeof args.text === 'string') {
-          mutator.text = args.text
-          mutator.preview_plain = this.notePreview(args.text)
-          mutator.preview_html = undefined
-        }
-      },
-      MutationType.UpdateUserTimestamps,
-      PayloadEmitSource.AssistantChanged,
-    )
-    this.recordExpectedNoteSnapshot(updated)
-    this.syncInBackground()
-    this.publishNoteChange(callId, change)
+    const updated = await this.commitNoteChange(note, change, callId)
     return { ok: true, note: noteSummary(updated) }
   }
 
@@ -1081,7 +1158,7 @@ export class AssistantTools implements ToolSession {
    * editorIdentifier (mirroring Importer.ts). Falls back to a plain note (the raw
    * markdown) when the SuperEditor feature is not entitled.
    */
-  private async notesCreateSuper(args: Record<string, unknown>) {
+  private async notesCreateSuper(args: Record<string, unknown>, callId?: string) {
     const title = typeof args.title === 'string' ? args.title : ''
     const markdown = typeof args.markdown === 'string' ? args.markdown : typeof args.text === 'string' ? args.text : ''
 
@@ -1091,8 +1168,7 @@ export class AssistantTools implements ToolSession {
         text: markdown,
         references: [],
       })
-      const plain = await this.application.mutator.insertItem<SNNote>(template)
-      this.recordCreatedNote(template, plain)
+      const plain = await this.insertNoteWithAudit(template, callId)
       return {
         ok: true,
         note: noteSummary(plain),
@@ -1118,8 +1194,7 @@ export class AssistantTools implements ToolSession {
       noteType: NoteType.Super,
       editorIdentifier: NativeFeatureIdentifier.TYPES.SuperEditor,
     })
-    const note = await this.application.mutator.insertItem<SNNote>(template)
-    this.recordCreatedNote(template, note)
+    const note = await this.insertNoteWithAudit(template, callId)
     return { ok: true, note: noteSummary(note), super: true }
   }
 
@@ -1195,27 +1270,7 @@ export class AssistantTools implements ToolSession {
     if (!change) {
       return { ok: true, note: noteSummary(note), super: note.noteType === NoteType.Super, unchanged: true }
     }
-    const current = await this.requireUnchangedWritableNote(note.uuid, before)
-    const updated = await this.application.mutator.changeItem<NoteMutator, SNNote>(
-      current,
-      (mutator) => {
-        if (typeof args.title === 'string') {
-          mutator.title = args.title
-        }
-        if (replacesBody) {
-          mutator.text = superText
-          mutator.preview_plain = this.notePreview(extractPlaintextFromNoteText(superText, NoteType.Super))
-          mutator.preview_html = undefined
-          mutator.noteType = NoteType.Super
-          mutator.editorIdentifier = NativeFeatureIdentifier.TYPES.SuperEditor
-        }
-      },
-      MutationType.UpdateUserTimestamps,
-      PayloadEmitSource.AssistantChanged,
-    )
-    this.recordExpectedNoteSnapshot(updated)
-    this.syncInBackground()
-    this.publishNoteChange(callId, change)
+    const updated = await this.commitNoteChange(note, change, callId)
     return { ok: true, note: noteSummary(updated), super: true }
   }
 

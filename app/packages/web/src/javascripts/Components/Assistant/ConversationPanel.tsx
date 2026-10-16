@@ -93,12 +93,12 @@ import {
   captureAssistantSessionPrincipal,
 } from '@/Assistant/assistantSessionPrincipal'
 import {
-  applyAssistantNoteChange,
   AssistantNoteChange,
   AssistantNoteChangeDirection,
   captureAssistantNoteSnapshot,
   flushAssistantNoteEditors,
 } from '@/Assistant/assistantNoteChanges'
+import { applyAssistantChangeHistory } from '@/Assistant/assistantChangeLedger'
 import AssistantMessageActions from './AssistantMessageActions'
 import type { AssistantSharedChatBinding } from '@/Assistant/assistantSyncedChats'
 import { acquireAssistantChatRun, AssistantChatRunGuard } from '@/Assistant/assistantChatRunLease'
@@ -528,7 +528,7 @@ function ConversationPanelImpl({
         }),
       )
       try {
-        const result = await applyAssistantNoteChange(application, tool.noteChange, direction)
+        const result = await applyAssistantChangeHistory(application, tool.noteChange, direction)
         setMessagesSynced((current) =>
           current.map((message) => {
             if (message.kind !== 'assistant') {

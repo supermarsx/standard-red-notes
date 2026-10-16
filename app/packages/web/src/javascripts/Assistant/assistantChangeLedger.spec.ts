@@ -4,6 +4,7 @@ import { WebApplication } from '@/Application/WebApplication'
 import { buildAssistantNoteChange, createAssistantNoteSnapshot } from './assistantNoteChanges'
 import {
   acceptAssistantChange,
+  applyAssistantChangeHistory,
   appendAssistantChangeRecord,
   AssistantChangeLedgerEnvelope,
   AssistantChangeRecord,
@@ -205,6 +206,105 @@ function actionHarness(initial: AssistantChangeRecord) {
 }
 
 describe('assistant tracked change actions', () => {
+  it('commits chat undo and redo content with the matching ledger status in one write each', async () => {
+    const initial = record()
+    const harness = actionHarness(initial)
+    await expect(applyAssistantChangeHistory(harness.application, initial.undo, 'undo')).resolves.toEqual({
+      position: 'before',
+      alreadyApplied: false,
+    })
+    expect(harness.note.text).toBe('before')
+    expect(getAssistantChangeLedger(harness.note).records[0].status).toBe('undone')
+    expect(harness.changeItem).toHaveBeenCalledTimes(1)
+    await applyAssistantChangeHistory(harness.application, initial.undo, 'redo')
+    expect(harness.note.text).toBe('after')
+    expect(getAssistantChangeLedger(harness.note).records[0].status).toBe('applied')
+    expect(harness.changeItem).toHaveBeenCalledTimes(2)
+  })
+
+  it('coordinates toolbar undo with chat redo and preserves newer human edits', async () => {
+    const initial = record()
+    const harness = actionHarness(initial)
+    await undoAssistantChange(harness.application, initial.noteUuid, initial.changeId)
+    expect(harness.changeItem).toHaveBeenCalledTimes(1)
+    await applyAssistantChangeHistory(harness.application, initial.undo, 'redo')
+    expect(getAssistantChangeLedger(harness.note).records[0].status).toBe('applied')
+    ;(harness.note as unknown as { text: string }).text = 'human edit'
+    await expect(applyAssistantChangeHistory(harness.application, initial.undo, 'undo')).rejects.toThrow(
+      'changed again',
+    )
+    expect(harness.changeItem).toHaveBeenCalledTimes(2)
+    expect(harness.note.text).toBe('human edit')
+    expect(getAssistantChangeLedger(harness.note).records[0].status).toBe('applied')
+  })
+
+  it('repairs an already-undone ledger without changing previews or user timestamps', async () => {
+    const initial = record()
+    const harness = actionHarness(initial)
+    Object.assign(harness.note, {
+      title: initial.undo.before.title,
+      text: initial.undo.before.text,
+      preview_plain: 'new renderer preview',
+      preview_html: '<p>new renderer preview</p>',
+    })
+    await expect(applyAssistantChangeHistory(harness.application, initial.undo, 'undo')).resolves.toMatchObject({
+      alreadyApplied: true,
+    })
+    expect(getAssistantChangeLedger(harness.note).records[0].status).toBe('undone')
+    expect(harness.note.preview_plain).toBe('new renderer preview')
+    expect(harness.note.preview_html).toBe('<p>new renderer preview</p>')
+    expect(harness.changeItem.mock.calls[0][2]).toBe(MutationType.NoUpdateUserTimestamps)
+  })
+
+  it('keeps guarded legacy chat history usable without inventing a retained record', async () => {
+    const initial = record()
+    const harness = actionHarness(initial)
+    harness.appData.clear()
+    await applyAssistantChangeHistory(harness.application, initial.undo, 'undo')
+    expect(harness.note.text).toBe('before')
+    expect(getAssistantChangeLedger(harness.note).records).toEqual([])
+    await applyAssistantChangeHistory(harness.application, initial.undo, 'redo')
+    expect(harness.note.text).toBe('after')
+    expect(getAssistantChangeLedger(harness.note).records).toEqual([])
+  })
+
+  it('does not relabel an unrelated retained change with a different snapshot boundary', async () => {
+    const initial = record()
+    const harness = actionHarness(initial)
+    const change = { ...initial.undo, before: { ...initial.undo.before, previewPlain: 'different boundary' } }
+    await applyAssistantChangeHistory(harness.application, change, 'undo')
+    expect(getAssistantChangeLedger(harness.note).records[0].status).toBe('applied')
+  })
+
+  it('serializes a pending status write before chat undo without losing either mutation', async () => {
+    const initial = record()
+    const harness = actionHarness(initial)
+    const mutate = harness.changeItem.getMockImplementation()!
+    let release!: () => void
+    let entered!: () => void
+    const pending = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const writing = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    harness.changeItem.mockImplementationOnce(async (...args) => {
+      entered()
+      await pending
+      return mutate(...args)
+    })
+    const accept = acceptAssistantChange(harness.application, initial.noteUuid, initial.changeId)
+    await writing
+    const undo = applyAssistantChangeHistory(harness.application, initial.undo, 'undo')
+    await Promise.resolve()
+    expect(harness.changeItem).toHaveBeenCalledTimes(1)
+    release()
+    await Promise.all([accept, undo])
+    expect(harness.note.text).toBe('before')
+    expect(getAssistantChangeLedger(harness.note).records[0].status).toBe('undone')
+    expect(harness.changeItem).toHaveBeenCalledTimes(2)
+  })
+
   it('persists accepted and dismissed states without sending plaintext through an API request', async () => {
     const initial = record()
     const harness = actionHarness(initial)

@@ -5,6 +5,7 @@ import {
   FillItemContent,
   NoteContent,
   NoteMutator,
+  MutationType,
   NoteType,
   PayloadEmitSource,
   PayloadSource,
@@ -58,16 +59,9 @@ describe('AssistantTools note change presentation', () => {
         _mutationType: unknown,
         source: PayloadEmitSource,
       ) => {
-        const mutable = {
-          title: live.title,
-          text: live.text,
-          preview_plain: live.preview_plain,
-          preview_html: live.preview_html,
-          noteType: live.noteType,
-          editorIdentifier: live.editorIdentifier,
-        }
-        mutate(mutable as unknown as NoteMutator)
-        live = makeNote(mutable.title, mutable.text)
+        const mutable = new NoteMutator(live, _mutationType as MutationType)
+        mutate(mutable)
+        live = new SNNote(mutable.getResult())
         return live
       },
     )
@@ -98,13 +92,23 @@ describe('AssistantTools note change presentation', () => {
       tools.call('notes.update', { uuid: live.uuid, title: 'Final', text: 'first\nnew' }, 'call-1'),
     ).resolves.toMatchObject({ ok: true, note: { title: 'Final' } })
 
-    expect(flush).toHaveBeenCalledTimes(1)
+    expect(flush).toHaveBeenCalledTimes(2)
     expect(changeItem.mock.calls[0][3]).toBe(PayloadEmitSource.AssistantChanged)
     expect(changes).toHaveLength(1)
     expect(changes[0]).toMatchObject({ noteTitle: 'Final', addedLines: 2, removedLines: 2 })
     expect(changes[0].patch).toContain('-latest local line')
     expect(changes[0].patch).toContain('+new')
     expect(sync).toHaveBeenCalledTimes(1)
+    expect(getAssistantChangeLedger(live).records).toEqual([
+      expect.objectContaining({
+        source: expect.objectContaining({ toolCallId: 'call-1' }),
+        operations: [
+          expect.objectContaining({ summary: 'Updated note title' }),
+          expect.objectContaining({ summary: 'Updated note content' }),
+        ],
+        undo: expect.objectContaining({ before: changes[0].before, after: changes[0].after }),
+      }),
+    ])
   })
 
   it('rejects schema-blind body replacement for web-native structured editors', async () => {

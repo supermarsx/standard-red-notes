@@ -8,7 +8,14 @@ import {
   SNNote,
 } from '@standardnotes/snjs'
 import { WebApplication } from '@/Application/WebApplication'
-import { applyAssistantNoteChange, AssistantNoteChange, flushAssistantNoteEditors } from './assistantNoteChanges'
+import {
+  applyAssistantNoteChange,
+  AssistantNoteChange,
+  AssistantNoteChangeDirection,
+  AssistantNoteChangeResult,
+  AssistantNoteSnapshot,
+  flushAssistantNoteEditors,
+} from './assistantNoteChanges'
 import { sanitizeAssistantNoteChange } from './assistantChatHistory'
 import {
   AssistantStructuralEffectLocator,
@@ -480,6 +487,71 @@ export function dismissAssistantChange(
   return persistAssistantChangeStatus(application, noteUuid, changeId, 'dismissed')
 }
 
+const sameSnapshot = (a: AssistantNoteSnapshot, b: AssistantNoteSnapshot): boolean =>
+  a.title === b.title &&
+  a.text === b.text &&
+  a.previewPlain === b.previewPlain &&
+  a.previewHtml === b.previewHtml &&
+  a.noteType === b.noteType &&
+  a.editorIdentifier === b.editorIdentifier
+
+function matchesHistoryChange(record: AssistantChangeRecord, change: AssistantNoteChange): boolean {
+  return (
+    record.noteUuid === change.noteUuid &&
+    sameSnapshot(record.undo.before, change.before) &&
+    sameSnapshot(record.undo.after, change.after)
+  )
+}
+
+/** Caller already holds this note's ledger queue; never reacquire it here. */
+async function applyAssistantChangeHistoryUnlocked(
+  application: WebApplication,
+  change: AssistantNoteChange,
+  direction: AssistantNoteChangeDirection,
+  changeId?: string,
+): Promise<AssistantNoteChangeResult> {
+  await flushAssistantNoteEditors(application, change.noteUuid)
+  const note = application.items.findItem<SNNote>(change.noteUuid)
+  const retained =
+    note &&
+    getAssistantChangeLedger(note).records.find(
+      (record) => (changeId === undefined || record.changeId === changeId) && matchesHistoryChange(record, change),
+    )
+  const status: AssistantChangeStatus = direction === 'undo' ? 'undone' : 'applied'
+  return applyAssistantNoteChange(
+    application,
+    change,
+    direction,
+    retained
+      ? (mutator, current) => {
+          const ledger = getAssistantChangeLedger(current)
+          mutator.setAppDataItem(NoteAssistantChangesKey, {
+            version: 1,
+            records: trimLedger(
+              ledger.records.map((record) => {
+                if (record.changeId === retained.changeId && matchesHistoryChange(record, change)) {
+                  return { ...record, status, updatedAt: new Date().toISOString() }
+                }
+                return record
+              }),
+            ),
+          } satisfies AssistantChangeLedgerEnvelope)
+        }
+      : undefined,
+  )
+}
+
+/** Chat history may outlive the retained ledger; legacy snapshots still use guarded CAS. */
+export function applyAssistantChangeHistory(
+  application: WebApplication,
+  change: AssistantNoteChange,
+  direction: AssistantNoteChangeDirection,
+): Promise<AssistantNoteChangeResult> {
+  return withAssistantChangeLedgerMutation(application, change.noteUuid, () =>
+    applyAssistantChangeHistoryUnlocked(application, change, direction),
+  )
+}
+
 export async function undoAssistantChange(
   application: WebApplication,
   noteUuid: string,
@@ -497,7 +569,12 @@ export async function undoAssistantChange(
     if (record.status === 'undone') {
       return record
     }
-    await applyAssistantNoteChange(application, record.undo, 'undo')
-    return persistAssistantChangeStatusUnlocked(application, noteUuid, changeId, 'undone')
+    await applyAssistantChangeHistoryUnlocked(application, record.undo, 'undo', changeId)
+    const current = application.items.findItem<SNNote>(noteUuid)
+    const updated = current && getAssistantChangeLedger(current).records.find((entry) => entry.changeId === changeId)
+    if (!updated) {
+      throw new Error('This assistant change is no longer in the retained note history.')
+    }
+    return updated
   })
 }
