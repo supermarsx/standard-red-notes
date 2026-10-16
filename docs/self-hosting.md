@@ -225,6 +225,23 @@ request caps), and the optional MCP bridge (`STANDARD_RED_NOTES_*`). See
 `.env.example` for the full list and [Operations hardening](operations-hardening.md)
 for the database, Redis, operation-limit, and image-pinning model.
 
+**Assistant chat run coordination.** Signed-in chat clients coordinate active
+runs through account-scoped Redis leases: a 30-second lease renewed every
+10 seconds. Redis failure refuses a coordinated run instead of silently
+allowing another device to start it. No extra setting is required. In server
+proxy mode, requests carrying a chat lease also reserve one active generation;
+even the same owner cannot send two overlapping generations. The server keeps
+that reservation while the upstream runs, aborts on lost ownership, and bounds
+each protected generation to five minutes, including an upstream iterator that
+stops responding. Legacy requests without a chat proof keep their existing
+behavior. Direct connections rely on participating clients for coordination;
+the server cannot enforce or cancel a request sent directly to another provider.
+
+Abandoned chat fence counters expire after 90 days; opaque lease identities
+still reject stale renewals and releases after that counter retention resets.
+Stopping a server-proxied run signals cancellation to its provider, but does not
+promise that an external provider will stop work or reverse billing immediately.
+
 **Email delivery topology and reliability.**
 
 **Nothing is configured out of the box, and until it is, no notification leaves

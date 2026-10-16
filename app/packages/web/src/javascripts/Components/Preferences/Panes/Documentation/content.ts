@@ -602,7 +602,7 @@ export const DOC_CATEGORIES: DocCategory[] = [
           },
           {
             type: 'paragraph',
-            text: "Browser print, DOCX and ODT support multiple columns; PDF export currently requires one column and reports an error for a multicolumn layout. Paginated exports accept physical margin units (mm, cm, in, pt, pc, px) or zero. Headers, footers and page numbers apply to paginated exports; browser printing uses the browser's own header and footer options. The outline and bookmark settings affect only the editor view.",
+            text: "Browser print, DOCX and ODT support multiple columns; PDF export currently requires one column and reports an error for a multicolumn layout. Paginated exports accept physical margin units (mm, cm, in, pt, pc, px) or zero. Headers, footers and page numbers apply to paginated exports; browser printing uses the browser's own header and footer options. The outline and bookmark settings affect only the editor view. Layout also offers visual line numbers on the left and a clickable note minimap on the right. Both start off, follow page-layout defaults, and stay out of exports. Line numbers follow visible wrapped text and folded sections.",
           },
         ],
         related: ['editors/mermaid', 'editors/checklists', 'editors/note-types'],
@@ -1182,7 +1182,7 @@ export const DOC_CATEGORIES: DocCategory[] = [
   {
     id: 'assistant',
     title: 'AI assistant',
-    icon: 'star-variant-filled',
+    icon: 'assistant',
     description: 'Chat about and act on your notes, optionally fully local.',
     pages: [
       {
@@ -1193,6 +1193,14 @@ export const DOC_CATEGORIES: DocCategory[] = [
           {
             type: 'paragraph',
             text: 'Open the assistant from the toolbar to chat about your notes and take actions on them — search, summarize, draft new notes, edit existing ones, and help with organization.',
+          },
+          {
+            type: 'paragraph',
+            text: 'Signed-in chat history is encrypted in your account and follows ordinary item sync across tabs, browsers and devices, including socket delivery when available. Opening a remote chat does not start another AI run. History lists conversations without stealing focus; middle-click hides a chat tab while its running work continues. Delete removes its synced history and leaves an encrypted deletion marker so an older checkpoint cannot restore it.',
+          },
+          {
+            type: 'paragraph',
+            text: 'Context and tool permissions sit above the message input. Context can include the current text selection instead of the whole note. Usage below the input shows provider-reported input and output tokens. Context-window percentage appears only when the provider reports its limit; an unavailable limit is never guessed. Displayed chat token totals cover the currently open view.',
           },
           {
             type: 'callout',
@@ -1420,6 +1428,14 @@ export const DOC_CATEGORIES: DocCategory[] = [
           {
             type: 'paragraph',
             text: 'When an active collaborator is above or below the visible editor, a small 22-pixel colored arrow appears at that edge. Hover to see their name, or click to jump to their position without moving your own caret. The editor never follows them automatically.',
+          },
+          {
+            type: 'paragraph',
+            text: 'Review opens the comments sidebar. Each new comment chooses its own visibility and target: only you or note members, attached to the whole note, a checklist item, selected text or its heading section. Replies inherit their thread. Changing draft options does not filter or change stored comments. The private-comment explanation can be dismissed permanently. Type @self to refer to your signed-in account. Assistant comment tools use the same access and confirmation rules; notifying other members is opt-in.',
+          },
+          {
+            type: 'paragraph',
+            text: 'Selected-text and section comments capture an exact quote and position. If the document changes before submission, the draft stays available for recapture. If later edits move that quote away from its recorded position, its visual marker is omitted rather than attached to unrelated text.',
           },
           {
             type: 'callout',
