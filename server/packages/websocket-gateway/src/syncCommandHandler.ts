@@ -502,6 +502,8 @@ export interface SyncApiRpcAdapter {
   ready(): boolean
   operations(): readonly Extract<SyncNegotiatedOperation, 'API_RPC' | 'STREAM_ASSISTANT'>[]
   execute(input: SyncApiRpcRequest, signal: AbortSignal): Promise<SyncApiRpcResponse>
+  /** Per-connection resources only; called after no new frames can be admitted. */
+  disconnect?(): Promise<void>
 }
 
 export type SyncInviteEventReplay = {
@@ -991,6 +993,7 @@ export class SyncCommandHandler {
     this.lifecycleAbort.abort()
     this.abortActiveOperations()
     this.abortActiveRpcs('SOCKET_CLOSED')
+    this.trackCleanup(this.options.apiRpc?.disconnect?.() ?? Promise.resolve())
     this.stopInviteSubscription()
     this.collaborationEpochDiscovery = undefined
     this.filesSession?.disconnect()
@@ -2666,6 +2669,7 @@ export class SyncCommandHandler {
     this.lifecycleAbort.abort()
     this.abortActiveOperations()
     this.abortActiveRpcs(code)
+    this.trackCleanup(this.options.apiRpc?.disconnect?.() ?? Promise.resolve())
     this.stopInviteSubscription()
     this.filesSession?.disconnect()
     this.trackCleanup(this.releaseActiveLease())

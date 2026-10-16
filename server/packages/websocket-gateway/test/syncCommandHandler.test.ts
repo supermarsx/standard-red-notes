@@ -355,6 +355,52 @@ async function authenticatedHandler(
 }
 
 describe('SyncCommandHandler', () => {
+  it('also releases connection-owned RPC resources when a protocol failure closes the socket', async () => {
+    const disconnect = vi.fn().mockResolvedValue(undefined)
+    const { handler, socket } = await authenticatedHandler({
+      apiRpc: {
+        idempotencyScope: 'shared-durable',
+        ready: () => true,
+        operations: () => ['API_RPC'],
+        execute: vi.fn(),
+        disconnect,
+      },
+    })
+    handler.enqueue('not json', 8)
+    await vi.waitFor(() => expect(socket.closes).toHaveLength(1))
+    await handler.stop()
+    expect(disconnect).toHaveBeenCalledTimes(1)
+  })
+  it('releases connection-owned RPC resources once and waits for cleanup during shutdown', async () => {
+    let complete!: () => void
+    const disconnect = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          complete = resolve
+        }),
+    )
+    const { handler } = await authenticatedHandler({
+      apiRpc: {
+        idempotencyScope: 'shared-durable',
+        ready: () => true,
+        operations: () => ['API_RPC'],
+        execute: vi.fn(),
+        disconnect,
+      },
+    })
+    handler.disconnect()
+    handler.disconnect()
+    expect(disconnect).toHaveBeenCalledTimes(1)
+    let stopped = false
+    const stop = handler.stop().then(() => {
+      stopped = true
+    })
+    await Promise.resolve()
+    expect(stopped).toBe(false)
+    complete()
+    await stop
+    expect(stopped).toBe(true)
+  })
   it('reports a proved fence refusal without retaining an uncertain backend failure', async () => {
     const backend: SyncCommandBackendAdapter = {
       ready: () => true,

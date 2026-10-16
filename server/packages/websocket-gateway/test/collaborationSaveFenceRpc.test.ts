@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { withCollaborationSaveFenceRpc } from '../src/collaborationSaveFenceRpc.js'
-import type { SyncApiRpcAdapter, SyncApiRpcRequest } from '../src/syncCommandHandler.js'
+import type { SyncApiRpcAdapter, SyncApiRpcRequest, SyncApiRpcResponse } from '../src/syncCommandHandler.js'
 
 const request = (): SyncApiRpcRequest => ({
   identity: {
@@ -29,6 +29,129 @@ const adapter = (): SyncApiRpcAdapter => ({
   execute: vi.fn().mockResolvedValue({ status: 200, body: { ordinary: true } }),
 })
 describe('collaboration fence RPC authorization', () => {
+  const grant = () => ({
+    status: 200,
+    body: { room: (request().body as { room: string }).room, token: 'a'.repeat(64), expiresAt: Date.now() + 20_000 },
+  })
+
+  it('releases only its exact server-issued proof once when the socket closes', async () => {
+    const dispatch = vi.fn().mockResolvedValue(grant())
+    const validate = vi.fn().mockResolvedValue(true)
+    const rpc = withCollaborationSaveFenceRpc(adapter(), validate, dispatch)
+    await rpc.execute(request(), new AbortController().signal)
+    const forwarded = dispatch.mock.calls[0][0]
+    expect(forwarded.leaseId).toMatch(/^[a-f0-9]{64}$/)
+    expect(validate.mock.calls[0][0].leaseId).toBe('editor-1')
+    await rpc.disconnect!()
+    await rpc.disconnect!()
+    expect(dispatch).toHaveBeenCalledTimes(2)
+    expect(dispatch.mock.calls[1][0]).toEqual({ ...forwarded, action: 'release', token: 'a'.repeat(64) })
+    await expect(rpc.execute(request(), new AbortController().signal)).rejects.toThrow('closed')
+  })
+
+  it('binds the internal lease to the connection, so delayed old cleanup cannot release its replacement', async () => {
+    const dispatch = vi.fn().mockResolvedValue(grant())
+    const old = withCollaborationSaveFenceRpc(adapter(), async () => true, dispatch)
+    const replacement = withCollaborationSaveFenceRpc(adapter(), async () => true, dispatch)
+    await old.execute(request(), new AbortController().signal)
+    await replacement.execute(request(), new AbortController().signal)
+    const oldLease = dispatch.mock.calls[0][0].leaseId
+    const newLease = dispatch.mock.calls[1][0].leaseId
+    expect(oldLease).not.toBe(newLease)
+    await old.disconnect!()
+    expect(dispatch.mock.calls[2][0].leaseId).toBe(oldLease)
+    await replacement.disconnect!()
+    expect(dispatch.mock.calls[3][0].leaseId).toBe(newLease)
+  })
+
+  it('cleans up a claim that committed after its socket disconnected', async () => {
+    let complete!: (value: SyncApiRpcResponse) => void
+    const dispatch = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<SyncApiRpcResponse>((resolve) => {
+            complete = resolve
+          }),
+      )
+      .mockResolvedValue({ status: 200 })
+    const rpc = withCollaborationSaveFenceRpc(adapter(), async () => true, dispatch)
+    const claim = rpc.execute(request(), new AbortController().signal)
+    await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1))
+    await rpc.disconnect!()
+    complete(grant())
+    await claim
+    expect(dispatch).toHaveBeenCalledTimes(2)
+    expect(dispatch.mock.calls[1][0]).toMatchObject({ action: 'release', token: 'a'.repeat(64) })
+  })
+
+  it('does not forget a renewed proof when an older release finishes later', async () => {
+    let complete!: (value: SyncApiRpcResponse) => void
+    const dispatch = vi.fn().mockResolvedValue(grant())
+    const rpc = withCollaborationSaveFenceRpc(adapter(), async () => true, dispatch)
+    await rpc.execute(request(), new AbortController().signal)
+    dispatch.mockImplementationOnce(
+      () =>
+        new Promise<SyncApiRpcResponse>((resolve) => {
+          complete = resolve
+        }),
+    )
+    const release = rpc.execute(
+      { ...request(), body: { ...(request().body as object), action: 'release', token: 'a'.repeat(64) } },
+      new AbortController().signal,
+    )
+    await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(2))
+    dispatch.mockResolvedValueOnce({ ...grant(), body: { ...grant().body, token: 'b'.repeat(64) } })
+    await rpc.execute(request(), new AbortController().signal)
+    complete({ status: 200, body: { expiresAt: 0 } })
+    await release
+    await rpc.disconnect!()
+    expect(dispatch.mock.calls.at(-1)![0]).toMatchObject({ action: 'release', token: 'b'.repeat(64) })
+  })
+
+  it('never releases an unsuccessful or malformed claim, and contains cleanup failures', async () => {
+    for (const response of [
+      { status: 409, body: grant().body },
+      { status: 200, body: { token: 'invalid' } },
+    ]) {
+      const dispatch = vi.fn().mockResolvedValue(response)
+      const rpc = withCollaborationSaveFenceRpc(adapter(), async () => true, dispatch)
+      await rpc.execute(request(), new AbortController().signal)
+      await rpc.disconnect!()
+      expect(dispatch).toHaveBeenCalledTimes(1)
+    }
+    const dispatch = vi.fn().mockResolvedValueOnce(grant()).mockRejectedValue(new Error('offline'))
+    const rpc = withCollaborationSaveFenceRpc(adapter(), async () => true, dispatch)
+    await rpc.execute(request(), new AbortController().signal)
+    await expect(rpc.disconnect!()).resolves.toBeUndefined()
+  })
+
+  it('keeps the newest proof when concurrent backend responses arrive out of order', async () => {
+    let complete!: (value: SyncApiRpcResponse) => void
+    const older = grant()
+    const newer = {
+      ...grant(),
+      body: { ...grant().body, token: 'b'.repeat(64), expiresAt: older.body.expiresAt + 1_000 },
+    }
+    const dispatch = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<SyncApiRpcResponse>((resolve) => {
+            complete = resolve
+          }),
+      )
+      .mockResolvedValue(newer)
+    const rpc = withCollaborationSaveFenceRpc(adapter(), async () => true, dispatch)
+    const pending = rpc.execute(request(), new AbortController().signal)
+    await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1))
+    await rpc.execute(request(), new AbortController().signal)
+    complete(older)
+    await pending
+    await rpc.disconnect!()
+    expect(dispatch.mock.calls.at(-1)![0]).toMatchObject({ action: 'release', token: newer.body.token })
+  })
+
   it('allows a freshly authenticated exact-token release after the editor lease ended, preserving gateway identities', async () => {
     const validate = vi.fn().mockResolvedValue(false)
     const authorize = vi.fn().mockResolvedValue(true)
