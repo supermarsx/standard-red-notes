@@ -1,3 +1,4 @@
+import { normalizeAssistantAttachments, AssistantAttachment } from './attachments'
 /**
  * Device-local, account-scoped assistant transcript storage.
  *
@@ -61,6 +62,7 @@ export type PersistedAssistantMessage = {
   id: string
   text: string
   steered?: boolean
+  attachments?: AssistantAttachment[]
   activities?: PersistedAssistantToolActivity[]
 }
 
@@ -421,6 +423,10 @@ const sanitizeMessage = (
     return undefined
   }
 
+  const attachments = message.attachments === undefined ? undefined : normalizeAssistantAttachments(message.attachments)
+  if (message.attachments !== undefined && (message.kind !== 'user' || !attachments)) {
+    return undefined
+  }
   const rawActivities = Array.isArray(message.activities)
     ? boundUntrustedInput
       ? message.activities.slice(-MAX_UNTRUSTED_INPUT_ACTIVITIES)
@@ -436,6 +442,7 @@ const sanitizeMessage = (
     kind: message.kind,
     id,
     text: message.text.slice(0, MAX_MESSAGE_CHARS),
+    ...(attachments?.length ? { attachments } : {}),
     ...(typeof message.steered === 'boolean' ? { steered: message.steered } : {}),
     ...(activities.length > 0 ? { activities } : {}),
   }

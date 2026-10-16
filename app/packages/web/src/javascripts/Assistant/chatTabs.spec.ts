@@ -97,6 +97,30 @@ describe('persisted chat tabs', () => {
     expect(tabs[0].id).toBe('old')
   })
 
+  it('round-trips only closed conversation modes in encrypted metadata and preserves legacy absence', async () => {
+    const { storage, values } = createStorage()
+    const modes = ['chat', 'agent', 'plan', 'research', 'deep-research'] as const
+    const tabs = modes.map((conversationMode, index) => ({
+      id: `mode-${index}`,
+      title: 'Conversation',
+      userRenamed: false,
+      conversationMode,
+    }))
+    await persistTabs(storage, 'mode-roundtrip', tabs)
+    expect(readPersistedTabs(storage, 'mode-roundtrip')).toEqual(tabs)
+    expect(JSON.stringify(localStorage)).not.toContain('conversationMode')
+    values.set(assistantChatTabsStorageKey('bad-mode'), {
+      version: 1,
+      tabs: [{ ...tabs[0], conversationMode: 'run-arbitrary-code' }],
+    })
+    expect(readPersistedTabsResult(storage, 'bad-mode')).toEqual({ status: 'error' })
+    values.set(assistantChatTabsStorageKey('old-mode'), {
+      version: 1,
+      tabs: [{ id: 'old', title: 'Legacy', userRenamed: false }],
+    })
+    expect(readPersistedTabs(storage, 'old-mode')?.[0]).not.toHaveProperty('conversationMode')
+  })
+
   it('isolates the retained dock from the separately mounted assistant window', () => {
     expect(assistantChatWorkspaceScope('account-a', false)).toBe('account-a:dock')
     expect(assistantChatWorkspaceScope('account-a', true)).toBe('account-a:window')

@@ -14,6 +14,8 @@ export type AiProfileProviderKind = 'anthropic' | 'openai-compatible' | 'ollama'
 
 /** A profile as returned by the masked admin server-settings view. */
 export type MaskedAiProfile = {
+  contextWindowTokens?: number
+  supportsImageInputs?: boolean
   id: string
   name: string
   provider: AiProfileProviderKind
@@ -34,6 +36,8 @@ export type MaskedAiProfile = {
 
 /** A profile as sent in a PUT server-settings body (secret handling per header). */
 export type AiProfilePayload = {
+  contextWindowTokens?: number
+  supportsImageInputs?: boolean
   id: string
   name: string
   provider: AiProfileProviderKind
@@ -52,6 +56,8 @@ export type AiProfilePayload = {
 
 /** Editable row state in the UI: masked fields + transient key edits. */
 export type ProfileRow = {
+  contextWindowTokens?: string
+  supportsImageInputs?: boolean
   id: string
   name: string
   provider: AiProfileProviderKind
@@ -181,6 +187,8 @@ export const generateProfileId = (): string => {
 
 /** Convert a masked server profile into an editable row. */
 export const maskedProfileToRow = (profile: MaskedAiProfile): ProfileRow => ({
+  contextWindowTokens: optionalNumberInput(profile.contextWindowTokens),
+  supportsImageInputs: profile.supportsImageInputs === true,
   id: profile.id,
   name: profile.name,
   provider: profile.provider,
@@ -200,6 +208,7 @@ export const maskedProfileToRow = (profile: MaskedAiProfile): ProfileRow => ({
 
 /** A blank new-profile row with a fresh id, defaulting to OpenAI-compatible. */
 export const emptyProfileRow = (): ProfileRow => ({
+  supportsImageInputs: false,
   id: generateProfileId(),
   name: '',
   provider: 'openai-compatible',
@@ -263,6 +272,16 @@ export const validateProfileRow = (row: ProfileRow, backendProfiles: ProfileBack
   if (topPError) {
     return { ok: false, error: topPError }
   }
+  const contextWindowError = validateOptionalNumber(
+    row.contextWindowTokens ?? '',
+    'Context window tokens',
+    1,
+    1_000_000_000,
+    true,
+  )
+  if (contextWindowError) {
+    return { ok: false, error: contextWindowError }
+  }
   const maxOutputTokensError = validateOptionalNumber(
     row.maxOutputTokens,
     `${row.name || 'Profile'} maximum output tokens`,
@@ -302,6 +321,7 @@ export const validateProfileRows = (
 export const rowToPayload = (row: ProfileRow): AiProfilePayload => {
   const option = providerOption(row.provider)
   const payload: AiProfilePayload = {
+    ...(typeof row.supportsImageInputs === 'boolean' ? { supportsImageInputs: row.supportsImageInputs } : {}),
     id: row.id,
     name: row.name.trim(),
     provider: row.provider,
@@ -325,6 +345,10 @@ export const rowToPayload = (row: ProfileRow): AiProfilePayload => {
     payload.topP = topP
   }
   const maxOutputTokens = parsedOptionalNumber(row.maxOutputTokens)
+  const contextWindowTokens = parsedOptionalNumber(row.contextWindowTokens ?? '')
+  if (contextWindowTokens !== undefined) {
+    payload.contextWindowTokens = contextWindowTokens
+  }
   if (maxOutputTokens !== undefined) {
     payload.maxOutputTokens = maxOutputTokens
   }

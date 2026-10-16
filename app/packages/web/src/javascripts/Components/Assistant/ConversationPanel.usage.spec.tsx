@@ -16,7 +16,10 @@ jest.mock('@/Assistant/assistantContextSource', () => ({
   }),
   resolveContextNoteUuids: () => [],
 }))
-jest.mock('@/Assistant/selectionActions', () => ({ getSelectionAIAvailability: () => ({ available: false }) }))
+jest.mock('@/Assistant/selectionActions', () => ({
+  getSelectionAIAvailability: () => ({ available: false }),
+  resolveActiveProfileOverrides: () => ({ baseURL: '', model: '', sampling: {} }),
+}))
 jest.mock('../Panes/ResponsivePaneProvider', () => ({ useResponsiveAppPane: () => ({ presentPane: jest.fn() }) }))
 jest.mock('./ContextSelector', () => ({ __esModule: true, default: () => null }))
 jest.mock('@/Components/Icon/Icon', () => ({ __esModule: true, default: () => null }))
@@ -36,12 +39,14 @@ it('keeps the token strip below the composer and ignores the previous account’
       observer = callback
       return () => undefined
     },
-    assistantConfigRequest: jest.fn(
-      () =>
-        new Promise((resolve) => {
-          resolveUsage = resolve
-        }),
-    ),
+    assistantConfigRequest: jest.fn((path: string) => {
+      if (path === '/v1/assistant/config') {
+        return Promise.resolve({ supportsImageInputs: false })
+      }
+      return new Promise((resolve) => {
+        resolveUsage = resolve
+      })
+    }),
     items: { addObserver: () => () => undefined },
     itemListController: { selectedItemsCount: 0 },
     itemControllerGroup: { itemControllers: [], addActiveControllerChangeObserver: () => () => undefined },
@@ -61,6 +66,7 @@ it('keeps the token strip below the composer and ignores the previous account’
       ),
     )
     const input = container.querySelector('textarea')!
+    act(() => container.querySelector<HTMLButtonElement>('[aria-label="Usage details"]')!.click())
     const meter = container.querySelector('[aria-label="Chat token usage"]')!
     expect(input.compareDocumentPosition(meter) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     await act(async () => {

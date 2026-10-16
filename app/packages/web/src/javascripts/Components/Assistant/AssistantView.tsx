@@ -7,6 +7,8 @@ import { ApplicationEvent } from '@standardnotes/snjs'
 import { WebApplication } from '@/Application/WebApplication'
 import Icon from '@/Components/Icon/Icon'
 import { useResponsiveAppPane } from '../Panes/ResponsivePaneProvider'
+import { AppPaneId } from '../Panes/AppPaneMetadata'
+import { openAssistantEditorTab } from '@/Assistant/assistantEditorNavigation'
 import { openOrFocusAssistantWindow } from '@/Assistant/assistantWindow'
 import {
   ChatTab,
@@ -23,8 +25,6 @@ import {
 } from '@/Assistant/chatTabs'
 import ConversationPanel from './ConversationPanel'
 import { AssistantSyncedChats, type SyncedChat } from '@/Assistant/assistantSyncedChats'
-import DeepResearchPanel from './DeepResearchPanel'
-import ResearchModePanel from './ResearchModePanel'
 import { AssistantHistoryPanel, AssistantRecentChats, assistantWorkTabIcon } from './AssistantHistoryPanel'
 import {
   clearAssistantChatHistoryDeletionTombstone,
@@ -49,6 +49,10 @@ type Props = {
   id: string
   /** When true the view is rendered as a standalone popped-out window. */
   standalone?: boolean
+  /** Independent retention scope when mounted inside the notes tab surface. */
+  editorTab?: boolean
+  focusChatId?: string
+  focusRequestRevision?: number
   /** Extra overlay content (e.g. the panel resize handle) rendered inside the root. */
   children?: ReactNode
 }
@@ -67,11 +71,19 @@ const createTab = (kind: AssistantWorkTabKind = 'chat', number = 1): ChatTab => 
 type MenuState = { tabId: string; x: number; y: number }
 type RoutedDirective = { directive: AssistantChatDirective; targetTabId: string }
 
-const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, className, id, standalone, children }, ref) => {
+const AssistantView = forwardRef<HTMLDivElement, Props>((props, ref) => {
+  const { application, className, id, standalone, editorTab, focusChatId, focusRequestRevision, children } = props
   const { dismissLastPane } = useResponsiveAppPane()
   const accountScope = application.sessions.getUser()?.uuid ?? `anonymous:${application.identifier}`
   const browsingContextId = useRef(getAssistantBrowsingContextId()).current
-  const chatAccountScope = assistantChatWorkspaceScope(accountScope, standalone === true, browsingContextId)
+  const chatAccountScope =
+    assistantChatWorkspaceScope(accountScope, standalone === true, browsingContextId) + (editorTab ? ':editor' : '')
+  const dockOpen = application.paneController?.panes?.includes(AppPaneId.Assistant) === true
+  const editorAssistantFocused = application.paneController?.activeViewTabId === AppPaneId.Assistant
+  const receivesDirectives = editorTab
+    ? editorAssistantFocused && !dockOpen
+    : standalone || !editorAssistantFocused || dockOpen
+  const appliedFocusRequest = useRef<string | undefined>(undefined)
 
   const initialTab = useRef(createTab()).current
   const [tabs, setTabs] = useState<ChatTab[]>([initialTab])
@@ -318,6 +330,9 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
               const removed = new Set([...known].filter((chatId) => !nextIds.has(chatId)))
               const added = next.filter((chat) => !known.has(chat.tab.id)).map((chat) => chat.tab.id)
               const visibleIds = new Set(tabsRef.current.map((tab) => tab.id))
+              const replacement = removed.has(activeTabIdRef.current)
+                ? (tabsRef.current.find((tab) => !removed.has(tab.id)) ?? next[0]?.tab ?? createTab())
+                : undefined
               known = nextIds
               setSharedChats(next)
               setTabs((previous) => {
@@ -329,18 +344,18 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
                   ...next.filter((chat) => !ids.has(chat.tab.id)).map((chat) => chat.tab),
                 ]
                 if (!merged.length) {
-                  merged.push(createTab())
+                  merged.push(replacement ?? createTab())
                 }
-                if (removed.has(activeTabIdRef.current)) {
-                  setActiveTabId(merged[0].id)
+                if (replacement) {
+                  setActiveTabId(replacement.id)
                 }
                 return merged
               })
               // New remote chats appear in History without stealing focus.
               setClosedTabIds((previous) => [
                 ...new Set([
-                  ...previous.filter((chatId) => !removed.has(chatId)),
-                  ...added.filter((chatId) => !visibleIds.has(chatId)),
+                  ...previous.filter((chatId) => !removed.has(chatId) && chatId !== replacement?.id),
+                  ...added.filter((chatId) => !visibleIds.has(chatId) && chatId !== replacement?.id),
                 ]),
               ])
             } catch {
@@ -531,7 +546,12 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
   }, [loadedChatAccountScope, chatAccountScope, workspaceLocked, activeTabId, historyTabId])
 
   useEffect(() => {
-    if (workspaceLocked || workspacePersistence === 'pending' || loadedChatAccountScope !== chatAccountScope) {
+    if (
+      !receivesDirectives ||
+      workspaceLocked ||
+      workspacePersistence === 'pending' ||
+      loadedChatAccountScope !== chatAccountScope
+    ) {
       return
     }
     return subscribeAssistantDirectives(accountScope, (directive) => {
@@ -542,7 +562,6 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
       let target = current.find(
         (tab) =>
           tab.id === activeTabIdRef.current &&
-          (!tab.kind || tab.kind === 'chat') &&
           assistantDirectiveContextMatches(chatContextsRef.current.get(tab.id), directive),
       )
       if (!target) {
@@ -583,6 +602,33 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
     workspacePersistence,
     closedTabIds,
     checkpointMetadata,
+    receivesDirectives,
+  ])
+
+  useEffect(() => {
+    const requestKey = `${accountScope}:${focusChatId}:${focusRequestRevision ?? 0}`
+    if (
+      !editorTab ||
+      !focusChatId ||
+      appliedFocusRequest.current === requestKey ||
+      workspaceLocked ||
+      loadedChatAccountScope !== chatAccountScope ||
+      !tabs.some((tab) => tab.id === focusChatId)
+    ) {
+      return
+    }
+    appliedFocusRequest.current = requestKey
+    setClosedTabIds((previous) => previous.filter((id) => id !== focusChatId))
+    setActiveTabId(focusChatId)
+  }, [
+    accountScope,
+    editorTab,
+    focusChatId,
+    focusRequestRevision,
+    workspaceLocked,
+    loadedChatAccountScope,
+    chatAccountScope,
+    tabs,
   ])
 
   // Persist the tab strip (id + title + userRenamed) so it survives a reload.
@@ -689,9 +735,20 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
 
   const closeTab = useCallback(
     (tabId: string) => {
+      const freshChat = () => {
+        const next = createTab()
+        checkpointMetadata(next)
+        tabsRef.current = [...tabsRef.current, next]
+        setTabs(tabsRef.current)
+        setActiveTabId(next.id)
+      }
       if (tabId === historyTabId) {
         setHistoryOpen(false)
-        resumeTab((visibleTabs[0] ?? tabs[0]).id)
+        if (visibleTabs[0]) {
+          resumeTab(visibleTabs[0].id)
+        } else {
+          freshChat()
+        }
         return
       }
       const visible = tabs.filter((tab) => !closedTabIds.includes(tab.id))
@@ -699,13 +756,8 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
         return
       }
       if (visible.length <= 1) {
-        const only = visible[0]
-        if (!only.kind || only.kind === 'chat') {
-          return
-        }
         setClosedTabIds((previous) => (previous.includes(tabId) ? previous : [...previous, tabId]))
-        setHistoryOpen(true)
-        setActiveTabId(historyTabId)
+        freshChat()
         return
       }
       const index = visible.findIndex((tab) => tab.id === tabId)
@@ -715,7 +767,7 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
         resumeTab((remaining[index] ?? remaining[index - 1] ?? remaining[0]).id)
       }
     },
-    [activeTabId, closedTabIds, tabs, historyTabId, visibleTabs, resumeTab],
+    [activeTabId, closedTabIds, tabs, historyTabId, visibleTabs, resumeTab, checkpointMetadata],
   )
 
   const restoreLastClosedTab = useCallback(() => {
@@ -883,6 +935,26 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
           <span className="text-base font-bold">Assistant</span>
         </div>
         <div className="flex items-center gap-1">
+          {!editorTab && (
+            <button
+              className="hover:bg-contrast rounded p-1"
+              onClick={() => openAssistantEditorTab(application, activeTabId)}
+              aria-label="Open Assistant in editor tab"
+              title={
+                application.sessions.getUser()?.uuid
+                  ? 'Open the current conversation alongside note tabs'
+                  : 'Sign in to open a synced conversation alongside note tabs'
+              }
+              disabled={
+                workspaceLocked ||
+                workspacePersistence === 'pending' ||
+                activeTabId === historyTabId ||
+                !application.sessions.getUser()?.uuid
+              }
+            >
+              <Icon type="window" />
+            </button>
+          )}
           <button
             className={classNames(
               'hover:bg-contrast rounded p-1',
@@ -899,24 +971,6 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
           >
             <Icon type="history" />
           </button>
-          <button
-            className="hover:bg-contrast rounded p-1"
-            onClick={() => addTab('deep-research')}
-            aria-label="Deep research"
-            title="Start a new deep research investigation"
-            disabled={workspaceLocked || workspacePersistence === 'pending' || tabs.length >= MAX_CHAT_TABS}
-          >
-            <Icon type="search" />
-          </button>
-          <button
-            className="hover:bg-contrast rounded p-1"
-            onClick={() => addTab('research')}
-            aria-label="Research mode"
-            title="Start a new research investigation"
-            disabled={workspaceLocked || workspacePersistence === 'pending' || tabs.length >= MAX_CHAT_TABS}
-          >
-            <Icon type="notes" />
-          </button>
           {!standalone && (
             <button
               className="hover:bg-contrast rounded p-1"
@@ -931,7 +985,13 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
           {!standalone && (
             <button
               className="hover:bg-contrast rounded p-1"
-              onClick={() => dismissLastPane()}
+              onClick={() => {
+                if (editorTab) {
+                  application.paneController.closeViewTab(AppPaneId.Assistant)
+                } else {
+                  dismissLastPane()
+                }
+              }}
               aria-label="Close assistant"
               title="Close assistant"
             >
@@ -1073,20 +1133,19 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
                   <Icon type="chevron-down" size="small" />
                 </button>
               )}
-              {!isEditing &&
-                (isHistory || visibleTabs.length > 1 || tab.kind === 'research' || tab.kind === 'deep-research') && (
-                  <button
-                    className="hover:bg-contrast rounded p-0.5"
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      closeTab(tab.id)
-                    }}
-                    aria-label={isHistory ? 'Close history' : 'Close chat'}
-                    title="Hide chat; running work continues in the background"
-                  >
-                    <Icon type="close" size="small" />
-                  </button>
-                )}
+              {!isEditing && (
+                <button
+                  className="hover:bg-contrast rounded p-0.5"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    closeTab(tab.id)
+                  }}
+                  aria-label={isHistory ? 'Close history' : 'Close chat'}
+                  title="Hide chat; running work continues in the background"
+                >
+                  <Icon type="close" size="small" />
+                </button>
+              )}
             </div>
           )
         })}
@@ -1198,106 +1257,113 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
                   data-assistant-tab={tab.id}
                   className={isActive ? 'contents' : 'hidden'}
                 >
-                  {tab.kind === 'research' ? (
-                    <ResearchModePanel
-                      application={application}
-                      onClose={() => closeTab(tab.id)}
-                      onTopicChange={(topic) => autoNameTab(tab.id, topic)}
-                    />
-                  ) : tab.kind === 'deep-research' ? (
-                    <DeepResearchPanel
-                      application={application}
-                      onClose={() => closeTab(tab.id)}
-                      onTopicChange={(topic) => autoNameTab(tab.id, topic)}
-                    />
-                  ) : (
-                    <ConversationPanel
-                      application={application}
-                      tabId={tab.id}
-                      sharedChat={
-                        application.sessions.getUser()?.uuid
-                          ? {
-                              ready: sharedReady,
-                              history: sharedChats.find((chat) => chat.tab.id === tab.id),
-                              removeMessage: async (messageId) => {
-                                if (
-                                  !sharedStore ||
-                                  sharedStoreRef.current !== sharedStore ||
-                                  application.sessions.getUser()?.uuid !== accountScope ||
-                                  workspaceLockedRef.current
-                                ) {
-                                  throw new Error('Synced chat storage is unavailable.')
-                                }
-                                await sharedStore.removeMessage(tab.id, messageId)
-                              },
-                              refresh: async () => {
-                                if (
-                                  !sharedStore ||
-                                  sharedStoreRef.current !== sharedStore ||
-                                  application.sessions.getUser()?.uuid !== accountScope ||
-                                  workspaceLockedRef.current
-                                ) {
-                                  throw new Error('Synced chat storage is unavailable.')
-                                }
-                                await application.sync.sync({
-                                  sourceDescription: 'Refresh Assistant chat before generation',
-                                })
-                                const latest = await sharedStore.read()
-                                if (sharedStoreRef.current !== sharedStore || workspaceLockedRef.current) {
-                                  throw new Error('Synced chat storage is unavailable.')
-                                }
-                                return latest.find((chat) => chat.tab.id === tab.id)
-                              },
-                              checkpoint: async (messages, deniedToolNames) => {
-                                const store = sharedStore
-                                const current = tabsRef.current.find((entry) => entry.id === tab.id)
-                                if (
-                                  !store ||
-                                  sharedStoreRef.current !== store ||
-                                  application.sessions.getUser()?.uuid !== accountScope ||
-                                  !current ||
-                                  workspaceLockedRef.current
-                                ) {
-                                  throw new Error('Synced chat storage is unavailable.')
-                                }
-                                await store.save(current, messages, deniedToolNames)
-                                const canonical = await store.read()
-                                if (
-                                  sharedStoreRef.current !== store ||
-                                  application.sessions.getUser()?.uuid !== accountScope ||
-                                  workspaceLockedRef.current
-                                ) {
-                                  throw new Error('Synced chat storage is unavailable.')
-                                }
-                                return canonical.find((chat) => chat.tab.id === tab.id)
-                              },
-                            }
-                          : undefined
+                  <ConversationPanel
+                    application={application}
+                    tabId={tab.id}
+                    conversationMode={
+                      tab.conversationMode ??
+                      (tab.kind === 'research' || tab.kind === 'deep-research' ? tab.kind : 'agent')
+                    }
+                    onModeChange={(conversationMode) => {
+                      if (workspaceLockedRef.current) {
+                        return
                       }
-                      accountScope={loadedChatAccountScope}
-                      isActive={isActive}
-                      persistenceAllowed={workspacePersistence === 'durable' && manifestTabIds.includes(tab.id)}
-                      runPersistence={
-                        workspaceClaim ? (operation) => workspaceClaim.runPersistence(operation, tab.id) : undefined
+                      const current = tabsRef.current.find((entry) => entry.id === tab.id)
+                      if (!current) {
+                        return
                       }
-                      registerPersistenceFinalizer={workspaceClaim?.registerFinalizer}
-                      onFirstUserMessage={(text) => autoNameTab(tab.id, text)}
-                      directive={
-                        pendingDirectives[0]?.targetTabId === tab.id ? pendingDirectives[0].directive : undefined
+                      const next = {
+                        ...current,
+                        conversationMode,
+                        conversationModeUpdatedAt: Math.max(Date.now(), (current.conversationModeUpdatedAt ?? 0) + 1),
                       }
-                      onDirectiveConsumed={consumeDirective}
-                      onContextSnapshot={(snapshot) => {
-                        if (
-                          !workspaceLockedRef.current &&
-                          loadedChatAccountScope === chatAccountScope &&
-                          observedAccountScopeRef.current === accountScope
-                        ) {
-                          chatContextsRef.current.set(tab.id, snapshot)
-                        }
-                      }}
-                      recentChats={<AssistantRecentChats tabs={tabs} currentTabId={tab.id} onResume={resumeTab} />}
-                    />
-                  )}
+                      checkpointMetadata(next)
+                      tabsRef.current = tabsRef.current.map((entry) => (entry.id === tab.id ? next : entry))
+                      setTabs(tabsRef.current)
+                    }}
+                    sharedChat={
+                      application.sessions.getUser()?.uuid
+                        ? {
+                            ready: sharedReady,
+                            history: sharedChats.find((chat) => chat.tab.id === tab.id),
+                            removeMessage: async (messageId) => {
+                              if (
+                                !sharedStore ||
+                                sharedStoreRef.current !== sharedStore ||
+                                application.sessions.getUser()?.uuid !== accountScope ||
+                                workspaceLockedRef.current
+                              ) {
+                                throw new Error('Synced chat storage is unavailable.')
+                              }
+                              await sharedStore.removeMessage(tab.id, messageId)
+                            },
+                            refresh: async () => {
+                              if (
+                                !sharedStore ||
+                                sharedStoreRef.current !== sharedStore ||
+                                application.sessions.getUser()?.uuid !== accountScope ||
+                                workspaceLockedRef.current
+                              ) {
+                                throw new Error('Synced chat storage is unavailable.')
+                              }
+                              await application.sync.sync({
+                                sourceDescription: 'Refresh Assistant chat before generation',
+                              })
+                              const latest = await sharedStore.read()
+                              if (sharedStoreRef.current !== sharedStore || workspaceLockedRef.current) {
+                                throw new Error('Synced chat storage is unavailable.')
+                              }
+                              return latest.find((chat) => chat.tab.id === tab.id)
+                            },
+                            checkpoint: async (messages, deniedToolNames) => {
+                              const store = sharedStore
+                              const current = tabsRef.current.find((entry) => entry.id === tab.id)
+                              if (
+                                !store ||
+                                sharedStoreRef.current !== store ||
+                                application.sessions.getUser()?.uuid !== accountScope ||
+                                !current ||
+                                workspaceLockedRef.current
+                              ) {
+                                throw new Error('Synced chat storage is unavailable.')
+                              }
+                              await store.save(current, messages, deniedToolNames)
+                              const canonical = await store.read()
+                              if (
+                                sharedStoreRef.current !== store ||
+                                application.sessions.getUser()?.uuid !== accountScope ||
+                                workspaceLockedRef.current
+                              ) {
+                                throw new Error('Synced chat storage is unavailable.')
+                              }
+                              return canonical.find((chat) => chat.tab.id === tab.id)
+                            },
+                          }
+                        : undefined
+                    }
+                    accountScope={loadedChatAccountScope}
+                    isActive={isActive}
+                    persistenceAllowed={workspacePersistence === 'durable' && manifestTabIds.includes(tab.id)}
+                    runPersistence={
+                      workspaceClaim ? (operation) => workspaceClaim.runPersistence(operation, tab.id) : undefined
+                    }
+                    registerPersistenceFinalizer={workspaceClaim?.registerFinalizer}
+                    onFirstUserMessage={(text) => autoNameTab(tab.id, text)}
+                    directive={
+                      pendingDirectives[0]?.targetTabId === tab.id ? pendingDirectives[0].directive : undefined
+                    }
+                    onDirectiveConsumed={consumeDirective}
+                    onContextSnapshot={(snapshot) => {
+                      if (
+                        !workspaceLockedRef.current &&
+                        loadedChatAccountScope === chatAccountScope &&
+                        observedAccountScopeRef.current === accountScope
+                      ) {
+                        chatContextsRef.current.set(tab.id, snapshot)
+                      }
+                    }}
+                    recentChats={<AssistantRecentChats tabs={tabs} currentTabId={tab.id} onResume={resumeTab} />}
+                  />
                 </div>
               )
             })

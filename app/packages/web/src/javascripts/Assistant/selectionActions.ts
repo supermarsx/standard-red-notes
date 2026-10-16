@@ -1,3 +1,4 @@
+import { declaredDirectImageSupport } from './attachments'
 import { PrefKey } from '@standardnotes/snjs'
 import { WebApplication } from '@/Application/WebApplication'
 import { DirectProvider } from './DirectProvider'
@@ -574,6 +575,7 @@ export function buildAssistantProvider(
   return new DirectProvider({
     baseURL: overrides.baseURL,
     model: overrides.model,
+    supportsImageInputs: declaredDirectImageSupport(application, overrides.baseURL, overrides.model),
     apiKey: auth.apiKey,
     extraHeaders: auth.extraHeaders,
     sampling: overrides.sampling,

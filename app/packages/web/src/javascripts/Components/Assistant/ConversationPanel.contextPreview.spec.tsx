@@ -5,6 +5,7 @@ import { buildContextForSelection } from '@/Assistant/assistantContextSource'
 import { useResponsiveAppPane } from '../Panes/ResponsivePaneProvider'
 import ConversationPanel from './ConversationPanel'
 import type { AssistantSharedChatBinding } from '@/Assistant/assistantSyncedChats'
+import type { AssistantConversationMode } from '@/Assistant/conversationModes'
 
 jest.mock('@/Assistant/assistantContextSource', () => ({
   ...jest.requireActual('@/Assistant/assistantContextSource'),
@@ -89,7 +90,11 @@ describe('ConversationPanel context preview cadence', () => {
     },
   }
 
-  const renderPanel = (isActive = true, sharedChat?: AssistantSharedChatBinding) => {
+  const renderPanel = (
+    isActive = true,
+    sharedChat?: AssistantSharedChatBinding,
+    onModeChange?: (mode: AssistantConversationMode) => void,
+  ) => {
     act(() => {
       root.render(
         <ConversationPanel
@@ -99,6 +104,7 @@ describe('ConversationPanel context preview cadence', () => {
           persistenceAllowed={false}
           isActive={isActive}
           sharedChat={sharedChat}
+          onModeChange={onModeChange}
         />,
       )
     })
@@ -140,6 +146,30 @@ describe('ConversationPanel context preview cadence', () => {
     act(() => root.unmount())
     container.remove()
     jest.clearAllMocks()
+  })
+
+  it('places all five modes after context and tool permissions, before the message input', () => {
+    const onModeChange = jest.fn()
+    renderPanel(true, undefined, onModeChange)
+    const context = container.querySelector('[data-context-selector]')!
+    const tools = container.querySelector('[aria-label="Assistant tool permissions"]')!
+    const modes = container.querySelector<HTMLSelectElement>('[aria-label="Assistant mode"]')!
+    const input = container.querySelector('[aria-label="Message the assistant"]')!
+    expect(context.compareDocumentPosition(tools) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(tools.compareDocumentPosition(modes) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(modes.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect([...modes.options].map((option) => option.text)).toEqual([
+      'Chat',
+      'Agent',
+      'Plan',
+      'Research',
+      'Deep Research',
+    ])
+    act(() => {
+      modes.value = 'plan'
+      modes.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    expect(onModeChange).toHaveBeenCalledWith('plan')
   })
 
   it('does not rescan note plaintext during unrelated streaming-style rerenders', () => {

@@ -1,3 +1,4 @@
+import type { AssistantImageAttachment } from './attachments'
 // Browser-side mirror of the openclaw provider/agent contracts. The agent loop
 // and all tool execution run in the browser because Standard Red Notes notes are
 // end-to-end encrypted and decryption keys only exist on the client. The server
@@ -15,6 +16,8 @@ export interface ProviderReplayState {
 export interface ChatMessage {
   role: ChatRole
   content: string
+  /** Native user image inputs, retained only in encrypted conversation history. */
+  images?: AssistantImageAttachment[]
   toolCallId?: string
   toolCalls?: AssistantToolCall[]
   name?: string

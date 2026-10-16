@@ -1,3 +1,4 @@
+import { assertImageRequestBudget, normalizeAssistantAttachments } from './attachments'
 import { assistantUsageService } from './AssistantUsageService'
 import { assistantHttpError, assistantNetworkError } from './AssistantHttpError'
 import { directEndpointConfigurationError, openAICompatibleEndpointURL } from './OpenAICompatibleEndpoint'
@@ -10,6 +11,7 @@ export interface DirectProviderOptions {
   baseURL: string
   /** Model identifier understood by the endpoint. */
   model: string
+  supportsImageInputs?: boolean
   /**
    * Optional bearer token. Omitted from the request when empty (LM Studio /
    * Ollama need none). In OpenAI Codex / ChatGPT subscription mode this is the
@@ -100,6 +102,28 @@ export class DirectProvider implements Provider {
       headers['Authorization'] = `Bearer ${this.options.apiKey.trim()}`
     }
 
+    const hasImages = req.messages.some((message) => message.images?.length)
+    if (hasImages) {
+      try {
+        if (!this.options.supportsImageInputs) {
+          throw new Error('Image input is not enabled for this model and endpoint.')
+        }
+        for (const message of req.messages) {
+          if (
+            message.images !== undefined &&
+            (message.role !== 'user' ||
+              !normalizeAssistantAttachments(message.images)?.every((item) => item.kind === 'image'))
+          ) {
+            throw new Error('Invalid assistant image input.')
+          }
+        }
+        assertImageRequestBudget(req)
+      } catch (error) {
+        yield { kind: 'error', message: error instanceof Error ? error.message : 'Invalid image input.' }
+        yield { kind: 'finish', stopReason: 'error' }
+        return
+      }
+    }
     const toolNames = openAIToolNamesForRequest(req.tools, req.messages)
     const body: Record<string, unknown> = {
       model: this.options.model,
@@ -449,7 +473,16 @@ export class DirectProvider implements Provider {
         continue
       }
 
-      result.push({ role: message.role, content: message.content })
+      result.push({
+        role: message.role,
+        content:
+          message.role === 'user' && message.images?.length
+            ? [
+                { type: 'text', text: message.content },
+                ...message.images.map((image) => ({ type: 'image_url', image_url: { url: image.dataUrl } })),
+              ]
+            : message.content,
+      })
     }
 
     return result

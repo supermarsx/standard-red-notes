@@ -1,3 +1,4 @@
+import { assertImageRequestBudget, normalizeAssistantAttachments } from './attachments'
 import { assistantUsageService } from './AssistantUsageService'
 import { assistantHttpError, assistantNetworkError, assistantStreamError } from './AssistantHttpError'
 import { Provider, ProviderEvent, ProviderRequest } from './types'
@@ -53,6 +54,24 @@ export class ProxyProvider implements Provider {
       // cap narrower; the client never supplies the cap itself.
     }
 
+    if (req.messages.some((message) => message.images?.length)) {
+      try {
+        for (const message of req.messages) {
+          if (
+            message.images !== undefined &&
+            (message.role !== 'user' ||
+              !normalizeAssistantAttachments(message.images)?.every((item) => item.kind === 'image'))
+          ) {
+            throw new Error('Invalid assistant image input.')
+          }
+        }
+        assertImageRequestBudget(body)
+      } catch (error) {
+        yield { kind: 'error', message: error instanceof Error ? error.message : 'Invalid image input.' }
+        yield { kind: 'finish', stopReason: 'error' }
+        return
+      }
+    }
     const signal = req.signal ?? this.options.signal
     let response: Response
     try {

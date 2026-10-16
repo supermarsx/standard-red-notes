@@ -153,6 +153,8 @@ export enum PrefKey {
   SuperMermaidSourceHighlighting = 'superMermaidSourceHighlighting',
   AssistantProvider = 'assistantProvider',
   AssistantModel = 'assistantModel',
+  /** Exact endpoint/model pair explicitly confirmed to support image inputs. */
+  AssistantImageInputCapability = 'assistantImageInputCapability',
   AssistantConfirmBeforeWrite = 'assistantConfirmBeforeWrite',
   /**
    * Controls which assistant tool calls may run without an inline approval.
@@ -473,6 +475,7 @@ export type PrefValue = {
   [PrefKey.SuperMermaidSourceHighlighting]: boolean
   [PrefKey.AssistantProvider]: string
   [PrefKey.AssistantModel]: string
+  [PrefKey.AssistantImageInputCapability]: string
   [PrefKey.AssistantConfirmBeforeWrite]: boolean
   [PrefKey.AssistantToolPermissionMode]: 'ask' | 'allow-read' | 'allow-safe' | 'allow-all' | 'bypass'
   [PrefKey.AssistantConnectionMode]: 'direct' | 'proxy'

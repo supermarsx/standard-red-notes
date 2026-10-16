@@ -54,6 +54,7 @@ export const viewTabOwnsCreateShortcut = (tab: ViewTab | undefined): boolean =>
  * pane's sidebar SectionButton already uses.
  */
 export const TABBABLE_PANES: { paneId: AppPaneId; title: string; icon: VectorIconNameOrEmoji }[] = [
+  { paneId: AppPaneId.Assistant, title: 'Assistant', icon: 'assistant' },
   { paneId: AppPaneId.Home, title: 'Home', icon: 'window' },
   { paneId: AppPaneId.Dashboard, title: 'Dashboard', icon: 'dashboard' },
   { paneId: AppPaneId.Reminders, title: 'Reminders', icon: 'clock' },

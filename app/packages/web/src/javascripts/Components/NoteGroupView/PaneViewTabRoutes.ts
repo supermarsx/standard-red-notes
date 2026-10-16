@@ -13,6 +13,7 @@ import ConstellationView from '../Constellation/ConstellationView'
 import NotificationsView from '../Notifications/NotificationsView'
 import FilesView from '../FilesView/FilesView'
 import WorkflowsView from '../Workflows/WorkflowsView'
+import AssistantEditorTab from '../Assistant/AssistantEditorTab'
 
 export type PaneViewTabProps = {
   application: WebApplication
@@ -26,6 +27,7 @@ export type PaneViewTabProps = {
  * corresponding content route.
  */
 export const PANE_VIEW_TAB_ROUTES: Partial<Record<AppPaneId, ComponentType<PaneViewTabProps>>> = {
+  [AppPaneId.Assistant]: AssistantEditorTab,
   [AppPaneId.Home]: HomeView,
   [AppPaneId.Dashboard]: DashboardView,
   [AppPaneId.Reminders]: RemindersView,

@@ -30,6 +30,25 @@ const baseRow = (overrides: Partial<ProfileRow> = {}): ProfileRow => ({
 })
 
 describe('aiProfiles helpers', () => {
+  it('validates and carries an explicit context capacity without inventing a default', () => {
+    expect(rowToPayload(baseRow()).contextWindowTokens).toBeUndefined()
+    expect(rowToPayload(baseRow({ contextWindowTokens: '128000' })).contextWindowTokens).toBe(128000)
+    for (const contextWindowTokens of ['0', '-1', '1.5', '1000000001', 'invalid']) {
+      expect(validateProfileRow(baseRow({ contextWindowTokens })).ok).toBe(false)
+    }
+  })
+  it('carries an explicit image declaration through masked editing and write-only payloads', () => {
+    const row = maskedProfileToRow({
+      id: 'image',
+      name: 'Image',
+      provider: 'openai-compatible',
+      enabled: true,
+      keyConfigured: true,
+      supportsImageInputs: true,
+    })
+    expect(rowToPayload(row)).toMatchObject({ supportsImageInputs: true })
+    expect(rowToPayload({ ...row, supportsImageInputs: false })).toMatchObject({ supportsImageInputs: false })
+  })
   describe('maskedProfileToRow', () => {
     it('converts a masked server profile into an editable row with blank key inputs', () => {
       const masked: MaskedAiProfile = {

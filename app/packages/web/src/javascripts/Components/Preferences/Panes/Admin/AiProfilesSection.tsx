@@ -85,7 +85,21 @@ const AiProfilesSection: FunctionComponent<Props> = ({
   const savedIds = useMemo(() => new Set(profiles.map((profile) => profile.id)), [profiles])
 
   const mutateRow = useCallback((id: string, patch: Partial<ProfileRow>) => {
-    setRows((current) => current.map((row) => (row.id === id ? { ...row, ...patch } : row)))
+    setRows((current) =>
+      current.map((row) => {
+        return row.id === id
+          ? {
+              ...row,
+              ...patch,
+              ...(['model', 'provider', 'baseUrl', 'backendProfileId'].some(
+                (key) => key in patch && patch[key as keyof ProfileRow] !== row[key as keyof ProfileRow],
+              )
+                ? { supportsImageInputs: false, contextWindowTokens: '' }
+                : {}),
+            }
+          : row
+      }),
+    )
     setDirty(true)
   }, [])
 
@@ -366,6 +380,24 @@ const AiProfilesSection: FunctionComponent<Props> = ({
                 )}
               </div>
 
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={row.supportsImageInputs === true}
+                  disabled={
+                    busy ||
+                    !hasEffectiveModel ||
+                    !['openai-compatible', 'codex-subscription'].includes(selectedBackend?.provider ?? row.provider)
+                  }
+                  onChange={(event) => mutateRow(row.id, { supportsImageInputs: event.target.checked })}
+                />
+                Selected model supports image inputs
+              </label>
+              <Text className="text-passive-1 text-xs">
+                Enable only after confirming image input support for this model and endpoint. Changing its model or
+                backend clears this declaration.
+              </Text>
+
               {row.provider === 'codex-subscription' ? (
                 <div>
                   <label className="text-sm font-semibold">{option.keyLabel}</label>
@@ -485,6 +517,24 @@ const AiProfilesSection: FunctionComponent<Props> = ({
                     disabled={busy}
                   />
                   <Text className="text-passive-1 mt-1 text-xs">Positive whole number, up to 200,000.</Text>
+                </div>
+                <div>
+                  <label className="text-sm font-semibold">Model context window tokens</label>
+                  <input
+                    aria-label="Model context window tokens"
+                    className="border-border bg-default text-foreground mt-1 w-full rounded border px-2 py-1.5 text-sm"
+                    type="number"
+                    min="1"
+                    max="1000000000"
+                    step="1"
+                    placeholder="Unknown"
+                    value={row.contextWindowTokens ?? ''}
+                    onChange={(event) => mutateRow(row.id, { contextWindowTokens: event.target.value })}
+                    disabled={busy}
+                  />
+                  <Text className="text-passive-1 mt-1 text-xs">
+                    Optional capacity from this model’s provider documentation. Leave blank if unknown.
+                  </Text>
                 </div>
               </div>
             </details>

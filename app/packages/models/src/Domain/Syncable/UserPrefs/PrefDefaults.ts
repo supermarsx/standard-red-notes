@@ -86,6 +86,7 @@ export const PrefDefaults = {
   [PrefKey.SuperMermaidSourceHighlighting]: true,
   [PrefKey.AssistantProvider]: '',
   [PrefKey.AssistantModel]: '',
+  [PrefKey.AssistantImageInputCapability]: '',
   [PrefKey.AssistantConfirmBeforeWrite]: true,
   [PrefKey.AssistantToolPermissionMode]: 'allow-read',
   [PrefKey.AssistantConnectionMode]: 'direct',

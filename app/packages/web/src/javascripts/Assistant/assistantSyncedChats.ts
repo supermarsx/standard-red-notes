@@ -3,6 +3,7 @@ import { DecryptedItemInterface, DecryptedItemMutator, ItemContent } from '@stan
 import { WebApplication } from '@/Application/WebApplication'
 import { PersistedAssistantMessage, sanitizeAssistantChatMessages } from './assistantChatHistory'
 import type { AssistantWorkTabKind, ChatTab } from './chatTabs'
+import { AssistantConversationMode, isAssistantConversationMode } from './conversationModes'
 
 export const ASSISTANT_CHAT_CONTENT_TYPE = 'SN|AssistantChat'
 export const MAX_SYNCED_CHATS = 100
@@ -32,6 +33,9 @@ export type SyncedChatRecord = {
   title?: string
   userRenamed?: boolean
   tabKind?: AssistantWorkTabKind
+  conversationMode?: AssistantConversationMode
+  /** Mode intent is independent of manually chosen title precedence. */
+  conversationModeUpdatedAt?: number
   entries?: SyncedChatEntry[]
   deniedToolNames?: string[]
   removedMessageIds?: string[]
@@ -86,7 +90,9 @@ export function normalizeSyncedChatRecord(value: unknown, ownerUuid: string): Sy
     raw.entries.length > MAX_ENTRIES ||
     typeof raw.title !== 'string' ||
     raw.title.length > 40 ||
-    !['chat', 'research', 'deep-research'].includes(raw.tabKind ?? 'chat')
+    !['chat', 'research', 'deep-research'].includes(raw.tabKind ?? 'chat') ||
+    (raw.conversationMode !== undefined && !isAssistantConversationMode(raw.conversationMode)) ||
+    (raw.conversationModeUpdatedAt !== undefined && !counter(raw.conversationModeUpdatedAt))
   ) {
     return undefined
   }
@@ -131,6 +137,13 @@ export function normalizeSyncedChatRecord(value: unknown, ownerUuid: string): Sy
     title: raw.title.trim() || 'New chat',
     userRenamed: raw.userRenamed === true,
     tabKind: raw.tabKind ?? 'chat',
+    ...(raw.conversationMode !== undefined
+      ? {
+          conversationMode: raw.conversationMode,
+          conversationModeUpdatedAt:
+            raw.conversationModeUpdatedAt ?? (counter(raw.metadataUpdatedAt) ? raw.metadataUpdatedAt : raw.updatedAt),
+        }
+      : {}),
     entries,
     deniedToolNames: [...new Set(deniedToolNames)],
     removedMessageIds: [...new Set(removedMessageIds)],
@@ -151,6 +164,17 @@ const selectMetadata = (writers: Parsed[]): Parsed | undefined => {
         rank(a, b),
     )
     .at(-1)
+}
+
+const selectConversationMode = (writers: Parsed[]): SyncedChatRecord | undefined => {
+  return [...writers]
+    .filter(({ record }) => record.conversationMode !== undefined)
+    .sort(
+      (a, b) =>
+        (a.record.conversationModeUpdatedAt ?? a.record.metadataUpdatedAt ?? a.record.updatedAt) -
+          (b.record.conversationModeUpdatedAt ?? b.record.metadataUpdatedAt ?? b.record.updatedAt) || rank(a, b),
+    )
+    .at(-1)?.record
 }
 
 /** Writer-owned entries merge by stable message ID; tombstones dominate every late checkpoint. */
@@ -181,6 +205,8 @@ export function mergeSyncedChats(records: Parsed[]): SyncedChat[] {
     const writers = [...byWriter.values()].sort(rank)
     const removed = new Set(writers.flatMap(({ record }) => record.removedMessageIds ?? []))
     const metadata = selectMetadata(writers)?.record
+    const modeMetadata = selectConversationMode(writers)
+    const mode = modeMetadata?.conversationMode
     if (!metadata) {
       continue
     }
@@ -226,6 +252,13 @@ export function mergeSyncedChats(records: Parsed[]): SyncedChat[] {
         title: metadata.title ?? 'New chat',
         userRenamed: metadata.userRenamed === true,
         kind: metadata.tabKind ?? 'chat',
+        ...(mode !== undefined
+          ? {
+              conversationMode: mode,
+              conversationModeUpdatedAt:
+                modeMetadata?.conversationModeUpdatedAt ?? modeMetadata?.metadataUpdatedAt ?? modeMetadata?.updatedAt,
+            }
+          : {}),
         lastActiveAt: Math.max(...writers.map(({ record }) => record.updatedAt)),
       },
       messages: sanitizeAssistantChatMessages(ordered),
@@ -423,6 +456,17 @@ export class AssistantSyncedChats {
         parentId = message.id
       }
       const inheritedMetadata = selectMetadata(group)?.record
+      const inheritedMode = selectConversationMode(group)
+      const inheritedModeClock =
+        inheritedMode?.conversationModeUpdatedAt ?? inheritedMode?.metadataUpdatedAt ?? inheritedMode?.updatedAt ?? 0
+      const modeChanged =
+        messages === undefined &&
+        tab.conversationMode !== undefined &&
+        tab.conversationMode !== inheritedMode?.conversationMode &&
+        (tab.conversationModeUpdatedAt === undefined || tab.conversationModeUpdatedAt >= inheritedModeClock)
+      const conversationMode = modeChanged
+        ? tab.conversationMode
+        : (inheritedMode?.conversationMode ?? tab.conversationMode)
       const metadataChanged = messages === undefined && !(inheritedMetadata?.userRenamed && !tab.userRenamed)
       const metadata = metadataChanged
         ? tab
@@ -449,6 +493,17 @@ export class AssistantSyncedChats {
           title: metadata.title.slice(0, 40),
           userRenamed: metadata.userRenamed,
           tabKind: metadata.kind ?? 'chat',
+          ...(conversationMode !== undefined
+            ? {
+                conversationMode,
+                conversationModeUpdatedAt: modeChanged
+                  ? Math.max(tab.conversationModeUpdatedAt ?? updatedAt, inheritedModeClock + 1)
+                  : (inheritedMode?.conversationModeUpdatedAt ??
+                    inheritedMode?.metadataUpdatedAt ??
+                    inheritedMode?.updatedAt ??
+                    updatedAt),
+              }
+            : {}),
           entries,
           deniedToolNames: messages === undefined ? (own?.record.deniedToolNames ?? deniedToolNames) : deniedToolNames,
         },
@@ -493,6 +548,15 @@ export class AssistantSyncedChats {
           title: merged.tab.title,
           userRenamed: merged.tab.userRenamed,
           tabKind: merged.tab.kind,
+          ...(merged.tab.conversationMode !== undefined
+            ? {
+                conversationMode: merged.tab.conversationMode,
+                conversationModeUpdatedAt:
+                  selectConversationMode(group)?.conversationModeUpdatedAt ??
+                  selectConversationMode(group)?.metadataUpdatedAt ??
+                  selectConversationMode(group)?.updatedAt,
+              }
+            : {}),
           entries: (own?.record.entries ?? []).filter((entry) => entry.message.id !== messageId),
           deniedToolNames: own?.record.deniedToolNames ?? [],
           removedMessageIds,

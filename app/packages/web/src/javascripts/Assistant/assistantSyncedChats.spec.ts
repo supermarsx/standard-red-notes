@@ -36,6 +36,45 @@ it('merges independent devices and orders parents before answers despite clock s
   expect(mergeSyncedChats([b, a])[0].messages.map(({ id }) => id)).toEqual(['question', 'answer'])
   expect(mergeSyncedChats([a, b])).toEqual(mergeSyncedChats([b, a]))
 })
+
+it.each(['chat', 'agent', 'plan', 'research', 'deep-research'] as const)(
+  'normalizes encrypted mode %s while legacy absence remains the Agent-compatible default',
+  (conversationMode) => {
+    const normalized = normalizeSyncedChatRecord(writer('a', [], { conversationMode }), 'account')!
+    expect(normalized.conversationMode).toBe(conversationMode)
+    expect(mergeSyncedChats([record(normalized)])[0].tab.conversationMode).toBe(conversationMode)
+    expect(normalizeSyncedChatRecord(writer('old'), 'account')).not.toHaveProperty('conversationMode')
+  },
+)
+
+it('rejects malformed explicit modes and mode clocks without discarding valid legacy records', () => {
+  for (const conversationMode of ['execute-code', null, {}, 42]) {
+    expect(normalizeSyncedChatRecord({ ...writer('a'), conversationMode }, 'account')).toBeUndefined()
+  }
+  expect(
+    normalizeSyncedChatRecord(writer('a', [], { conversationMode: 'chat', conversationModeUpdatedAt: -1 }), 'account'),
+  ).toBeUndefined()
+  expect(normalizeSyncedChatRecord(writer('a'), 'account')).toBeDefined()
+})
+
+it('chooses mode intent independently from a manually renamed title and newer content activity', () => {
+  const manual = record(
+    writer('a', [], {
+      title: 'Chosen title',
+      userRenamed: true,
+      conversationMode: 'agent',
+      conversationModeUpdatedAt: 100,
+      updatedAt: 1000,
+    }),
+  )
+  const changedMode = record(
+    writer('b', [], { conversationMode: 'plan', conversationModeUpdatedAt: 200, updatedAt: 200 }),
+  )
+  expect(mergeSyncedChats([manual, changedMode])[0].tab).toMatchObject({
+    title: 'Chosen title',
+    conversationMode: 'plan',
+  })
+})
 it('updates streamed stable IDs without duplicating them', () => {
   const old = record(writer('a', [entry('message', null)])),
     newer = record(
@@ -143,6 +182,40 @@ it('syncs private checkpoints while preserving other device messages', async () 
     true,
   )
   expect(h.raw.sync.sync).toHaveBeenCalledWith({ sourceDescription: 'Assistant encrypted chat checkpoint' })
+})
+
+it('syncs explicit mode changes independently of titles and preserves them through stale saves and message removal', async () => {
+  const clock = jest.spyOn(Date, 'now').mockReturnValue(1000)
+  try {
+    const h = harness(),
+      a = new AssistantSyncedChats(h.application, 'a'),
+      b = new AssistantSyncedChats(h.application, 'b')
+    const staleTab = {
+      id: 'chat',
+      title: 'Chosen title',
+      userRenamed: true,
+      conversationMode: 'agent' as const,
+      conversationModeUpdatedAt: 1000,
+    }
+    await a.save(staleTab, [message('one')])
+    clock.mockReturnValue(2000)
+    await b.updateMetadata({ id: 'chat', title: 'Stale automatic title', userRenamed: false, conversationMode: 'plan' })
+    expect((await a.read())[0].tab).toMatchObject({ title: 'Chosen title', conversationMode: 'plan' })
+    await a.updateMetadata({ ...staleTab, title: 'Another manual title' })
+    expect((await b.read())[0].tab.conversationMode).toBe('plan')
+    clock.mockReturnValue(3000)
+    await a.save(staleTab, [message('one'), message('two')])
+    expect((await b.read())[0].tab.conversationMode).toBe('plan')
+    clock.mockReturnValue(4000)
+    await b.removeMessage('chat', 'one')
+    expect((await a.read())[0]).toMatchObject({ tab: { conversationMode: 'plan' }, messages: [message('two')] })
+    expect(JSON.stringify(localStorage)).not.toContain('conversationMode')
+    expect([...h.values.values()].some((item) => (item.content as SyncedChatRecord).conversationMode === 'plan')).toBe(
+      true,
+    )
+  } finally {
+    clock.mockRestore()
+  }
 })
 it('deletes transcript items after tombstone, denies stale writes and ignores shared vault injection', async () => {
   const h = harness(),

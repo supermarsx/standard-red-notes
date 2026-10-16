@@ -57,6 +57,39 @@ describe('DirectProvider endpoint behavior', () => {
     }
   })
 
+  it('sends native image content only after an explicit model capability declaration', async () => {
+    Object.assign(globalThis, { TextEncoder: NodeTextEncoder })
+    const read = jest.fn().mockResolvedValue({ done: true, value: undefined })
+    const fetchMock = globalThis.fetch as jest.Mock
+    fetchMock.mockResolvedValue(response({ ok: true, status: 200, body: { getReader: () => ({ read }) } }))
+    const images = [
+      {
+        kind: 'image' as const,
+        name: 'photo.jpg',
+        width: 1,
+        height: 1,
+        dataUrl: 'data:image/jpeg;base64,/9j/wAAICAABAAEB/9k=',
+      },
+    ]
+    const events = await collect(new DirectProvider({ baseURL: 'https://models.test', model: 'm' }), {
+      ...request,
+      messages: [{ role: 'user', content: 'describe', images }],
+    })
+    expect(events).toContainEqual(
+      expect.objectContaining({ kind: 'error', message: expect.stringContaining('not enabled') }),
+    )
+    expect(fetchMock).not.toHaveBeenCalled()
+    await collect(new DirectProvider({ baseURL: 'https://models.test', model: 'm', supportsImageInputs: true }), {
+      ...request,
+      messages: [{ role: 'user', content: 'describe', images }],
+    })
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+    expect(body.messages[1].content).toEqual([
+      { type: 'text', text: 'describe' },
+      { type: 'image_url', image_url: { url: images[0].dataUrl } },
+    ])
+  })
+
   it('normalizes a bare LM Studio host before POSTing chat completions', async () => {
     const read = jest.fn().mockResolvedValue({ done: true, value: undefined })
     const fetchMock = globalThis.fetch as jest.Mock

@@ -9,7 +9,12 @@ export const DEFAULT_PROVIDER_HISTORY_CHARACTER_BUDGET = 24_000
 const TRUNCATION_MARKER = '\n…[earlier content truncated]…\n'
 
 export function providerHistoryCharacterCost(messages: readonly ChatMessage[]): number {
-  return JSON.stringify(messages).length
+  return JSON.stringify(
+    messages.map(({ images, ...message }) => ({
+      ...message,
+      ...(images?.length ? { images: images.map(({ dataUrl: _dataUrl, ...metadata }) => metadata) } : {}),
+    })),
+  ).length
 }
 
 function truncateMiddle(value: string, targetLength: number): string {
@@ -69,7 +74,13 @@ export function boundProviderHistory(
     if (message.role !== 'user' && message.role !== 'assistant') {
       continue
     }
-    const narrativeMessage: ChatMessage = { role: message.role, content: message.content }
+    const narrativeMessage: ChatMessage = {
+      role: message.role,
+      content: message.content,
+      ...(message.role === 'user' && message.images?.length
+        ? { images: message.images.map((image) => ({ ...image })) }
+        : {}),
+    }
     if (message.role === 'user' || turns.length === 0) {
       turns.push([narrativeMessage])
     } else {

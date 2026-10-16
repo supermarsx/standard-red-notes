@@ -1,5 +1,17 @@
+import {
+  AssistantAttachment,
+  assertAttachmentBudget,
+  attachmentImages,
+  attachmentUserText,
+  declaredDirectImageSupport,
+  prepareAssistantAttachment,
+} from '@/Assistant/attachments'
+import { AttachmentPreview } from './ComposerAttachments'
 import type { AssistantChatContextSnapshot } from '@/Assistant/assistantDirectiveContext'
 import AssistantComposer from './AssistantComposer'
+import AssistantModeSelector from './AssistantModeSelector'
+import type { AssistantConversationMode } from '@/Assistant/conversationModes'
+import { runConversationMode } from '@/Assistant/conversationModeRunner'
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { observer } from 'mobx-react-lite'
 import { ApplicationEvent, ContentType, PrefKey, SNNote, isNote } from '@standardnotes/snjs'
@@ -33,12 +45,17 @@ import {
   resolveContextNoteUuids,
   captureAssistantTextSelection,
 } from '@/Assistant/assistantContextSource'
-import { buildAssistantProvider, getSelectionAIAvailability } from '@/Assistant/selectionActions'
+import {
+  resolveActiveProfileOverrides,
+  buildAssistantProvider,
+  getSelectionAIAvailability,
+} from '@/Assistant/selectionActions'
 import {
   AssistantChatHistoryCheckpoint,
   PersistedAssistantMessage,
   createAssistantChatHistoryCheckpoint,
   persistAssistantChatHistoryStrict,
+  sanitizeAssistantChatMessages,
   readAssistantChatHistoryResult,
 } from '@/Assistant/assistantChatHistory'
 import { getMaxRunTimeMs, loadSamplingSettings } from '@/Assistant/samplingSettings'
@@ -108,7 +125,7 @@ export type ToolEntry = {
 }
 
 type UIMessage =
-  | { kind: 'user'; id: string; text: string; steered?: boolean }
+  | { kind: 'user'; id: string; text: string; steered?: boolean; attachments?: AssistantAttachment[] }
   | { kind: 'assistant'; id: string; text: string; tools: ToolEntry[]; streaming?: boolean }
   | { kind: 'error'; id: string; text: string }
 
@@ -148,14 +165,22 @@ const hydrateAssistantHistory = (history: PersistedAssistantMessage[]): UIMessag
       }
     }
     if (message.kind === 'user') {
-      return { kind: 'user', id: message.id, text: message.text, steered: message.steered }
+      return {
+        kind: 'user',
+        id: message.id,
+        text: message.text,
+        steered: message.steered,
+        attachments: message.attachments,
+      }
     }
     return { kind: 'error', id: message.id, text: message.text }
   })
 
 type ConversationPrompt = {
+  attachments?: AssistantAttachment[]
   providerPrompt: string
   directive?: AssistantChatDirective
+  mode?: AssistantConversationMode
 }
 
 const KNOWN_ASSISTANT_TOOL_NAMES = new Set([...TOOL_DEFINITIONS.map((tool) => tool.name), 'delegate'])
@@ -239,6 +264,8 @@ type Props = {
   onDirectiveConsumed?: (directiveId: string) => void
   recentChats?: ReactNode
   onContextSnapshot?: (snapshot: AssistantChatContextSnapshot) => void
+  conversationMode?: AssistantConversationMode
+  onModeChange?: (mode: AssistantConversationMode) => void
   sharedChat?: AssistantSharedChatBinding
 }
 
@@ -256,6 +283,8 @@ function ConversationPanelImpl({
   recentChats,
   sharedChat,
   onContextSnapshot,
+  conversationMode = 'agent',
+  onModeChange,
 }: Props) {
   const { presentPane } = useResponsiveAppPane()
 
@@ -288,6 +317,12 @@ function ConversationPanelImpl({
     setChatTokenUsage(EMPTY_CHAT_TOKEN_USAGE)
     setTokenWindows(null)
   }, [accountScope])
+  const [attachments, setAttachments] = useState<AssistantAttachment[]>([])
+  const attachmentsRef = useRef<AssistantAttachment[]>([])
+  const [attachmentError, setAttachmentError] = useState('')
+  const [attachmentsBusy, setAttachmentsBusy] = useState(false)
+  const attachmentTaskRef = useRef(0)
+  const [proxyImagesAllowed, setProxyImagesAllowed] = useState(false)
   const [queue, setQueue] = useState<ConversationPrompt[]>([])
   const [todos, setTodos] = useState<TodoItem[]>([])
   const [noticeStoredDismissed, setNoticeStoredDismissed] = useState(() => readAssistantNoticeDismissed(accountScope))
@@ -566,6 +601,18 @@ function ConversationPanelImpl({
       }
       return message
     })
+    const normalizedMessages = sanitizeAssistantChatMessages(latestMessages)
+    for (const message of latestMessages) {
+      if (
+        message.attachments?.length &&
+        JSON.stringify(normalizedMessages.find((item) => item.id === message.id)?.attachments) !==
+          JSON.stringify(message.attachments)
+      ) {
+        throw new Error(
+          'This conversation cannot retain another attachment safely. Remove earlier attachments or start a new chat.',
+        )
+      }
+    }
     if (shared) {
       if (!sharedDirtyRef.current || !shared.ready) {
         return
@@ -742,6 +789,9 @@ function ConversationPanelImpl({
   // without re-creating runPrompt on every selection change.
   const contextSelectionRef = useRef<AssistantContextSelection>(contextSelection)
   contextSelectionRef.current = contextSelection
+  const conversationModeRef = useRef(conversationMode)
+  conversationModeRef.current = conversationMode
+  const activeRunModeRef = useRef(conversationMode)
 
   const handleContextChange = useCallback(
     (next: AssistantContextSelection) => {
@@ -986,6 +1036,12 @@ function ConversationPanelImpl({
             queueRef.current = []
             steerQueueRef.current = []
             setQueue([])
+            attachmentTaskRef.current += 1
+            attachmentsRef.current = []
+            setAttachments([])
+            setAttachmentError('')
+            setAttachmentsBusy(false)
+            setProxyImagesAllowed(false)
             sessionToolDecisionsRef.current.clear()
             historyCheckpointRef.current?.schedule()
             confirmationResolverRef.current?.(false)
@@ -994,12 +1050,83 @@ function ConversationPanelImpl({
             abortRef.current?.abort()
           }
           setPreferenceRevision((revision) => revision + 1)
+          setAttachmentPreferenceRevision((revision) => revision + 1)
         }
       }),
     [application],
   )
 
+  const [preferenceRevision, setAttachmentPreferenceRevision] = useState(0)
   const connectionMode = application.getPreference(PrefKey.AssistantConnectionMode, 'direct')
+  const directAttachmentProfile = resolveActiveProfileOverrides(application)
+  const imagesAllowed =
+    connectionMode === 'proxy'
+      ? proxyImagesAllowed
+      : declaredDirectImageSupport(application, directAttachmentProfile.baseURL, directAttachmentProfile.model)
+  useEffect(() => {
+    let current = true
+    setProxyImagesAllowed(false)
+    if (connectionMode === 'proxy') {
+      const principal = captureAssistantSessionPrincipal(application.sessions)
+      void application
+        .assistantConfigRequest<{
+          supportsImageInputs?: boolean
+          effectiveProfile?: { supportsImageInputs?: boolean }
+        }>('/v1/assistant/config')
+        .then((config) => {
+          if (
+            current &&
+            assistantSessionPrincipalMatches(principal, captureAssistantSessionPrincipal(application.sessions))
+          ) {
+            setProxyImagesAllowed(
+              config?.supportsImageInputs === true || config?.effectiveProfile?.supportsImageInputs === true,
+            )
+          }
+        })
+        .catch(() => undefined)
+    }
+    return () => {
+      current = false
+    }
+  }, [application, connectionMode, preferenceRevision])
+  const handleFiles = async (files: File[]) => {
+    if (attachmentsBusy) {
+      return
+    }
+    const task = ++attachmentTaskRef.current
+    const principal = captureAssistantSessionPrincipal(application.sessions)
+    setAttachmentsBusy(true)
+    setAttachmentError('')
+    try {
+      if (files.length + attachmentsRef.current.length > 3) {
+        throw new Error('Attach at most three files per message.')
+      }
+      const prepared = await Promise.all(files.map((file) => prepareAssistantAttachment(file, imagesAllowed)))
+      if (
+        !mountedRef.current ||
+        task !== attachmentTaskRef.current ||
+        !assistantSessionPrincipalMatches(principal, captureAssistantSessionPrincipal(application.sessions))
+      ) {
+        return
+      }
+      const next = [...attachmentsRef.current, ...prepared]
+      assertAttachmentBudget([
+        next,
+        ...messagesRef.current.map((message) => (message.kind === 'user' ? message.attachments : undefined)),
+        ...queueRef.current.map((request) => request.attachments),
+      ])
+      attachmentsRef.current = next
+      setAttachments(next)
+    } catch (error) {
+      if (mountedRef.current && task === attachmentTaskRef.current) {
+        setAttachmentError(error instanceof Error ? error.message : 'The attachment could not be read.')
+      }
+    } finally {
+      if (mountedRef.current && task === attachmentTaskRef.current) {
+        setAttachmentsBusy(false)
+      }
+    }
+  }
   const toolPermissionMode = application.getPreference(PrefKey.AssistantToolPermissionMode, 'allow-read')
   toolPermissionModeRef.current = toolPermissionMode
   const previousToolPermissionModeRef = useRef(toolPermissionMode)
@@ -1056,6 +1183,40 @@ function ConversationPanelImpl({
 
   const runPrompt = useCallback(
     async (request: ConversationPrompt) => {
+      if (request.attachments?.length) {
+        try {
+          const currentProfile = resolveActiveProfileOverrides(application)
+          const capability =
+            application.getPreference(PrefKey.AssistantConnectionMode, 'direct') === 'proxy'
+              ? proxyImagesAllowed
+              : declaredDirectImageSupport(application, currentProfile.baseURL, currentProfile.model)
+          if (attachmentImages(request.attachments).length && !capability) {
+            throw new Error(
+              'Image input is not enabled for the current model. Remove the image or choose a confirmed image-capable model.',
+            )
+          }
+          assertAttachmentBudget([
+            request.attachments,
+            ...messagesRef.current.map((message) => (message.kind === 'user' ? message.attachments : undefined)),
+          ])
+        } catch (error) {
+          setMessagesSynced((previous) => [
+            ...previous,
+            {
+              kind: 'error',
+              id: newId(),
+              text: error instanceof Error ? error.message : 'Attachment validation failed.',
+            },
+          ])
+          if (!attachmentsRef.current.length) {
+            attachmentsRef.current = request.attachments
+            setAttachments(request.attachments)
+          }
+          return
+        }
+      }
+      const runMode = request.mode ?? conversationModeRef.current
+      request = { ...request, mode: runMode }
       // React state is not a mutex. Two same-tick callers can both observe
       // `isRunning=false`; the live controller is the synchronous owner token.
       if (abortRef.current) {
@@ -1065,6 +1226,7 @@ function ConversationPanelImpl({
         }
         return
       }
+      activeRunModeRef.current = runMode
       const promptText = request.providerPrompt
       const runPrincipal = captureAssistantSessionPrincipal(application.sessions)
       const runSessionEpoch = sessionEpochRef.current
@@ -1253,7 +1415,15 @@ function ConversationPanelImpl({
       const priorHistory = boundProviderHistory(
         messagesRef.current.flatMap((message): AgentChatMessage[] => {
           if (message.kind === 'user') {
-            return [{ role: 'user', content: message.text }]
+            return [
+              {
+                role: 'user',
+                content: attachmentUserText(message.text, message.attachments),
+                ...(attachmentImages(message.attachments).length
+                  ? { images: attachmentImages(message.attachments) }
+                  : {}),
+              },
+            ]
           }
           if (message.kind === 'assistant' && message.text) {
             return [{ role: 'assistant', content: message.text }]
@@ -1265,7 +1435,12 @@ function ConversationPanelImpl({
 
       const messagesWithTurn: UIMessage[] = [
         ...messagesRef.current,
-        { kind: 'user', id: newId(), text: promptText },
+        {
+          kind: 'user',
+          id: newId(),
+          text: promptText,
+          ...(request.attachments?.length ? { attachments: request.attachments } : {}),
+        },
         { kind: 'assistant', id: assistantId, text: '', tools: [], streaming: true },
       ]
       setMessagesSynced(() => messagesWithTurn)
@@ -1276,7 +1451,8 @@ function ConversationPanelImpl({
       // streaming changes are checkpointed on a bounded throttle.
       const initiallyPersisted = await flushChatHistory()
       if (
-        (shared && !initiallyPersisted) ||
+        ((shared || messagesWithTurn.some((message) => message.kind === 'user' && message.attachments?.length)) &&
+          !initiallyPersisted) ||
         !isSessionCurrent() ||
         controller.signal.aborted ||
         abortRef.current !== controller
@@ -1362,6 +1538,7 @@ function ConversationPanelImpl({
       }
 
       const toolContext: AssistantToolContext = {
+        allowMutatingTools: runMode !== 'plan' && runMode !== 'chat',
         selectedNoteUuids,
         expectedNoteSnapshots,
         getAssistantMessageId: () => activeAssistantId,
@@ -1424,70 +1601,105 @@ function ConversationPanelImpl({
         : basePrompt
 
       try {
-        const result = await run([...priorHistory, { role: 'user', content: promptText }], {
-          provider: agentProvider,
-          session: tools,
-          systemPrompt,
-          maxSteps: runSampling.maxSteps,
-          maxRunTimeMs: getMaxRunTimeMs(runSampling),
-          signal: controller.signal,
-          control: {
-            // Drain and inject any steering messages queued during this run.
-            drainSteers: () => {
-              const pending = steerQueueRef.current
-              steerQueueRef.current = []
-              return pending
+        const result = await runConversationMode(
+          runMode,
+          [
+            ...priorHistory,
+            {
+              role: 'user',
+              content: attachmentUserText(promptText, request.attachments),
+              ...(attachmentImages(request.attachments).length
+                ? { images: attachmentImages(request.attachments) }
+                : {}),
+            },
+          ],
+          {
+            provider: agentProvider,
+            session: tools,
+            systemPrompt,
+            maxSteps: runSampling.maxSteps,
+            maxRunTimeMs: getMaxRunTimeMs(runSampling),
+            signal: controller.signal,
+            control: {
+              // Drain and inject any steering messages queued during this run.
+              drainSteers: () => {
+                const pending = steerQueueRef.current
+                steerQueueRef.current = []
+                return pending
+              },
+            },
+            onTextDelta: (delta) => {
+              if (!isSessionCurrent()) {
+                return
+              }
+              waitingForSteeredResponse = false
+              textDeltas.push(delta)
+            },
+            onSteer: () => {
+              if (!isSessionCurrent()) {
+                return
+              }
+              // The steer bubble is inserted immediately when the user submits it.
+              // Start the model's revised response in a fresh assistant bubble so
+              // it cannot be concatenated ahead of that user guidance. Multiple
+              // steers drained at one boundary still share one response bubble.
+              if (!waitingForSteeredResponse) {
+                textDeltas.flush()
+                updateAssistant((message) => {
+                  message.streaming = false
+                })
+                activeAssistantId = newId()
+                waitingForSteeredResponse = true
+              }
+            },
+            onToolCall: (call) => {
+              if (!isSessionCurrent()) {
+                return
+              }
+              waitingForSteeredResponse = false
+              textDeltas.flush()
+              const activityId = newId()
+              activeToolActivityIdsRef.current.set(call.id, activityId)
+              updateAssistant((message) =>
+                message.tools.push({ id: activityId, providerCallId: call.id, name: call.name, args: call.args }),
+              )
+            },
+            onToolResult: (callId, _toolResult, outcome) => {
+              if (!isSessionCurrent()) {
+                return
+              }
+              updateAssistant((message) => {
+                const activityId = activeToolActivityIdsRef.current.get(callId)
+                const entry = activityId ? message.tools.find((tool) => tool.id === activityId) : undefined
+                if (entry) {
+                  entry.outcome = outcome
+                }
+              })
             },
           },
-          onTextDelta: (delta) => {
-            if (!isSessionCurrent()) {
-              return
-            }
-            waitingForSteeredResponse = false
-            textDeltas.push(delta)
-          },
-          onSteer: () => {
-            if (!isSessionCurrent()) {
-              return
-            }
-            // The steer bubble is inserted immediately when the user submits it.
-            // Start the model's revised response in a fresh assistant bubble so
-            // it cannot be concatenated ahead of that user guidance. Multiple
-            // steers drained at one boundary still share one response bubble.
-            if (!waitingForSteeredResponse) {
-              textDeltas.flush()
-              updateAssistant((message) => {
-                message.streaming = false
-              })
-              activeAssistantId = newId()
-              waitingForSteeredResponse = true
-            }
-          },
-          onToolCall: (call) => {
-            if (!isSessionCurrent()) {
-              return
-            }
-            waitingForSteeredResponse = false
-            textDeltas.flush()
-            const activityId = newId()
-            activeToolActivityIdsRef.current.set(call.id, activityId)
-            updateAssistant((message) =>
-              message.tools.push({ id: activityId, providerCallId: call.id, name: call.name, args: call.args }),
-            )
-          },
-          onToolResult: (callId, _toolResult, outcome) => {
-            if (!isSessionCurrent()) {
-              return
-            }
-            updateAssistant((message) => {
-              const activityId = activeToolActivityIdsRef.current.get(callId)
-              const entry = activityId ? message.tools.find((tool) => tool.id === activityId) : undefined
-              if (entry) {
-                entry.outcome = outcome
+          {
+            application,
+            prompt: request.directive?.instruction ?? request.providerPrompt,
+            contextText: attachmentUserText(
+              request.directive?.selectedText ?? builtContext.text ?? '',
+              request.attachments,
+            ),
+            images: attachmentImages(request.attachments),
+            isCurrent: isSessionCurrent,
+            requestWebConfirmation: async (action, value) => {
+              const name = action === 'search' ? 'web.search' : 'web.fetch'
+              if (sessionToolDecisionsRef.current.get(name) === false || !isSessionCurrent()) {
+                return false
               }
-            })
+              const approved = await confirmDialog({
+                title: action === 'search' ? 'Search the web for this research?' : 'Read this web page?',
+                text: `${action === 'search' ? 'Search query' : 'Page URL'}: ${value}\n\nThis is sent outside end-to-end encryption to your server and its configured web service. Retrieved text is sent to your AI provider.`,
+                confirmButtonText: action === 'search' ? 'Search' : 'Read page',
+              })
+              return approved && isSessionCurrent() && !controller.signal.aborted
+            },
           },
-        })
+        )
 
         if (!isSessionCurrent()) {
           const expired = new Error('Assistant operation expired when the signed-in account changed.')
@@ -1561,6 +1773,7 @@ function ConversationPanelImpl({
       flushChatHistory,
       presentPane,
       refreshUsage,
+      proxyImagesAllowed,
       requestConfirmation,
       recordToolAuthorization,
       setMessagesSynced,
@@ -1605,7 +1818,10 @@ function ConversationPanelImpl({
     )
     notifyFirstMessage(directive.instruction)
     if (isRunning) {
-      queueRef.current = [...queueRef.current, { providerPrompt: directive.providerPrompt, directive }]
+      queueRef.current = [
+        ...queueRef.current,
+        { providerPrompt: directive.providerPrompt, directive, mode: conversationModeRef.current },
+      ]
       setQueue(queueRef.current)
     } else {
       void runPromptRef.current?.({ providerPrompt: directive.providerPrompt, directive })
@@ -1615,18 +1831,21 @@ function ConversationPanelImpl({
 
   const handleSend = useCallback(() => {
     const trimmed = input.trim()
-    if (!trimmed || isRunning) {
+    if ((!trimmed && !attachments.length) || isRunning || attachmentsBusy) {
       return
     }
     notifyFirstMessage(trimmed)
     setInput('')
-    void runPrompt({ providerPrompt: trimmed })
-  }, [input, isRunning, notifyFirstMessage, runPrompt])
+    const sent = attachmentsRef.current
+    attachmentsRef.current = []
+    setAttachments([])
+    void runPrompt({ providerPrompt: trimmed, attachments: sent })
+  }, [input, attachments, attachmentsBusy, isRunning, notifyFirstMessage, runPrompt])
 
   // Steer: inject guidance into the in-flight run without restarting it.
   const handleSteer = useCallback(() => {
     const trimmed = input.trim()
-    if (!trimmed || !isRunning) {
+    if (!trimmed || !isRunning || attachmentsRef.current.length) {
       return
     }
     steerQueueRef.current = [...steerQueueRef.current, trimmed]
@@ -1638,14 +1857,20 @@ function ConversationPanelImpl({
   // Queue: line up a follow-up prompt to run after the current one finishes.
   const handleQueue = useCallback(() => {
     const trimmed = input.trim()
-    if (!trimmed) {
+    if ((!trimmed && !attachments.length) || attachmentsBusy) {
       return
     }
     notifyFirstMessage(trimmed)
-    queueRef.current = [...queueRef.current, { providerPrompt: trimmed }]
+    const sent = attachmentsRef.current
+    attachmentsRef.current = []
+    setAttachments([])
+    queueRef.current = [
+      ...queueRef.current,
+      { providerPrompt: trimmed, mode: conversationModeRef.current, attachments: sent },
+    ]
     setQueue(queueRef.current)
     setInput('')
-  }, [input, notifyFirstMessage])
+  }, [input, attachments, attachmentsBusy, notifyFirstMessage])
 
   const dismissNotice = useCallback(
     (choice: NoticeDismissalChoice) => {
@@ -1794,7 +2019,8 @@ function ConversationPanelImpl({
           <label className="flex max-w-full min-w-0 flex-wrap items-center gap-1 text-xs">
             <span className="text-passive-1 shrink-0 text-[11px] font-medium">Tools</span>
             <select
-              className="border-border bg-default text-text max-w-full min-w-0 rounded border px-1.5 py-0.5 text-[11px]"
+              className="border-border bg-default text-text w-28 max-w-full min-w-0 rounded border px-1.5 py-0.5 text-[11px]"
+              title="Choose whether tools ask first, allow reads, allow safe changes, review every action, or bypass confirmations."
               value={toolPermissionMode}
               onChange={(event) => {
                 const next = event.target.value as typeof toolPermissionMode
@@ -1810,13 +2036,22 @@ function ConversationPanelImpl({
               }}
               aria-label="Assistant tool permissions"
             >
-              <option value="ask">Ask before every action</option>
-              <option value="allow-read">Allow reads; ask before changes</option>
-              <option value="allow-safe">Allow safe changes</option>
-              <option value="allow-all">Allow all with a safety check</option>
-              <option value="bypass">Bypass confirmations</option>
+              <option value="ask">Ask each time</option>
+              <option value="allow-read">Reads allowed</option>
+              <option value="allow-safe">Safe changes</option>
+              <option value="allow-all">All + review</option>
+              <option value="bypass">No prompts</option>
             </select>
           </label>
+          <AssistantModeSelector
+            value={isRunning ? activeRunModeRef.current : conversationMode}
+            onChange={(mode) => {
+              if (!abortRef.current) {
+                onModeChange?.(mode)
+              }
+            }}
+            disabled={isRunning}
+          />
         </div>
         {!noticeDismissed && (
           <div className="text-warning mb-2 flex items-start gap-2 text-xs">
@@ -1858,9 +2093,24 @@ function ConversationPanelImpl({
           </div>
         )}
         <AssistantComposer
+          attachments={attachments}
+          attachmentError={attachmentError}
+          attachmentsBusy={attachmentsBusy}
+          imagesAllowed={imagesAllowed}
+          onFiles={(files) => void handleFiles(files)}
+          onRemoveAttachment={(index) => {
+            const next = attachmentsRef.current.filter((_, item) => item !== index)
+            attachmentsRef.current = next
+            setAttachments(next)
+            setAttachmentError('')
+          }}
           input={input}
           running={isRunning}
           configured={isConfigured}
+          allowSteering={
+            (isRunning ? activeRunModeRef.current : conversationMode) !== 'research' &&
+            (isRunning ? activeRunModeRef.current : conversationMode) !== 'deep-research'
+          }
           onInput={setInput}
           onSend={handleSend}
           onSteer={handleSteer}
@@ -1896,6 +2146,7 @@ export const MessageBubble = ({
       <AssistantMessageActions message={message} onRemoveMessage={onRemoveMessage}>
         {(messageTextRef) => (
           <div className="bg-info text-info-contrast min-w-0 rounded-lg px-2.5 py-1.5 text-sm leading-5">
+            {message.attachments?.length ? <AttachmentPreview attachments={message.attachments} /> : null}
             {message.steered && <div className="mb-0.5 text-xs font-semibold opacity-80">↳ Steer</div>}
             {directive ? (
               <div ref={messageTextRef} className="flex flex-col gap-2">

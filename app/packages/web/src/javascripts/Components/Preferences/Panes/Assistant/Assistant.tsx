@@ -423,6 +423,10 @@ const Assistant = ({ application }: { application: WebApplication }) => {
   )
   const [extraHeaders, setExtraHeaders] = useState(() => application.getPreference(PrefKey.AssistantExtraHeaders, ''))
   const [model, setModel] = useState(() => application.getPreference(PrefKey.AssistantModel, ''))
+  const [imageCapability, setImageCapability] = useState(() =>
+    application.getPreference(PrefKey.AssistantImageInputCapability, ''),
+  )
+  const imageCapabilityValue = JSON.stringify({ baseURL: baseURL.trim().replace(/\/+$/, ''), model: model.trim() })
   const [toolPermissionMode, setToolPermissionMode] = useState<AssistantToolPermissionMode>(() =>
     application.getPreference(PrefKey.AssistantToolPermissionMode, 'allow-read'),
   )
@@ -436,6 +440,7 @@ const Assistant = ({ application }: { application: WebApplication }) => {
           event === ApplicationEvent.SignedOut
         ) {
           setToolPermissionMode(application.getPreference(PrefKey.AssistantToolPermissionMode, 'allow-read'))
+          setImageCapability(application.getPreference(PrefKey.AssistantImageInputCapability, ''))
         }
       }),
     [application],
@@ -1008,6 +1013,23 @@ const Assistant = ({ application }: { application: WebApplication }) => {
                   disabled={!baseURL || fetchingModels}
                 />
               </div>
+              <label className="mt-2 flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={imageCapability === imageCapabilityValue && !!model.trim() && !!baseURL.trim()}
+                  disabled={!model.trim() || !baseURL.trim() || authMode === 'subscription'}
+                  onChange={(event) => {
+                    const value = event.target.checked ? imageCapabilityValue : ''
+                    setImageCapability(value)
+                    void application.setPreference(PrefKey.AssistantImageInputCapability, value)
+                  }}
+                />
+                This model and endpoint support image inputs
+              </label>
+              <Text className="text-passive-1 mt-1 text-xs">
+                Confirm this in your provider’s model documentation. The declaration applies only to this exact model
+                and endpoint.
+              </Text>
               {modelsError && <Text className="text-danger mt-2">Could not fetch models: {modelsError}</Text>}
               {availableModels.length > 0 && (
                 <select

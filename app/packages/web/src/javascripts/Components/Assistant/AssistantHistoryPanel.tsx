@@ -17,8 +17,8 @@ export function AssistantHistoryPanel({ tabs, closedTabIds, onResume }: Props) {
     <section aria-label="Assistant history" className="flex h-full min-h-0 flex-col overflow-y-auto p-4">
       <h2 className="text-base font-semibold">History</h2>
       <p className="text-passive-0 mt-1 text-xs">
-        Open a conversation or resume a hidden investigation in this workspace. Saved reports are separate notes;
-        running jobs resume here only while this app stays open.
+        Open a conversation in this workspace. Research reports stay in their chat history. In-flight work continues
+        while this app stays open; reloading does not restart a model request.
       </p>
       <ul className="mt-3 space-y-2">
         {assistantTabsByActivity(tabs).map((tab) => (
@@ -52,7 +52,6 @@ export function AssistantRecentChats({
     .filter(
       (tab) =>
         tab.id !== currentTabId &&
-        (!tab.kind || tab.kind === 'chat') &&
         (tab.title !== DEFAULT_TAB_TITLE || tab.userRenamed),
     )
     .slice(0, 5)

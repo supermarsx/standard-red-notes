@@ -6,6 +6,7 @@
  */
 
 import { assistantWorkspaceRetention } from './assistantWorkspaceRetention'
+import { AssistantConversationMode, isAssistantConversationMode } from './conversationModes'
 
 export type AssistantWorkTabKind = 'chat' | 'research' | 'deep-research'
 
@@ -19,6 +20,10 @@ export type ChatTab = {
   userRenamed: boolean
   /** Missing on older encrypted manifests means an ordinary chat. */
   kind?: AssistantWorkTabKind
+  /** Missing on older encrypted metadata preserves the Agent default. */
+  conversationMode?: AssistantConversationMode
+  /** Encrypted explicit mode intent, independent of automatic title changes. */
+  conversationModeUpdatedAt?: number
   /** Activity ordering is encrypted with the rest of this manifest. */
   lastActiveAt?: number
 }
@@ -152,6 +157,11 @@ const isChatTab = (value: unknown): value is ChatTab => {
     tab.title.length <= MAX_TITLE_LENGTH &&
     typeof tab.userRenamed === 'boolean' &&
     (tab.kind === undefined || tab.kind === 'chat' || tab.kind === 'research' || tab.kind === 'deep-research') &&
+    (tab.conversationMode === undefined || isAssistantConversationMode(tab.conversationMode)) &&
+    (tab.conversationModeUpdatedAt === undefined ||
+      (typeof tab.conversationModeUpdatedAt === 'number' &&
+        Number.isSafeInteger(tab.conversationModeUpdatedAt) &&
+        tab.conversationModeUpdatedAt >= 0)) &&
     (tab.lastActiveAt === undefined ||
       (typeof tab.lastActiveAt === 'number' && Number.isSafeInteger(tab.lastActiveAt) && tab.lastActiveAt >= 0))
   )
