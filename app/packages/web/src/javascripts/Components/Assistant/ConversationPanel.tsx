@@ -17,6 +17,7 @@ import { ASSISTANT_SYSTEM_PROMPT, SUB_AGENT_SYSTEM_PROMPT, wrapUntrustedNoteCont
 import { composeSystemPromptWithPersona, getAssistantAccountScope, getPersona } from '@/Assistant/personaSettings'
 import ContextSelector from './ContextSelector'
 import AssistantUsageMeter from './AssistantUsageMeter'
+import AssistantNoticeDismissal from './AssistantNoticeDismissal'
 import { AssistantUsageResponse, TokenWindowUsage } from '@/Assistant/usageMeter'
 import {
   AssistantContextSelection,
@@ -52,6 +53,9 @@ import {
   persistAssistantNoticeDismissed,
   readAssistantContextScope,
   readAssistantNoticeDismissed,
+  readAssistantNoticeReminderAt,
+  AssistantNoticeDismissal as NoticeDismissalChoice,
+  ASSISTANT_DATA_EXPOSURE_NOTICE_KEY,
 } from '@/Assistant/assistantLocalSettings'
 import { createAssistantTextDeltaBatcher } from '@/Assistant/assistantTextDeltaBatcher'
 import { boundProviderHistory, DEFAULT_PROVIDER_HISTORY_CHARACTER_BUDGET } from '@/Assistant/providerHistory'
@@ -251,7 +255,45 @@ function ConversationPanelImpl({
   } | null>(null)
   const [queue, setQueue] = useState<ConversationPrompt[]>([])
   const [todos, setTodos] = useState<TodoItem[]>([])
-  const [noticeDismissed, setNoticeDismissed] = useState(() => readAssistantNoticeDismissed(accountScope))
+  const [noticeStoredDismissed, setNoticeStoredDismissed] = useState(() => readAssistantNoticeDismissed(accountScope))
+  const [noticeSessionDismissed, setNoticeSessionDismissed] = useState(false)
+  const [noticeDismissalOpen, setNoticeDismissalOpen] = useState(false)
+  const noticeDismissed = noticeSessionDismissed || noticeStoredDismissed
+  useEffect(() => {
+    setNoticeSessionDismissed(false)
+    setNoticeDismissalOpen(false)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const refresh = () => {
+      clearTimeout(timer)
+      setNoticeStoredDismissed(readAssistantNoticeDismissed(accountScope))
+      const remindAt = readAssistantNoticeReminderAt(accountScope)
+      if (remindAt && remindAt > Date.now()) {
+        timer = setTimeout(refresh, Math.min(remindAt - Date.now(), 2_147_483_647))
+      }
+    }
+    const onStorage = (event: StorageEvent) => {
+      if (!event.key || event.key === `${ASSISTANT_DATA_EXPOSURE_NOTICE_KEY}:${encodeURIComponent(accountScope)}`) {
+        refresh()
+      }
+    }
+    const onNoticeChange = (event: Event) => {
+      if ((event as CustomEvent<{ accountScope: string }>).detail?.accountScope === accountScope) {
+        refresh()
+      }
+    }
+    refresh()
+    window.addEventListener('storage', onStorage)
+    window.addEventListener('assistant-notice-changed', onNoticeChange)
+    window.addEventListener('focus', refresh)
+    document.addEventListener('visibilitychange', refresh)
+    return () => {
+      clearTimeout(timer)
+      window.removeEventListener('storage', onStorage)
+      window.removeEventListener('assistant-notice-changed', onNoticeChange)
+      window.removeEventListener('focus', refresh)
+      document.removeEventListener('visibilitychange', refresh)
+    }
+  }, [accountScope])
   const [contextSelection, setContextSelection] = useState<AssistantContextSelection>(() => ({
     scope: readAssistantContextScope(accountScope),
   }))
@@ -1345,10 +1387,18 @@ function ConversationPanelImpl({
     setInput('')
   }, [input, notifyFirstMessage])
 
-  const dismissNotice = useCallback(() => {
-    setNoticeDismissed(true)
-    persistAssistantNoticeDismissed(accountScope)
-  }, [accountScope])
+  const dismissNotice = useCallback(
+    (choice: NoticeDismissalChoice) => {
+      persistAssistantNoticeDismissed(accountScope, choice)
+      const remembered = readAssistantNoticeDismissed(accountScope)
+      // Storage-disabled/full browsers can still dismiss this mounted chat.
+      setNoticeSessionDismissed(choice === 'once' || !remembered)
+      setNoticeStoredDismissed(remembered)
+      window.dispatchEvent(new CustomEvent('assistant-notice-changed', { detail: { accountScope } }))
+      setNoticeDismissalOpen(false)
+    },
+    [accountScope],
+  )
 
   const removeQueued = useCallback((index: number) => {
     queueRef.current = queueRef.current.filter((_, i) => i !== index)
@@ -1420,7 +1470,7 @@ function ConversationPanelImpl({
               </div>
               <button
                 className="text-warning hover:bg-warning-faded -mt-1 -mr-1 flex-shrink-0 rounded p-1"
-                onClick={dismissNotice}
+                onClick={() => setNoticeDismissalOpen(true)}
                 aria-label="Dismiss notice"
                 title="Dismiss"
               >
@@ -1507,10 +1557,22 @@ function ConversationPanelImpl({
             </select>
           </label>
         </div>
-        <div className="text-warning mb-2 text-xs">
-          Messages and note content the assistant reads are sent to your configured AI provider. Web access always asks
-          before contacting your server&rsquo;s configured search service. {contextSummary}
-        </div>
+        {!noticeDismissed && (
+          <div className="text-warning mb-2 flex items-start gap-2 text-xs">
+            <div className="min-w-0 flex-1">
+              Messages and note content the assistant reads are sent to your configured AI provider. Web access always
+              asks before contacting your server&rsquo;s configured search service. {contextSummary}
+            </div>
+            <button
+              type="button"
+              className="hover:bg-warning-faded shrink-0 rounded p-0.5 focus-visible:outline focus-visible:outline-2"
+              aria-label="Hide AI privacy reminder"
+              onClick={() => setNoticeDismissalOpen(true)}
+            >
+              <Icon type="close" size="small" />
+            </button>
+          </div>
+        )}
         {queue.length > 0 && (
           <div className="mb-2 flex flex-col gap-1">
             {queue.map((item, index) => (
@@ -1570,6 +1632,9 @@ function ConversationPanelImpl({
           />
         )}
       </div>
+      {noticeDismissalOpen && (
+        <AssistantNoticeDismissal onSelect={dismissNotice} onClose={() => setNoticeDismissalOpen(false)} />
+      )}
     </div>
   )
 }

@@ -22,6 +22,19 @@ jest.mock('@/Assistant/assistantContextSource', () => ({
 jest.mock('../Panes/ResponsivePaneProvider', () => ({ useResponsiveAppPane: jest.fn() }))
 jest.mock('./ContextSelector', () => ({ __esModule: true, default: () => <div data-context-selector /> }))
 jest.mock('./AssistantUsageMeter', () => ({ __esModule: true, default: () => null }))
+jest.mock('./AssistantNoticeDismissal', () => ({
+  __esModule: true,
+  default: ({ onSelect, onClose }: { onSelect: (choice: string) => void; onClose: () => void }) => (
+    <div role="dialog">
+      {['once', '15-days', 'never'].map((choice) => (
+        <button key={choice} onClick={() => onSelect(choice)}>
+          {choice}
+        </button>
+      ))}
+      <button onClick={onClose}>Cancel</button>
+    </div>
+  ),
+}))
 jest.mock('@/Components/Icon/Icon', () => ({ __esModule: true, default: () => <span /> }))
 jest.mock('@/Components/Button/Button', () => ({
   __esModule: true,
@@ -82,6 +95,7 @@ describe('ConversationPanel context preview cadence', () => {
   }
 
   beforeEach(() => {
+    localStorage.clear()
     container = document.createElement('div')
     document.body.appendChild(container)
     root = createRoot(container)
@@ -167,5 +181,64 @@ describe('ConversationPanel context preview cadence', () => {
     renderPanel(false)
     expect(removeEditorObserver).toHaveBeenCalled()
     expect(application.itemControllerGroup.addActiveControllerChangeObserver).toHaveBeenCalledTimes(2)
+  })
+
+  const chooseReminder = (choice: string) => {
+    act(() => container.querySelector<HTMLButtonElement>('[aria-label="Hide AI privacy reminder"]')?.click())
+    expect(container.querySelector('[role="dialog"]')).not.toBeNull()
+    act(() =>
+      Array.from(container.querySelectorAll<HTMLButtonElement>('[role="dialog"] button'))
+        .find((button) => button.textContent === choice)
+        ?.click(),
+    )
+  }
+  const remountPanel = () => {
+    act(() => root.unmount())
+    root = createRoot(container)
+    renderPanel()
+  }
+  it('can hide both privacy reminders just for this mounted chat, or cancel without hiding them', () => {
+    renderPanel()
+    chooseReminder('Cancel')
+    expect(container.querySelector('[aria-label="Hide AI privacy reminder"]')).not.toBeNull()
+    chooseReminder('once')
+    expect(container.querySelector('[aria-label="Hide AI privacy reminder"]')).toBeNull()
+    expect(container.querySelector('[aria-label="Dismiss notice"]')).toBeNull()
+    remountPanel()
+    expect(container.querySelector('[aria-label="Hide AI privacy reminder"]')).not.toBeNull()
+  })
+  it('keeps never-again dismissed on remount', () => {
+    renderPanel()
+    chooseReminder('never')
+    remountPanel()
+    expect(container.querySelector('[aria-label="Hide AI privacy reminder"]')).toBeNull()
+  })
+  it.each(['15-days', 'never'])('still hides this reminder when %s cannot be persisted', (choice) => {
+    renderPanel()
+    const write = jest.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('Storage full')
+    })
+    try {
+      chooseReminder(choice)
+      expect(container.querySelector('[aria-label="Hide AI privacy reminder"]')).toBeNull()
+    } finally {
+      write.mockRestore()
+    }
+    remountPanel()
+    expect(container.querySelector('[aria-label="Hide AI privacy reminder"]')).not.toBeNull()
+  })
+  it('shows the reminder again after fifteen days even if the chat stays mounted', () => {
+    jest.useFakeTimers()
+    try {
+      renderPanel()
+      chooseReminder('15-days')
+      expect(container.querySelector('[aria-label="Hide AI privacy reminder"]')).toBeNull()
+      remountPanel()
+      expect(container.querySelector('[aria-label="Hide AI privacy reminder"]')).toBeNull()
+      act(() => jest.advanceTimersByTime(15 * 24 * 60 * 60 * 1000))
+      expect(container.querySelector('[aria-label="Hide AI privacy reminder"]')).not.toBeNull()
+    } finally {
+      jest.useRealTimers()
+    }
   })
 })
