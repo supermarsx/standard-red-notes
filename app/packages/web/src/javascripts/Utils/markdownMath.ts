@@ -93,11 +93,14 @@ function loadKatex(): Promise<typeof import('katex').default> {
   return katexPromise
 }
 
+const renderingPlaceholders = new WeakSet<Element>()
+
 async function renderPlaceholder(el: Element): Promise<void> {
   const tex = el.getAttribute(MATH_PENDING_ATTR)
-  if (tex == null) {
+  if (tex == null || renderingPlaceholders.has(el)) {
     return
   }
+  renderingPlaceholders.add(el)
   const displayMode = el.getAttribute(MATH_DISPLAY_ATTR) === '1'
   try {
     const katex = await loadKatex()
@@ -121,6 +124,7 @@ async function renderPlaceholder(el: Element): Promise<void> {
   }
   // Mark as done so the hydrator never reprocesses it.
   el.removeAttribute(MATH_PENDING_ATTR)
+  renderingPlaceholders.delete(el)
 }
 
 /**
@@ -129,7 +133,11 @@ async function renderPlaceholder(el: Element): Promise<void> {
  * removed after rendering).
  */
 export function hydrateMathIn(root: ParentNode): void {
-  const pending = root.querySelectorAll(`.${MATH_PLACEHOLDER_CLASS}[${MATH_PENDING_ATTR}]`)
+  const selector = `.${MATH_PLACEHOLDER_CLASS}[${MATH_PENDING_ATTR}]`
+  if (root instanceof Element && root.matches(selector)) {
+    void renderPlaceholder(root)
+  }
+  const pending = root.querySelectorAll(selector)
   pending.forEach((el) => {
     void renderPlaceholder(el)
   })
@@ -149,19 +157,21 @@ export function ensureMathHydrator(): void {
   }
   observerInstalled = true
 
-  const scan = () => {
-    if (document.querySelector(`.${MATH_PLACEHOLDER_CLASS}[${MATH_PENDING_ATTR}]`)) {
-      hydrateMathIn(document)
+  const observer = new MutationObserver((records) => {
+    // Streaming replies and editor updates mutate the DOM continually. Inspect
+    // only newly inserted subtrees; never rescan the whole note/app per token.
+    for (const record of records) {
+      for (const added of record.addedNodes) {
+        if (added instanceof Element && added.isConnected) {
+          hydrateMathIn(added)
+        }
+      }
     }
-  }
-
-  const observer = new MutationObserver(() => {
-    scan()
   })
 
   const start = () => {
     observer.observe(document.body, { childList: true, subtree: true })
-    scan()
+    hydrateMathIn(document)
   }
 
   if (document.body) {

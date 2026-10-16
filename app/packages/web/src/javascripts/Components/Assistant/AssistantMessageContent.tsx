@@ -1,6 +1,8 @@
-import { useMemo, useState, type RefObject } from 'react'
+import { useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import { sanitizeHtmlString } from '@standardnotes/utils'
 import { markdownToHtml } from '@/Utils/markdownToHtml'
+
+export const ASSISTANT_STREAM_MARKDOWN_INTERVAL_MS = 200
 
 /** Reuse note-preview Markdown, with no automatic remote resource loads. */
 export function assistantMarkdownHtml(text: string): string {
@@ -44,7 +46,38 @@ export default function AssistantMessageContent({
   messageTextRef: RefObject<HTMLDivElement | null>
 }) {
   const [format, setFormat] = useState<'markdown' | 'plain'>('markdown')
-  const html = useMemo(() => (format === 'markdown' ? assistantMarkdownHtml(text) : ''), [text, format])
+  const [formattedText, setFormattedText] = useState(text)
+  const latestText = useRef(text)
+  latestText.current = text
+  const formatTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  useEffect(() => {
+    if (!streaming || format === 'plain') {
+      if (formatTimer.current !== undefined) {
+        clearTimeout(formatTimer.current)
+        formatTimer.current = undefined
+      }
+      return
+    }
+    if (formattedText !== text && formatTimer.current === undefined) {
+      formatTimer.current = setTimeout(() => {
+        formatTimer.current = undefined
+        setFormattedText(latestText.current)
+      }, ASSISTANT_STREAM_MARKDOWN_INTERVAL_MS)
+    }
+  }, [format, formattedText, streaming, text])
+  useEffect(
+    () => () => {
+      if (formatTimer.current !== undefined) {
+        clearTimeout(formatTimer.current)
+      }
+    },
+    [],
+  )
+  // Append-only deltas stay visible as plain text until the next bounded Markdown
+  // update. A replaced response never exposes an old account/message's snapshot.
+  const markdownText = !streaming ? text : text.startsWith(formattedText) ? formattedText : ''
+  const pendingText = streaming ? text.slice(markdownText.length) : ''
+  const html = useMemo(() => (format === 'markdown' ? assistantMarkdownHtml(markdownText) : ''), [markdownText, format])
   return (
     <div className="text-text min-w-0 py-1 text-sm leading-5">
       <div
@@ -72,10 +105,13 @@ export default function AssistantMessageContent({
         {format === 'plain' ? (
           <div className="break-words whitespace-pre-wrap">{text}</div>
         ) : (
-          <div
-            className="[&_a]:text-info [&_blockquote]:border-info [&_code]:bg-default [&_pre]:bg-default break-words [&_a]:underline [&_blockquote]:border-l-2 [&_blockquote]:pl-2 [&_code]:rounded [&_code]:px-1 [&_code]:font-mono [&_h1]:my-2 [&_h1]:text-lg [&_h1]:font-bold [&_h2]:my-2 [&_h2]:text-base [&_h2]:font-bold [&_h3]:my-1 [&_h3]:font-semibold [&_li]:my-0.5 [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-1 [&_pre]:my-2 [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:p-2 [&_pre_code]:p-0 [&_pre_code]:whitespace-pre [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-5"
-            dangerouslySetInnerHTML={{ __html: html }}
-          />
+          <div>
+            <div
+              className="[&_a]:text-info [&_blockquote]:border-info [&_code]:bg-default [&_pre]:bg-default break-words [&_a]:underline [&_blockquote]:border-l-2 [&_blockquote]:pl-2 [&_code]:rounded [&_code]:px-1 [&_code]:font-mono [&_h1]:my-2 [&_h1]:text-lg [&_h1]:font-bold [&_h2]:my-2 [&_h2]:text-base [&_h2]:font-bold [&_h3]:my-1 [&_h3]:font-semibold [&_li]:my-0.5 [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-1 [&_pre]:my-2 [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:p-2 [&_pre_code]:p-0 [&_pre_code]:whitespace-pre [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-5"
+              dangerouslySetInnerHTML={{ __html: html }}
+            />
+            {pendingText && <span className="break-words whitespace-pre-wrap">{pendingText}</span>}
+          </div>
         )}
         {streaming && (
           <span aria-label="Generating response" className="ml-0.5 animate-pulse">

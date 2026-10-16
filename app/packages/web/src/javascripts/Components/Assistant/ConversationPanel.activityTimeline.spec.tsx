@@ -236,6 +236,51 @@ describe('Assistant conversation activity timeline', () => {
     expect(runConversationMode).toHaveBeenCalledTimes(1)
   })
 
+  it('does not append a buffered delta after the authenticated principal becomes invalid', async () => {
+    await act(async () => {
+      render()
+      await flush()
+    })
+    const signedIn = jest.spyOn(application.sessions, 'isSignedIn')
+    try {
+      await act(async () => {
+        options.onTextDelta?.('Stale buffered private content')
+        signedIn.mockReturnValue(true)
+        await new Promise((resolve) => setTimeout(resolve, 60))
+        resolveRun({ finalText: 'Stale buffered private content', steps: 1, stopReason: 'end_turn' })
+        await flush()
+      })
+      expect(container.textContent).not.toContain('Stale buffered private content')
+      expect(runConversationMode).toHaveBeenCalledTimes(1)
+    } finally {
+      signedIn.mockRestore()
+    }
+  })
+
+  it('does not reread and parse stored history on every streamed text render', async () => {
+    const read = jest.spyOn(storage, 'getValue')
+    try {
+      await act(async () => {
+        render()
+        await flush()
+      })
+      const initialReads = read.mock.calls.length
+      for (const text of ['First words. ', 'More words. ']) {
+        await act(async () => {
+          options.onTextDelta?.(text)
+          await new Promise((resolve) => setTimeout(resolve, 60))
+        })
+      }
+      expect(read).toHaveBeenCalledTimes(initialReads)
+      await act(async () => {
+        resolveRun({ finalText: 'First words. More words.', stopReason: 'end_turn', steps: 1 })
+        await flush()
+      })
+    } finally {
+      read.mockRestore()
+    }
+  })
+
   it('stops from the visible current-request control and clears queued work while pending actions settle', async () => {
     await act(async () => {
       render()
@@ -265,27 +310,6 @@ describe('Assistant conversation activity timeline', () => {
     expect(container.querySelector('summary')?.textContent).toContain('1 interrupted')
     expect(runConversationMode).toHaveBeenCalledTimes(1)
     expect(Array.from(container.querySelectorAll('button')).some((button) => button.textContent === 'Send')).toBe(true)
-  })
-
-  it('does not append a buffered delta after the authenticated principal becomes invalid', async () => {
-    await act(async () => {
-      render()
-      await flush()
-    })
-    const signedIn = jest.spyOn(application.sessions, 'isSignedIn')
-    try {
-      await act(async () => {
-        options.onTextDelta?.('Stale buffered private content')
-        signedIn.mockReturnValue(true)
-        await new Promise((resolve) => setTimeout(resolve, 60))
-        resolveRun({ finalText: 'Stale buffered private content', steps: 1, stopReason: 'end_turn' })
-        await flush()
-      })
-      expect(container.textContent).not.toContain('Stale buffered private content')
-      expect(runConversationMode).toHaveBeenCalledTimes(1)
-    } finally {
-      signedIn.mockRestore()
-    }
   })
 
   it('does not replay the previous narration when a consumed steer is immediately aborted', async () => {

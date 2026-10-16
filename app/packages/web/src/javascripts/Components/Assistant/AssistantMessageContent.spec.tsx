@@ -3,6 +3,7 @@ import { act, createElement, createRef } from 'react'
 import { createRoot } from 'react-dom/client'
 import AssistantMessageContent, { assistantMarkdownHtml } from './AssistantMessageContent'
 import { assistantMessageTextForCopy } from './AssistantMessageActions'
+import * as markdown from '@/Utils/markdownToHtml'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -55,5 +56,72 @@ it('defaults to Markdown, supports exact plain text, and retains the choice duri
     expect(messageTextRef.current?.querySelector('pre code')?.textContent).toContain('finished')
   } finally {
     act(() => root.unmount())
+  }
+})
+
+it('bounds Markdown work during streaming while showing every pending character and rendering the exact final response', () => {
+  jest.useFakeTimers()
+  const parse = jest.spyOn(markdown, 'markdownToHtml')
+  const container = document.createElement('div')
+  const root = createRoot(container)
+  const ref = createRef<HTMLDivElement>()
+  const render = (text: string, streaming = true) =>
+    root.render(createElement(AssistantMessageContent, { text, streaming, messageTextRef: ref }))
+  try {
+    act(() => render('**Start**'))
+    const initialCalls = parse.mock.calls.length
+    let text = '**Start**'
+    for (let index = 0; index < 4; index++) {
+      text += ` delta${index}`
+      act(() => {
+        jest.advanceTimersByTime(40)
+        render(text)
+      })
+    }
+    expect(parse).toHaveBeenCalledTimes(initialCalls)
+    expect(ref.current?.textContent).toBe('Start delta0 delta1 delta2 delta3▍')
+    expect(assistantMessageTextForCopy({ id: 'm', kind: 'assistant', text })).toBe(text)
+    act(() => jest.advanceTimersByTime(200))
+    expect(parse).toHaveBeenCalledTimes(initialCalls + 1)
+    const finalText = text + ' **finished**'
+    act(() => render(finalText, false))
+    expect(Array.from(ref.current!.querySelectorAll('strong')).map((node) => node.textContent)).toEqual([
+      'Start',
+      'finished',
+    ])
+    expect(ref.current?.textContent).toBe('Start delta0 delta1 delta2 delta3 finished')
+  } finally {
+    act(() => root.unmount())
+    parse.mockRestore()
+    jest.useRealTimers()
+  }
+})
+it('hides a replaced message snapshot immediately and cancels pending formatting on unmount', () => {
+  jest.useFakeTimers()
+  const container = document.createElement('div')
+  const root = createRoot(container)
+  const ref = createRef<HTMLDivElement>()
+  try {
+    act(() =>
+      root.render(
+        createElement(AssistantMessageContent, {
+          text: '**old account secret**',
+          streaming: true,
+          messageTextRef: ref,
+        }),
+      ),
+    )
+    act(() =>
+      root.render(
+        createElement(AssistantMessageContent, { text: 'new account response', streaming: true, messageTextRef: ref }),
+      ),
+    )
+    expect(ref.current?.textContent).toBe('new account response▍')
+    expect(container.textContent).not.toContain('old account secret')
+    expect(ref.current?.querySelector('strong')).toBeNull()
+    act(() => root.unmount())
+    expect(jest.getTimerCount()).toBe(0)
+  } finally {
+    jest.useRealTimers()
   }
 })

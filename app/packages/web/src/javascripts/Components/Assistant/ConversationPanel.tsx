@@ -1,3 +1,4 @@
+import { changedAssistantMessageIds } from '@/Assistant/assistantMessageRevisions'
 import {
   AssistantAttachment,
   assertAttachmentBudget,
@@ -291,8 +292,8 @@ function ConversationPanelImpl({
 }: Props) {
   const { presentPane } = useResponsiveAppPane()
 
-  const initialHistoryRead = useRef(
-    sharedChat?.history
+  const [initialHistoryRead] = useState(() => {
+    return sharedChat?.history
       ? {
           status: 'found' as const,
           messages: sharedChat.history.messages,
@@ -300,8 +301,8 @@ function ConversationPanelImpl({
         }
       : persistenceAllowed
         ? readAssistantChatHistoryResult(application.storage, accountScope, tabId)
-        : ({ status: 'missing' } as const),
-  ).current
+        : ({ status: 'missing' } as const)
+  })
   const historyReadFailed = initialHistoryRead.status === 'error'
   const [historyPersistenceFailed, setHistoryPersistenceFailed] = useState(historyReadFailed)
   const effectivePersistenceAllowed = persistenceAllowed && !historyPersistenceFailed
@@ -397,22 +398,24 @@ function ConversationPanelImpl({
   // Whether the user has sent at least one message in this conversation.
   const hasSentRef = useRef(messages.some((message) => message.kind === 'user'))
   const confirmationResolverRef = useRef<((approved: boolean) => void) | null>(null)
-  const sessionToolDecisionsRef = useRef(
-    new Map<string, boolean>([
-      ...(initialHistoryRead.status === 'found'
-        ? initialHistoryRead.deniedToolNames
-            .filter((name) => KNOWN_ASSISTANT_TOOL_NAMES.has(name))
-            .map((name): [string, boolean] => [name, false])
-        : []),
-      ...messages.flatMap((message) => {
-        return message.kind === 'assistant'
-          ? message.tools
-              .filter((tool) => tool.authorization?.decision === 'deny' && tool.authorization.source === 'user-chat')
-              .map((tool): [string, boolean] => [tool.name, false])
-          : []
-      }),
-    ]),
+  const [initialToolDecisions] = useState(
+    () =>
+      new Map<string, boolean>([
+        ...(initialHistoryRead.status === 'found'
+          ? initialHistoryRead.deniedToolNames
+              .filter((name) => KNOWN_ASSISTANT_TOOL_NAMES.has(name))
+              .map((name): [string, boolean] => [name, false])
+          : []),
+        ...messages.flatMap((message) => {
+          return message.kind === 'assistant'
+            ? message.tools
+                .filter((tool) => tool.authorization?.decision === 'deny' && tool.authorization.source === 'user-chat')
+                .map((tool): [string, boolean] => [tool.name, false])
+            : []
+        }),
+      ]),
   )
+  const sessionToolDecisionsRef = useRef(initialToolDecisions)
   const activeToolActivityIdsRef = useRef(new Map<string, string>())
   const preflightProviderRef = useRef<Provider | null>(null)
   const runIntentRef = useRef('')
@@ -464,19 +467,11 @@ function ConversationPanelImpl({
   }, [])
 
   const setMessagesSynced = useCallback((updater: (prev: UIMessage[]) => UIMessage[]) => {
-    const previous = new Map(messagesRef.current.map((message) => [message.id, JSON.stringify(message)]))
-    const next = updater(messagesRef.current)
+    const previous = messagesRef.current
+    const next = updater(previous)
     const revision = ++sharedLocalRevisionRef.current
-    const nextIds = new Set(next.map((message) => message.id))
-    for (const message of next) {
-      if (previous.get(message.id) !== JSON.stringify(message)) {
-        sharedDirtyIdsRef.current.set(message.id, revision)
-      }
-    }
-    for (const id of previous.keys()) {
-      if (!nextIds.has(id)) {
-        sharedDirtyIdsRef.current.set(id, revision)
-      }
+    for (const id of changedAssistantMessageIds(previous, next)) {
+      sharedDirtyIdsRef.current.set(id, revision)
     }
     sharedDirtyRef.current = sharedDirtyIdsRef.current.size > 0
     messagesRef.current = next
@@ -577,6 +572,12 @@ function ConversationPanelImpl({
     if (!shared && (!history || !persistenceAllowedRef.current || !persist)) {
       return
     }
+    // Incoming sync updates schedule the same checkpoint effect as local edits.
+    // Skip clean/unready shared histories before mapping and sanitizing the
+    // entire transcript, especially for inactive mounted chat tabs.
+    if (shared && (!sharedDirtyRef.current || !shared.ready)) {
+      return
+    }
     const checkpointSource = messagesRef.current
     const dirtyVersions = new Map(sharedDirtyIdsRef.current)
     const latestMessages: PersistedAssistantMessage[] = checkpointSource.map((message) => {
@@ -618,9 +619,6 @@ function ConversationPanelImpl({
       }
     }
     if (shared) {
-      if (!sharedDirtyRef.current || !shared.ready) {
-        return
-      }
       if (runLeaseRef.current && !runLeaseRef.current.isCurrent()) {
         throw new Error('Chat generation ownership expired before checkpointing.')
       }
