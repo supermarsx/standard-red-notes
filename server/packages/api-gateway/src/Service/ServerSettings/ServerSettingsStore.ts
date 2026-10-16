@@ -492,6 +492,8 @@ function isPersistedAiProfile(value: unknown): value is PersistedAiProfile {
       'enabled',
       'apiKey',
       'backendProfileId',
+      'supportsImageInputs',
+      'contextWindowTokens',
     ]) &&
     isProfileId(value.id) &&
     isBoundedString(value.name, 1, ASSISTANT_PROFILE_LIMITS.nameLength) &&
@@ -507,7 +509,9 @@ function isPersistedAiProfile(value: unknown): value is PersistedAiProfile {
     (value.topP === undefined ||
       (typeof value.topP === 'number' && Number.isFinite(value.topP) && value.topP >= 0 && value.topP <= 1)) &&
     (value.maxOutputTokens === undefined || isIntegerBetween(value.maxOutputTokens, 1, 200_000)) &&
+    (value.contextWindowTokens === undefined || isIntegerBetween(value.contextWindowTokens, 1, 1_000_000_000)) &&
     typeof value.enabled === 'boolean' &&
+    (value.supportsImageInputs === undefined || typeof value.supportsImageInputs === 'boolean') &&
     (value.apiKey === undefined || isSecret(value.apiKey)) &&
     (value.backendProfileId === undefined || isProfileId(value.backendProfileId))
   )

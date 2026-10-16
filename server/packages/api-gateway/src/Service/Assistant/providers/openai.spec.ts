@@ -48,6 +48,31 @@ describe('OpenAIProvider wire contract', () => {
     OpenAIMock.mockImplementation((options: unknown) => ({ chat: { completions: { create } }, options }))
   })
 
+  it('maps user images to native Chat content parts without treating the data URL as text', async () => {
+    create.mockResolvedValue(events([]))
+    const image = {
+      kind: 'image' as const,
+      name: 'p.jpg',
+      dataUrl: 'data:image/jpeg;base64,/9j/2Q==',
+      width: 1,
+      height: 1,
+    }
+    await collect(
+      new OpenAIProvider('m', 'key').send({
+        system: 's',
+        tools: [],
+        messages: [{ role: 'user', content: 'describe', images: [image] }],
+      }),
+    )
+    expect(create.mock.calls[0][0].messages[1]).toEqual({
+      role: 'user',
+      content: [
+        { type: 'text', text: 'describe' },
+        { type: 'image_url', image_url: { url: image.dataUrl } },
+      ],
+    })
+  })
+
   it('round-trips dotted production tool names through safe deterministic aliases', async () => {
     const wireName = createOpenAIToolNameMap(['notes.list', 'delegate']).toWireName('notes.list')
     const controller = new AbortController()

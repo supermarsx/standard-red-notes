@@ -642,6 +642,20 @@ export class OpenAIResponsesProvider implements Provider {
         continue
       }
 
+      if (message.role === 'user' && message.images?.length) {
+        input.push({
+          role: 'user',
+          content: [
+            { type: 'input_text', text: message.content },
+            ...message.images.map((image) => ({
+              type: 'input_image' as const,
+              image_url: image.dataUrl,
+              detail: 'auto' as const,
+            })),
+          ],
+        })
+        continue
+      }
       input.push({
         role: message.role === 'system' ? 'developer' : (message.role as 'user' | 'assistant'),
         content: message.content,

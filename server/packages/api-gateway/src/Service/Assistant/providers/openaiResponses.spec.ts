@@ -49,6 +49,31 @@ describe('OpenAIResponsesProvider', () => {
     OpenAIMock.mockImplementation((options: unknown) => ({ responses: { create }, options }))
   })
 
+  it('maps user images to native Responses input parts', async () => {
+    create.mockResolvedValue(events([]))
+    const image = {
+      kind: 'image' as const,
+      name: 'p.jpg',
+      dataUrl: 'data:image/jpeg;base64,/9j/2Q==',
+      width: 1,
+      height: 1,
+    }
+    await collect(
+      new OpenAIResponsesProvider('m', 'key').send({
+        system: 's',
+        tools: [],
+        messages: [{ role: 'user', content: 'describe', images: [image] }],
+      }),
+    )
+    expect(create.mock.calls[0][0].input[0]).toEqual({
+      role: 'user',
+      content: [
+        { type: 'input_text', text: 'describe' },
+        { type: 'input_image', image_url: image.dataUrl, detail: 'auto' },
+      ],
+    })
+  })
+
   it('uses the Responses wire contract and maps tools, sampling, usage, and completion', async () => {
     const wireName = createOpenAIToolNameMap(['notes.list']).toWireName('notes.list')
     const reasoningItem = {

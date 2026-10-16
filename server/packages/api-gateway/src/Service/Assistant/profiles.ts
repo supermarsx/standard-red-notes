@@ -48,6 +48,10 @@ export const ASSISTANT_PROFILE_LIMITS = {
 
 /** A profile as persisted on disk. Contains the (secret) apiKey. */
 export interface PersistedAiProfile {
+  /** Explicit operator-reported model context capacity; absent means unknown. */
+  contextWindowTokens?: number
+  /** Operator-confirmed image input support for this profile's selected model. */
+  supportsImageInputs?: boolean
   id: string
   name: string
   provider: AssistantProfileProviderKind
@@ -94,6 +98,8 @@ export interface PersistedAiProfile {
  * will be removed the next time profiles are saved.
  */
 export interface MaskedAiProfile {
+  contextWindowTokens?: number
+  supportsImageInputs?: boolean
   id: string
   name: string
   provider: AssistantProfileProviderKind
@@ -123,6 +129,8 @@ export interface ResolvedProfileProvider {
 export function maskProfile(profile: PersistedAiProfile): MaskedAiProfile {
   const legacyInlineCredentialIgnored = profile.provider === 'codex-subscription' && Boolean(profile.apiKey)
   return {
+    ...(typeof profile.supportsImageInputs === 'boolean' ? { supportsImageInputs: profile.supportsImageInputs } : {}),
+    ...(profile.contextWindowTokens !== undefined ? { contextWindowTokens: profile.contextWindowTokens } : {}),
     id: profile.id,
     name: profile.name,
     provider: profile.provider,
@@ -368,6 +376,8 @@ export function validateProfilesPatch(
             'topP',
             'maxOutputTokens',
             'enabled',
+            'supportsImageInputs',
+            'contextWindowTokens',
             'apiKey',
             'backendProfileId',
           ])
@@ -407,8 +417,22 @@ export function validateProfilesPatch(
         if (raw.enabled !== undefined && typeof raw.enabled !== 'boolean') {
           return { error: `Profile ${id} enabled must be a boolean.` }
         }
+        if (raw.contextWindowTokens !== undefined && raw.contextWindowTokens !== null) {
+          if (
+            !Number.isSafeInteger(raw.contextWindowTokens) ||
+            (raw.contextWindowTokens as number) < 1 ||
+            (raw.contextWindowTokens as number) > 1_000_000_000
+          ) {
+            return { error: `Profile ${id} contextWindowTokens must be an integer from 1 to 1000000000.` }
+          }
+        }
+        if (raw.supportsImageInputs !== undefined && typeof raw.supportsImageInputs !== 'boolean') {
+          return { error: `Profile ${id} supportsImageInputs must be a boolean.` }
+        }
 
         const profile: PersistedAiProfile = {
+          ...(typeof raw.contextWindowTokens === 'number' ? { contextWindowTokens: raw.contextWindowTokens } : {}),
+          ...(typeof raw.supportsImageInputs === 'boolean' ? { supportsImageInputs: raw.supportsImageInputs } : {}),
           id,
           name,
           provider: provider as AssistantProfileProviderKind,

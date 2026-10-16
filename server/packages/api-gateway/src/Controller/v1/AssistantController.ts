@@ -1,3 +1,4 @@
+import { profileSupportsImageInputs, validateAssistantImages } from '../../Service/Assistant/attachments'
 import { Request, Response } from 'express'
 import { createHash } from 'node:crypto'
 import { inject, optional } from 'inversify'
@@ -358,6 +359,8 @@ export class AssistantController extends BaseHttpController {
           name: string
           provider: string
           model: string
+          contextWindowTokens?: number
+          supportsImageInputs: boolean
         }
       | undefined
     let effectiveProviderId: string | undefined
@@ -376,6 +379,8 @@ export class AssistantController extends BaseHttpController {
             name: profile.name,
             provider: profile.provider,
             model: resolution.model,
+            contextWindowTokens: profile.contextWindowTokens,
+            supportsImageInputs: profileSupportsImageInputs(profile, resolution.providerId),
           }
         }
       } catch {
@@ -398,6 +403,7 @@ export class AssistantController extends BaseHttpController {
       defaultProvider: effectiveProviderId ?? legacyDefaultProvider,
       defaultModel: effectiveProfile?.model ?? legacyDefaultModel,
       profileConfigured: effectiveProfile !== undefined,
+      supportsImageInputs: effectiveProfile?.supportsImageInputs ?? false,
       effectiveProfile: effectiveProfile ?? null,
     })
   }
@@ -1138,12 +1144,15 @@ export class AssistantController extends BaseHttpController {
     }
 
     let provider: Provider
+    let contextWindowTokens: number | undefined
     let isSubscription = false
     let subscriptionId: string | undefined
     let generation: { temperature?: number; topP?: number; maxOutputTokens?: number } = {}
     try {
       const resolved = await this.resolveStreamProvider(body, request, response)
+      validateAssistantImages(body.messages ?? [], resolved.supportsImageInputs === true, body)
       provider = resolved.provider
+      contextWindowTokens = resolved.contextWindowTokens
       isSubscription = resolved.isSubscription
       subscriptionId = resolved.subscriptionId
       generation = resolved.generation
@@ -1395,6 +1404,10 @@ export class AssistantController extends BaseHttpController {
     let completionChars = 0
 
     try {
+      if (contextWindowTokens !== undefined) {
+        // Configuration metadata only: never invent input/output token counts.
+        writeEvent({ kind: 'usage', contextWindowTokens })
+      }
       const stream = provider.send({
         system: body.system ?? '',
         messages: body.messages ?? [],
@@ -1433,7 +1446,9 @@ export class AssistantController extends BaseHttpController {
         } else if (event.kind === 'text-delta') {
           completionChars += event.delta.length
         }
-        writeEvent(event)
+        writeEvent(
+          event.kind === 'usage' && contextWindowTokens !== undefined ? { ...event, contextWindowTokens } : event,
+        )
       }
     } catch (error) {
       outcome.markFailed()
@@ -1680,6 +1695,8 @@ export class AssistantController extends BaseHttpController {
   ): Promise<{
     provider: Provider
     isSubscription: boolean
+    supportsImageInputs?: boolean
+    contextWindowTokens?: number
     subscriptionId?: string
     generation: { temperature?: number; topP?: number; maxOutputTokens?: number }
   }> {
@@ -1755,6 +1772,8 @@ export class AssistantController extends BaseHttpController {
         return {
           provider: resolveProvider(resolution.providerId, effectiveModel, resolution.config),
           isSubscription: profile.provider === 'codex-subscription',
+          supportsImageInputs: profileSupportsImageInputs(profile, resolution.providerId),
+          contextWindowTokens: profile.contextWindowTokens,
           subscriptionId: profile.provider === 'codex-subscription' ? profile.subscriptionId : undefined,
           generation: {
             temperature: profile.temperature,

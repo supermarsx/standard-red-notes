@@ -581,16 +581,52 @@ describe('AssistantController', () => {
         defaultProvider: 'openai',
         defaultModel: 'local-model',
         profileConfigured: true,
+        supportsImageInputs: false,
         effectiveProfile: {
           id: 'assigned-local',
           name: 'Assigned local model',
           provider: 'openai-compatible',
           model: 'local-model',
+          supportsImageInputs: false,
         },
       })
       const serialized = JSON.stringify(jsonMock.mock.calls[0][0])
       expect(serialized).not.toContain('server-only-secret')
       expect(serialized).not.toContain('127.0.0.1')
+    })
+
+    it('returns configured context metadata and streams it even when the upstream omits token counts', async () => {
+      resolver.resolveActiveProfile.mockResolvedValue({ ...profile, contextWindowTokens: 128000 })
+      await controller().config({} as Request, responseWith({}))
+      expect(jsonMock).toHaveBeenCalledWith(
+        expect.objectContaining({ effectiveProfile: expect.objectContaining({ contextWindowTokens: 128000 }) }),
+      )
+      ;(resolveProvider as jest.Mock).mockReturnValueOnce({
+        id: 'openai',
+        async *send() {
+          yield { kind: 'finish', stopReason: 'end_turn' }
+        },
+      })
+      const response = responseWith({})
+      await controller().streamCompletion(
+        { body: { messages: [], contextWindowTokens: 999 }, headers: {}, on: jest.fn() } as unknown as Request,
+        response,
+      )
+      expect(response.write).toHaveBeenCalledWith(
+        expect.stringContaining('"kind":"usage","contextWindowTokens":128000'),
+      )
+      expect(response.write).not.toHaveBeenCalledWith(expect.stringContaining('"promptTokens":'))
+    })
+
+    it('advertises explicit image support only for the authenticated tested adapter', async () => {
+      resolver.resolveActiveProfile.mockResolvedValueOnce({ ...profile, supportsImageInputs: true })
+      await controller().config({} as Request, responseWith({}))
+      expect(jsonMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          supportsImageInputs: true,
+          effectiveProfile: expect.objectContaining({ supportsImageInputs: true }),
+        }),
+      )
     })
 
     it('fails closed when the authenticated assignment cannot be resolved', async () => {
@@ -657,6 +693,34 @@ describe('AssistantController', () => {
       expect(response.end).toHaveBeenCalled()
     })
 
+    it('refuses image requests without the authoritative profile capability before provider dispatch', async () => {
+      const send = jest.fn()
+      ;(resolveProvider as jest.Mock).mockReturnValueOnce({ id: 'openai', send })
+      const response = responseWith({})
+      await controller().streamCompletion(
+        {
+          body: {
+            messages: [
+              {
+                role: 'user',
+                content: 'describe',
+                images: [
+                  { kind: 'image', name: 'p.jpg', dataUrl: 'data:image/jpeg;base64,/9j/2Q==', width: 1, height: 1 },
+                ],
+              },
+            ],
+            supportsImageInputs: true,
+          },
+          headers: {},
+          on: jest.fn(),
+        } as unknown as Request,
+        response,
+      )
+      expect(send).not.toHaveBeenCalled()
+      expect(response.write).toHaveBeenCalledWith(expect.stringContaining('not enabled'))
+      expect(response.end).toHaveBeenCalled()
+    })
+
     it('applies a server-owned narrow output cap to safety reviews', async () => {
       let providerRequest: { maxOutputTokens?: number } | undefined
       const assignedProvider = {
@@ -691,6 +755,7 @@ describe('AssistantController', () => {
       defaultProvider: 'openai',
       defaultModel: 'gpt-test',
       profileConfigured: false,
+      supportsImageInputs: false,
       effectiveProfile: null,
     })
   })

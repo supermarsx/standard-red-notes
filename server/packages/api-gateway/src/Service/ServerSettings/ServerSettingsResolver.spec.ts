@@ -81,6 +81,22 @@ describe('ServerSettingsStore + ServerSettingsResolver', () => {
     await expect(store.update({ security: { websocketTraffic: { maxQueuedBytes: 0 } } })).rejects.toThrow()
   })
 
+  it('round trips explicit context windows and rejects corrupt persisted limits', async () => {
+    const store = new ServerSettingsStore(filePath)
+    const profile = {
+      id: 'context',
+      name: 'Context',
+      provider: 'openai-compatible' as const,
+      enabled: true,
+      model: 'm',
+      contextWindowTokens: 128000,
+    }
+    await store.update({ ai: { profiles: [profile] } })
+    expect((await store.read()).ai?.profiles?.[0].contextWindowTokens).toBe(128000)
+    await fs.writeFile(filePath, JSON.stringify({ ai: { profiles: [{ ...profile, contextWindowTokens: -1 }] } }))
+    await expect(store.read()).rejects.toThrow()
+  })
+
   describe('store', () => {
     it('keeps revision env defaults, persists overrides, and clears individual account fields', async () => {
       const user = '00000000-0000-4000-8000-000000000001'

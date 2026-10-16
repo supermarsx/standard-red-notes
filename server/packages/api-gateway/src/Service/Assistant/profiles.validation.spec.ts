@@ -1,5 +1,6 @@
 import {
   ASSIGNABLE_ROLE_NAMES,
+  maskProfile,
   BACKEND_API_KEY_PROVIDERS,
   PersistedAiProfile,
   PersistedBackendProfile,
@@ -30,6 +31,46 @@ const errorOf = (result: unknown): string => {
 }
 
 describe('validateProfilesPatch', () => {
+  it('preserves an explicit bounded context window without guessing one for absent metadata', () => {
+    const profile = {
+      id: 'context',
+      name: 'Context',
+      provider: 'openai-compatible',
+      enabled: true,
+      model: 'chosen-model',
+    }
+    expect(validateProfilesPatch([{ ...profile, contextWindowTokens: 128000 }], undefined, undefined)).toMatchObject({
+      profiles: [{ contextWindowTokens: 128000 }],
+    })
+    expect(maskProfile({ ...profile, provider: 'openai-compatible', contextWindowTokens: 128000 })).toHaveProperty(
+      'contextWindowTokens',
+      128000,
+    )
+    expect(validateProfilesPatch([profile], undefined, undefined)).not.toHaveProperty('profiles.0.contextWindowTokens')
+    expect(validateProfilesPatch([{ ...profile, contextWindowTokens: null }], undefined, undefined)).not.toHaveProperty(
+      'profiles.0.contextWindowTokens',
+    )
+    for (const contextWindowTokens of [0, -1, 1.5, 1000000001, '128000', NaN, Infinity]) {
+      expect(validateProfilesPatch([{ ...profile, contextWindowTokens }], undefined, undefined)).toHaveProperty('error')
+    }
+  })
+
+  it('accepts an explicit boolean image declaration and rejects coercion', () => {
+    const profile = {
+      id: 'images',
+      name: 'Images',
+      provider: 'openai-compatible',
+      enabled: true,
+      model: 'chosen-model',
+    }
+    expect(validateProfilesPatch([{ ...profile, supportsImageInputs: true }], undefined, undefined)).toMatchObject({
+      profiles: [{ supportsImageInputs: true }],
+    })
+    expect(validateProfilesPatch([{ ...profile, supportsImageInputs: 'true' }], undefined, undefined)).toHaveProperty(
+      'error',
+    )
+    expect(validateProfilesPatch([profile], undefined, undefined)).not.toHaveProperty('profiles.0.supportsImageInputs')
+  })
   const validProfile = (overrides: Record<string, unknown> = {}) => ({
     id: 'p1',
     name: 'Profile One',

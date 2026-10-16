@@ -11,9 +11,18 @@ export interface ProviderReplayState {
   encodedOutput: string
 }
 
+export interface AssistantImageAttachment {
+  kind: 'image'
+  name: string
+  dataUrl: string
+  width: number
+  height: number
+}
+
 export interface ChatMessage {
   role: ChatRole
   content: string
+  images?: AssistantImageAttachment[]
   /** For tool messages, the originating tool call id. */
   toolCallId?: string
   /** For assistant messages, any tool calls the model wants to make. */
@@ -58,7 +67,13 @@ export type ProviderEvent =
   // Token usage reported by the upstream LLM, forwarded to the browser so the
   // client can surface consumption. Best-effort: emitted only when the upstream
   // response includes a usage object.
-  | { kind: 'usage'; promptTokens?: number; completionTokens?: number; totalTokens?: number }
+  | {
+      kind: 'usage'
+      promptTokens?: number
+      completionTokens?: number
+      totalTokens?: number
+      contextWindowTokens?: number
+    }
 
 export interface Provider {
   readonly id: string

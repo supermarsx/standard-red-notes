@@ -70,6 +70,18 @@ export class OpenAIProvider implements Provider {
             })),
           }
         }
+        if (m.role === 'user' && m.images?.length) {
+          return {
+            role: 'user',
+            content: [
+              { type: 'text', text: m.content },
+              ...m.images.map((image): OpenAI.ChatCompletionContentPartImage => ({
+                type: 'image_url',
+                image_url: { url: image.dataUrl },
+              })),
+            ],
+          }
+        }
         return { role: m.role as 'user' | 'assistant', content: m.content }
       }),
     ]
