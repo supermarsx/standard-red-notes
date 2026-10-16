@@ -385,11 +385,7 @@ describe('expanded (the default)', () => {
       Array.from(tabRow(tile).children).map(
         (child) => child.getAttribute('aria-label') ?? child.getAttribute('role') ?? child.className,
       ),
-    ).toEqual([
-      'Clipboard and history tools',
-      'Formatting groups',
-      expect.stringContaining('super-toolbar-tabs-spacer'),
-    ])
+    ).toEqual([expect.stringContaining('super-toolbar-tabs-spacer'), 'Formatting groups', 'AI change tools'])
     expect(tabRow(tile).querySelector('[data-super-toolbar-collapse]')).toBeNull()
   })
 
@@ -505,7 +501,8 @@ describe('collapsed', () => {
         'AI',
         'Tools',
       ])
-      expect(tabRow(tile).querySelector('[aria-label="Clipboard and history tools"]')).not.toBeNull()
+      expect(tabRow(tile).querySelector('[aria-label="AI change tools"]')).not.toBeNull()
+      expect(tabRow(tile).querySelector('[aria-label="Clipboard and history tools"]')).toBeNull()
       expect(tabRow(tile).closest('[inert]')).toBeNull()
     })
 
@@ -675,7 +672,9 @@ describe('collapsed', () => {
   describe('while something the panel opened is open', () => {
     /** A real ribbon dropdown: the first button in the PANEL the real Popover has marked as an anchor. */
     const firstDropdownAnchor = (tile: Tile) =>
-      panel(tile).querySelector<HTMLElement>('[aria-haspopup="true"]') as HTMLElement
+      panel(tile).querySelector<HTMLElement>(
+        '[aria-haspopup="true"]:not([disabled]):not([aria-disabled="true"])',
+      ) as HTMLElement
     const openPopovers = () => document.querySelectorAll('[data-popover]')
 
     it('keeps the panel when the pointer leaves the bar for a dropdown that is rendered outside it', async () => {
@@ -760,15 +759,29 @@ describe('collapsed', () => {
       expect(held.filter((label) => /more block styles$/.test(label))).toHaveLength(1)
     })
 
-    it('does not open the panel for a dropdown that belongs to the tab row', async () => {
-      // Paste options, undo history: they hang off the row, which is always
-      // there, and need nothing from the panel.
+    it('keeps clipboard dropdowns in the Home panel, where their open state holds the panel', async () => {
       const tile = await mountTile()
-      const rowAnchor = tabRow(tile).querySelector<HTMLElement>('[aria-haspopup="true"]') as HTMLElement
-      expect(rowAnchor).not.toBeNull()
-      await click(rowAnchor)
-      expect(rowAnchor.getAttribute('aria-expanded')).toBe('true')
+      // Clipboard/history controls moved into Home; only AI changes remain in
+      // the always-visible utility row. A clipboard popup now belongs to the
+      // auto-hidden panel and must keep that panel alive while it is open.
+      const pasteOptions = () =>
+        Array.from(panel(tile).querySelectorAll<HTMLElement>('[aria-haspopup="true"]')).find((anchor) =>
+          /more.*paste|paste.*options/i.test(anchor.getAttribute('aria-label') ?? ''),
+        )
+      expect(tabRow(tile).querySelector('[aria-label="Clipboard and history tools"]')).toBeNull()
+      const anchor = pasteOptions()
+      expect(anchor).toBeDefined()
+      expect(tabRow(tile).contains(anchor!)).toBe(false)
+      expect(state(tile)).toBe('hidden')
+      await pointAtTab(tile, 'Home')
+      await click(anchor!)
+      expect(anchor!.getAttribute('aria-expanded')).toBe('true')
+      await leaveBar(tile)
       await advance(LONG)
+      expect(state(tile)).toBe('revealed')
+      await click(anchor!)
+      expect(anchor!.hasAttribute('aria-expanded')).toBe(false)
+      await advance(TOOLBAR_AUTO_HIDE_HIDE_DELAY_MS)
       expect(state(tile)).toBe('hidden')
     })
   })
