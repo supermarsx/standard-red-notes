@@ -1,3 +1,4 @@
+import { SearchIndex } from './SearchIndex'
 // Hardening tests for ThreadedSearchIndex: a HUNG search-index worker (one that
 // accepts a rebuild but never posts back, and never fires onerror) must never leave
 // rebuild() awaiting forever. The threaded index must time the worker out, settle the
@@ -16,8 +17,19 @@ jest.mock('./searchIndex.worker', () => {
   class MockSearchIndexWorker {
     public onmessage: ((event: { data: unknown }) => void) | null = null
     public onerror: (() => void) | null = null
+    public messages: Array<{ type: string; requestId: number }> = []
+    constructor() {
+      const globals = globalThis as { __searchWorkers?: MockSearchIndexWorker[] }
+      ;(globals.__searchWorkers ??= []).push(this)
+    }
 
     postMessage(message: { type: string; requestId: number }): void {
+      this.messages.push(message)
+      const globals = globalThis as { __throwSearchPost?: string }
+      if (globals.__throwSearchPost === message.type) {
+        globals.__throwSearchPost = undefined
+        throw new Error('postMessage failed')
+      }
       const respond = (data: Record<string, unknown>) =>
         setTimeout(() => this.onmessage?.({ data: { requestId: message.requestId, ...data } }), 0)
 
@@ -56,6 +68,8 @@ describe('ThreadedSearchIndex hung-worker hardening', () => {
   beforeEach(() => {
     ;(globalThis as { __hangRebuild?: boolean }).__hangRebuild = false
     ;(globalThis as { __terminateCount?: number }).__terminateCount = 0
+    ;(globalThis as { __searchWorkers?: unknown[] }).__searchWorkers = []
+    ;(globalThis as { __throwSearchPost?: string }).__throwSearchPost = undefined
     // typeof Worker !== 'undefined' gates the worker path; the actual constructor used
     // is the mocked module, not this stub.
     ;(global as { Worker?: unknown }).Worker = function () {} as unknown
@@ -193,6 +207,156 @@ describe('ThreadedSearchIndex hung-worker hardening', () => {
 
       // The progress heartbeat came through AND the rebuild still resolved normally.
       expect(progress).toContainEqual({ processed: 1, total: 2 })
+      index.destroy()
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+  const workers = () =>
+    (
+      globalThis as unknown as {
+        __searchWorkers: Array<{
+          messages: Array<{ type: string; requestId: number }>
+          onmessage: ((event: { data: unknown }) => void) | null
+          onerror: (() => void) | null
+        }>
+      }
+    ).__searchWorkers
+  const reply = (
+    worker: ReturnType<typeof workers>[number],
+    notes: Array<{ uuid: string; title: string; text: string }>,
+  ) => {
+    const local = new SearchIndex()
+    local.rebuild(notes)
+    const request = worker.messages.filter((message) => message.type === 'rebuild').at(-1)!
+    worker.onmessage?.({
+      data: { requestId: request.requestId, type: 'rebuilt', size: notes.length, snapshot: local.toSnapshot() },
+    })
+  }
+
+  it('replays edits and removals that arrive while a worker rebuild is pending', async () => {
+    jest.useFakeTimers()
+    try {
+      ;(globalThis as { __hangRebuild?: boolean }).__hangRebuild = true
+      const index = new ThreadedSearchIndex()
+      await jest.advanceTimersByTimeAsync(1)
+      const original = [
+        { uuid: 'a', title: 'obsolete', text: '' },
+        { uuid: 'b', title: 'removed', text: '' },
+      ]
+      const pending = index.rebuild(original)
+      index.updateMany([{ uuid: 'a', title: 'latest', text: '' }], ['b'])
+      reply(workers()[0], original)
+      await pending
+      expect(index.search('latest')).toEqual(['a'])
+      expect(index.search('obsolete')).toEqual([])
+      expect(index.search('removed')).toEqual([])
+      index.destroy()
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  it.each(['flush', 'killWorker', 'destroy'] as const)(
+    'does not refill the index from a pending rebuild after %s',
+    async (boundary) => {
+      jest.useFakeTimers()
+      try {
+        ;(globalThis as { __hangRebuild?: boolean }).__hangRebuild = true
+        const index = new ThreadedSearchIndex()
+        await jest.advanceTimersByTimeAsync(1)
+        const notes = [{ uuid: 'a', title: 'old private note', text: '' }]
+        const pending = index.rebuild(notes)
+        index[boundary]()
+        if (boundary === 'flush') reply(workers()[0], notes)
+        await pending
+        expect(index.isBuilt).toBe(false)
+        expect(index.size).toBe(0)
+        index.destroy()
+      } finally {
+        jest.useRealTimers()
+      }
+    },
+  )
+
+  it('keeps the newer rebuild when an older snapshot arrives last', async () => {
+    jest.useFakeTimers()
+    try {
+      ;(globalThis as { __hangRebuild?: boolean }).__hangRebuild = true
+      const index = new ThreadedSearchIndex()
+      await jest.advanceTimersByTimeAsync(1)
+      const old = [{ uuid: 'old', title: 'obsolete', text: '' }]
+      const first = index.rebuild(old)
+      const firstRequest = workers()[0]
+        .messages.filter((message) => message.type === 'rebuild')
+        .at(-1)!
+      const second = index.rebuild([{ uuid: 'new', title: 'current', text: '' }])
+      reply(workers()[0], [{ uuid: 'new', title: 'current', text: '' }])
+      await second
+      const oldIndex = new SearchIndex()
+      oldIndex.rebuild(old)
+      workers()[0].onmessage?.({
+        data: { requestId: firstRequest.requestId, type: 'rebuilt', size: 1, snapshot: oldIndex.toSnapshot() },
+      })
+      await first
+      expect(index.search('current')).toEqual(['new'])
+      expect(index.search('obsolete')).toEqual([])
+      index.destroy()
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  it('does not let a late queued error from an old worker tear down its replacement', async () => {
+    jest.useFakeTimers()
+    try {
+      ;(globalThis as { __hangRebuild?: boolean }).__hangRebuild = true
+      const index = new ThreadedSearchIndex()
+      await jest.advanceTimersByTimeAsync(1)
+      const pending = index.rebuild([{ uuid: 'old', title: 'obsolete', text: '' }])
+      const staleError = workers()[0].onerror!
+      index.killWorker()
+      index.restartWorker()
+      staleError()
+      await pending
+      await jest.advanceTimersByTimeAsync(1)
+      expect(index.isThreaded).toBe(true)
+      expect(index.isBuilt).toBe(false)
+      expect((globalThis as { __terminateCount?: number }).__terminateCount).toBe(1)
+      index.destroy()
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  it('replays changes into the local fallback when the worker fails a pending rebuild', async () => {
+    jest.useFakeTimers()
+    try {
+      ;(globalThis as { __hangRebuild?: boolean }).__hangRebuild = true
+      const index = new ThreadedSearchIndex()
+      await jest.advanceTimersByTimeAsync(1)
+      const pending = index.rebuild([{ uuid: 'a', title: 'obsolete', text: '' }])
+      index.updateMany([{ uuid: 'a', title: 'changed', text: '' }], [])
+      workers()[0].onerror?.()
+      await pending
+      expect(index.search('changed')).toEqual(['a'])
+      expect(index.search('obsolete')).toEqual([])
+      index.destroy()
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+  it('handles a configure postMessage failure without killing a newer worker or leaving a deadline', async () => {
+    jest.useFakeTimers()
+    try {
+      ;(globalThis as { __throwSearchPost?: string }).__throwSearchPost = 'configure'
+      const index = new ThreadedSearchIndex()
+      index.killWorker()
+      index.restartWorker()
+      await jest.advanceTimersByTimeAsync(31000)
+      expect(index.isThreaded).toBe(true)
+      expect(workers()).toHaveLength(2)
+      expect((globalThis as { __terminateCount?: number }).__terminateCount).toBe(1)
       index.destroy()
     } finally {
       jest.useRealTimers()

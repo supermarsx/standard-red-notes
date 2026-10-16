@@ -72,6 +72,8 @@ export class ThreadedSearchIndex {
   private readonly options: SearchIndexOptions
   private destroyed = false
   private workerRestarts = 0
+  /** The latest build owns adoption; incremental edits are replayed after its snapshot. */
+  private activeBuild: { updates: Map<string, IndexableNote | null> } | null = null
   /**
    * True after an explicit, user-initiated killWorker(). Distinct from a crash/hang
    * teardown: while set, the worker is deliberately absent and must NOT auto-restart
@@ -119,8 +121,12 @@ export class ThreadedSearchIndex {
       return
     }
     try {
-      this.worker = new SearchIndexWorker()
-      this.worker.onmessage = (event: MessageEvent<SearchIndexWorkerResponse>) => {
+      const worker = new SearchIndexWorker()
+      this.worker = worker
+      worker.onmessage = (event: MessageEvent<SearchIndexWorkerResponse>) => {
+        if (this.worker !== worker) {
+          return
+        }
         // Progress heartbeats stream under the rebuild's requestId but must NOT settle
         // (or delete) the pending request — only the final 'rebuilt' does that.
         if (event.data.type === 'progress') {
@@ -133,17 +139,20 @@ export class ThreadedSearchIndex {
           resolver(event.data)
         }
       }
-      this.worker.onerror = () => {
+      worker.onerror = () => {
         // If the worker dies, fall back to main-thread building so search keeps working.
-        this.teardownWorker()
+        this.teardownWorker(worker)
       }
-      void this.send({ type: 'configure', options: this.options })
+      void this.send({ type: 'configure', options: this.options }).catch(() => this.teardownWorker(worker))
     } catch {
       this.worker = null
     }
   }
 
-  private teardownWorker(): void {
+  private teardownWorker(expectedWorker: Worker | null = this.worker): void {
+    if (this.worker !== expectedWorker) {
+      return
+    }
     if (this.worker) {
       // Drop the handlers before terminating so a late-queued message/error can't fire
       // into a torn-down client (belt-and-braces; terminate() already stops delivery).
@@ -194,7 +203,7 @@ export class ThreadedSearchIndex {
       // a restart) and reject so the caller builds locally.
       const timer = setTimeout(() => {
         this.pending.delete(requestId)
-        this.teardownWorker()
+        this.teardownWorker(worker)
         reject(new Error('search index worker timed out'))
       }, REQUEST_TIMEOUT_MS)
 
@@ -202,7 +211,13 @@ export class ThreadedSearchIndex {
         clearTimeout(timer)
         resolve(response)
       })
-      worker.postMessage({ ...message, requestId } as SearchIndexWorkerRequest)
+      try {
+        worker.postMessage({ ...message, requestId } as SearchIndexWorkerRequest)
+      } catch (error) {
+        clearTimeout(timer)
+        this.pending.delete(requestId)
+        reject(error)
+      }
     })
   }
 
@@ -213,21 +228,50 @@ export class ThreadedSearchIndex {
    * locally if the worker is missing or errors.
    */
   async rebuild(notes: IndexableNote[]): Promise<void> {
-    if (!this.worker) {
-      this.local.rebuild(notes)
+    if (this.destroyed) {
       return
     }
+    const build = { updates: new Map<string, IndexableNote | null>() }
+    this.activeBuild = build
+    const worker = this.worker
+    const input = notes.map((note) => ({ ...note }))
     try {
-      const response = await this.send({ type: 'rebuild', notes })
-      if (response.type === 'rebuilt' && response.snapshot) {
-        this.local.loadSnapshot(response.snapshot)
+      let snapshot: Extract<SearchIndexWorkerResponse, { type: 'rebuilt' }>['snapshot'] = null
+      if (worker) {
+        try {
+          const response = await this.send({ type: 'rebuild', notes: input })
+          if (response.type === 'rebuilt') {
+            snapshot = response.snapshot
+          }
+        } catch {
+          this.teardownWorker(worker)
+        }
+      }
+      // A purge, shutdown or newer rebuild revoked this result, including fallback.
+      if (this.activeBuild !== build || this.destroyed) {
         return
       }
-      // Unexpected/error response: fall back so we never leave the index unbuilt.
-      this.local.rebuild(notes)
-    } catch {
-      this.teardownWorker()
-      this.local.rebuild(notes)
+      if (snapshot) {
+        this.local.loadSnapshot(snapshot)
+      } else {
+        this.local.rebuild(input)
+      }
+      const changed: IndexableNote[] = []
+      const removed: string[] = []
+      for (const [uuid, note] of build.updates) {
+        if (note) {
+          changed.push(note)
+        } else {
+          removed.push(uuid)
+        }
+      }
+      if (build.updates.size) {
+        this.local.updateMany(changed, removed)
+      }
+    } finally {
+      if (this.activeBuild === build) {
+        this.activeBuild = null
+      }
     }
   }
 
@@ -246,9 +290,21 @@ export class ThreadedSearchIndex {
    * stays in sync for the next full rebuild.
    */
   updateMany(changedOrInserted: IndexableNote[], removed: string[]): void {
+    if (this.destroyed) {
+      return
+    }
+    if (this.activeBuild) {
+      for (const uuid of removed) {
+        this.activeBuild.updates.set(uuid, null)
+      }
+      for (const note of changedOrInserted) {
+        this.activeBuild.updates.set(note.uuid, { ...note })
+      }
+    }
     this.local.updateMany(changedOrInserted, removed)
     if (this.worker) {
-      void this.send({ type: 'updateMany', changedOrInserted, removed }).catch(() => this.teardownWorker())
+      const worker = this.worker
+      void this.send({ type: 'updateMany', changedOrInserted, removed }).catch(() => this.teardownWorker(worker))
     }
   }
 
@@ -259,9 +315,11 @@ export class ThreadedSearchIndex {
 
   /** Clear the index everywhere; the next ensureBuilt() rebuilds lazily. */
   flush(): void {
+    this.activeBuild = null
     this.local.flush()
     if (this.worker) {
-      void this.send({ type: 'flush' }).catch(() => this.teardownWorker())
+      const worker = this.worker
+      void this.send({ type: 'flush' }).catch(() => this.teardownWorker(worker))
     }
   }
 
@@ -278,6 +336,7 @@ export class ThreadedSearchIndex {
    * restartWorker(). Idempotent.
    */
   killWorker(): void {
+    this.activeBuild = null
     this.killed = true
     if (this.worker) {
       this.worker.onmessage = null
@@ -315,6 +374,7 @@ export class ThreadedSearchIndex {
     // Set first so the teardown below settles pending sends but never schedules a
     // restart of a pool we are deliberately shutting down.
     this.destroyed = true
+    this.activeBuild = null
     this.teardownWorker()
   }
 }
