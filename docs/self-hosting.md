@@ -78,6 +78,17 @@ docker compose up -d --build
 The first run downloads images and builds the app and server, which can take a
 few minutes. Watch progress with `docker compose logs -f`.
 
+For the bundled Compose app image, repeat builds reuse compiled libraries when
+only `app/packages/web` changes. Library sources and shared build configuration
+have their own Docker layer, separate from the final web compilation. The first
+build after this layer change still compiles everything; subsequent UI-only
+builds on the same Docker builder should show the library build as `CACHED`.
+Changing a library, shared configuration, dependency manifest or lockfile
+rebuilds the affected layers. Pruning the builder cache or passing `--no-cache`
+also removes this benefit. The web bundle, sync worker and deployment identity
+still build together from current sources, without a shared webpack cache.
+This optimization does not change backend startup or readiness wait times.
+
 ### 4. Open the app
 
 Go to **http://localhost:3001** (or the app port / domain you chose). Create an
