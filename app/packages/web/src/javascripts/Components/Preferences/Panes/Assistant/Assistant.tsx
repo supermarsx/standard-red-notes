@@ -1533,8 +1533,9 @@ const Assistant = ({ application }: { application: WebApplication }) => {
           <PreferencesSegment>
             <Subtitle>Text selection AI actions</Subtitle>
             <Text>
-              Actions shown in the editor’s selection toolbar when text is selected. Toggle the built-ins on or off and
-              edit their prompts (these override the defaults), or add your own custom actions below.
+              Actions shown in the editor’s AI ribbon and selection toolbar. Each action opens a chat with the selected
+              text, or this note when there is no selection. Toggle the built-ins on or off and edit their prompts
+              (these override the defaults), or add your own custom actions below.
             </Text>
             {selectionActions.map((action) => (
               <div key={action.id} className="mt-3">
@@ -1582,8 +1583,9 @@ const Assistant = ({ application }: { application: WebApplication }) => {
 
             <Button label="Add custom action" onClick={addCustomSelectionAction} />
             <Text className="text-passive-1 mt-2">
-              Custom actions run their instruction over the selected text and replace it with the result. Include{' '}
-              <code>{'{language}'}</code> in the instruction to be prompted for a target language each time.
+              Custom actions discuss their instruction in the Assistant chat; note changes use the normal permissions
+              and review controls. Include <code>{'{language}'}</code> in the instruction to be prompted for a target
+              language each time.
             </Text>
           </PreferencesSegment>
         </PreferencesGroup>

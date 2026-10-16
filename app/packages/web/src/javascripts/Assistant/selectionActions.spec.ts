@@ -56,7 +56,7 @@ describe('getSelectionActions', () => {
     expect(inGroup('transforms').map((action) => action.id)).toEqual(['translate', 'organize'])
     expect(inGroup('assistant').map((action) => action.id)).toEqual(['ask', 'explain'])
     expect(inGroup('assistant').every((action) => action.behavior === 'chat')).toBe(true)
-    expect([...inGroup('text-review'), ...inGroup('transforms')].every((action) => action.behavior === 'replace')).toBe(
+    expect([...inGroup('text-review'), ...inGroup('transforms')].every((action) => action.behavior === 'chat')).toBe(
       true,
     )
   })

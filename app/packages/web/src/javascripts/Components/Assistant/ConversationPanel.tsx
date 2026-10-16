@@ -1,3 +1,4 @@
+import type { AssistantChatContextSnapshot } from '@/Assistant/assistantDirectiveContext'
 import AssistantComposer from './AssistantComposer'
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { observer } from 'mobx-react-lite'
@@ -237,6 +238,7 @@ type Props = {
   directive?: AssistantChatDirective
   onDirectiveConsumed?: (directiveId: string) => void
   recentChats?: ReactNode
+  onContextSnapshot?: (snapshot: AssistantChatContextSnapshot) => void
   sharedChat?: AssistantSharedChatBinding
 }
 
@@ -253,6 +255,7 @@ function ConversationPanelImpl({
   onDirectiveConsumed,
   recentChats,
   sharedChat,
+  onContextSnapshot,
 }: Props) {
   const { presentPane } = useResponsiveAppPane()
 
@@ -946,8 +949,16 @@ function ConversationPanelImpl({
     void contextOwnerKey
     return isActive
       ? buildContextForSelection(application, contextSelection)
-      : { scope: contextSelection.scope, noteCount: 0, characters: 0, truncated: false, noteTitles: [] }
+      : { scope: contextSelection.scope, noteCount: 0, characters: 0, truncated: false, noteTitles: [], noteUuids: [] }
   }, [application, contextItemsRevision, contextOwnerKey, contextSelection, isActive])
+  useEffect(() => {
+    if (isActive) {
+      onContextSnapshot?.({
+        noteUuids: contextPreview.noteUuids ?? [],
+        ...(contextSelection.scope === 'selection' ? { selectedText: contextSelection.excerpt?.text ?? '' } : {}),
+      })
+    }
+  }, [contextPreview, contextSelection, isActive, onContextSnapshot])
 
   // Assistant preferences are synced items rather than MobX observables. Keep
   // this mounted panel live when Preferences changes the endpoint/mode/model;
@@ -1584,6 +1595,14 @@ function ConversationPanelImpl({
       return
     }
 
+    setContextSelection(
+      directive.contextKind === 'note'
+        ? { scope: 'collection', collection: { type: 'notes', uuids: directive.noteUuid ? [directive.noteUuid] : [] } }
+        : {
+            scope: 'selection',
+            excerpt: directive.noteUuid ? { noteUuid: directive.noteUuid, text: directive.selectedText } : undefined,
+          },
+    )
     notifyFirstMessage(directive.instruction)
     if (isRunning) {
       queueRef.current = [...queueRef.current, { providerPrompt: directive.providerPrompt, directive }]

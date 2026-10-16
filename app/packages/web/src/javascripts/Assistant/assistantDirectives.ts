@@ -4,13 +4,17 @@ export type AssistantChatDirective = {
   id: string
   accountScope: string
   noteUuid?: string
+  contextKind?: 'selection' | 'note'
   instruction: string
   selectedText: string
   providerPrompt: string
   selectionTruncated: boolean
 }
 
-type DirectiveInput = Pick<AssistantChatDirective, 'accountScope' | 'noteUuid' | 'instruction' | 'selectedText'>
+type DirectiveInput = Pick<
+  AssistantChatDirective,
+  'accountScope' | 'noteUuid' | 'instruction' | 'selectedText' | 'contextKind'
+>
 type Consumer = { token: symbol; accountScope: string; receive: (directive: AssistantChatDirective) => void }
 
 export const MAX_ASSISTANT_DIRECTIVES = 6
@@ -37,8 +41,8 @@ function createDirectiveId(): string {
 function normalizeInput(input: DirectiveInput): AssistantChatDirective | undefined {
   const accountScope = input.accountScope.trim()
   const instruction = input.instruction.trim().slice(0, MAX_ASSISTANT_DIRECTIVE_INSTRUCTION_CHARS)
-  const rawSelection = input.selectedText.trim()
-  if (!accountScope || !instruction || !rawSelection) {
+  const rawSelection = input.selectedText
+  if (!accountScope || !instruction || !rawSelection.trim()) {
     return undefined
   }
 
@@ -52,6 +56,7 @@ function normalizeInput(input: DirectiveInput): AssistantChatDirective | undefin
     id: createDirectiveId(),
     accountScope,
     noteUuid: input.noteUuid,
+    contextKind: input.contextKind ?? 'selection',
     instruction,
     selectedText,
     selectionTruncated,

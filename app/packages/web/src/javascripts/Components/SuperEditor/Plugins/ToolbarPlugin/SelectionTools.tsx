@@ -1,5 +1,5 @@
 import { FunctionComponent, useCallback, useEffect, useRef, useState } from 'react'
-import { LexicalEditor } from 'lexical'
+import { $getRoot, LexicalEditor } from 'lexical'
 import { ApplicationEvent } from '@standardnotes/snjs'
 import { classNames } from '@standardnotes/utils'
 import { addToast, ToastType } from '@standardnotes/toast'
@@ -10,7 +10,6 @@ import {
   buildTranslateInstruction,
   getSelectionActions,
   getSelectionAIAvailability,
-  runSelectionAction,
   SelectionAction,
   SelectionActionGroup,
 } from '@/Assistant/selectionActions'
@@ -18,7 +17,7 @@ import { filterLanguages } from '@/Assistant/languages'
 import { publishAssistantDirective } from '@/Assistant/assistantDirectives'
 import { useResponsiveAppPane } from '@/Components/Panes/ResponsivePaneProvider'
 import { AppPaneId } from '@/Components/Panes/AppPaneMetadata'
-import { captureSelectionSnapshot, restoreAndReplaceSelection } from './SelectionReplacement'
+import { captureSelectionSnapshot } from './SelectionReplacement'
 import { superEditorPortalTarget } from '../../ownSuperEditorElements'
 
 const BTN =
@@ -30,7 +29,7 @@ type RunExtra = { customInstruction?: string; language?: string }
  * One toolbar icon per AI action (replacing the former single greyed-out
  * dropdown). Plain actions run on click; the freeform "Ask" and the
  * language-picking "Translate" actions open a small popover for their extra
- * input. All icons grey out when there is no selection or while a request runs.
+ * input. Actions use the selected text, or the current note when no text is selected.
  */
 const ActionButton: FunctionComponent<{
   action: SelectionAction
@@ -175,6 +174,7 @@ const ACTION_GROUPS: { id: SelectionActionGroup; label: string; icon: string }[]
   { id: 'text-review', label: 'Text review', icon: 'pencil-filled' },
   { id: 'transforms', label: 'Transforms', icon: 'arrows-sort-down' },
   { id: 'assistant', label: 'Assistant', icon: 'assistant' },
+  { id: 'checklists', label: 'Checklist', icon: 'list-check' },
 ]
 
 const SelectionTools: FunctionComponent<{ editor: LexicalEditor; hasSelection: boolean; noteUuid?: string }> = ({
@@ -184,7 +184,7 @@ const SelectionTools: FunctionComponent<{ editor: LexicalEditor; hasSelection: b
 }) => {
   const application = useApplication()
   const { presentPane } = useResponsiveAppPane()
-  const [busy, setBusy] = useState<string | null>(null)
+  const busy = null
   const [activeGroup, setActiveGroup] = useState<SelectionActionGroup>('text-review')
 
   const [, refreshActions] = useState(0)
@@ -204,8 +204,15 @@ const SelectionTools: FunctionComponent<{ editor: LexicalEditor; hasSelection: b
 
   const run = useCallback(
     async (action: SelectionAction, extra?: RunExtra) => {
+      const sourceNote = noteUuid ? application.items.findItem(noteUuid) : undefined
+      if (!sourceNote || sourceNote.trashed || sourceNote.locked || !application.isAuthorizedToRenderItem(sourceNote)) {
+        addToast({ type: ToastType.Error, message: 'This note is not available to the Assistant.' })
+        return
+      }
       const snap = captureSelectionSnapshot(editor)
-      if (!snap?.text) {
+      const hasTextSelection = !!snap?.text.trim()
+      const text = hasTextSelection ? snap!.text : editor.getEditorState().read(() => $getRoot().getTextContent())
+      if (!text.trim()) {
         return
       }
       const avail = getSelectionAIAvailability(application)
@@ -229,77 +236,35 @@ const SelectionTools: FunctionComponent<{ editor: LexicalEditor; hasSelection: b
         instruction = action.prompt
       }
 
-      if (action.behavior === 'chat') {
-        const accountScope = application.sessions.getUser()?.uuid ?? `anonymous:${application.identifier}`
-        presentPane(AppPaneId.Assistant)
-        const published = publishAssistantDirective({
-          accountScope,
-          noteUuid,
-          instruction,
-          selectedText: snap.text,
-        })
-        if (!published) {
-          addToast({ type: ToastType.Error, message: 'The selected text could not be sent to the Assistant.' })
-        }
-        return
-      }
-
-      if (snap.unsupportedStructuredSelection) {
-        addToast({
-          type: ToastType.Error,
-          message: 'Select complete checklist rows before using a replacement action so task details stay attached.',
-        })
-        return
-      }
-
-      if (action.id === 'organize' && (snap.checklistRows?.length ?? 0) > 1) {
-        addToast({
-          type: ToastType.Error,
-          message:
-            'Organize cannot safely reorder multiple checklist tasks without detaching their dates and recurrence. Send the selection to Assistant instead.',
-        })
-        return
-      }
-
-      const checklistInstruction = snap.checklistRows?.length
-        ? `${instruction}\n\nReturn exactly ${snap.checklistRows.length} lines in the original row order: one plain-text line per checklist item, with no bullets or checkbox markers.`
-        : instruction
-      setBusy(action.label)
-      try {
-        const result = await runSelectionAction(application, checklistInstruction, snap.text)
-        if (result) {
-          const replacement = restoreAndReplaceSelection(editor, snap, result)
-          if (replacement === 'stale-selection') {
-            addToast({
-              type: ToastType.Regular,
-              message: 'The selection changed while AI was working. Nothing was replaced.',
-            })
-          } else if (replacement === 'checklist-shape-mismatch') {
-            addToast({
-              type: ToastType.Error,
-              message: 'AI returned a different number of checklist rows. Nothing was replaced.',
-            })
-          } else if (replacement === 'unsupported-structured-selection') {
-            addToast({
-              type: ToastType.Error,
-              message: 'Select complete checklist rows before using AI so task details stay attached safely.',
-            })
-          }
-        }
-      } catch (e) {
-        addToast({ type: ToastType.Error, message: e instanceof Error ? e.message : String(e) })
-      } finally {
-        setBusy(null)
+      const metadataInstruction =
+        action.group === 'checklists'
+          ? '\n\nBefore relying on checked state or task metadata, use notes.readBlocks for Super notes (or notes.read for other note types) with the normal permission checks. Plain text alone does not establish completion. Do not silently broaden selected-text access.'
+          : ''
+      const accountScope = application.sessions.getUser()?.uuid ?? `anonymous:${application.identifier}`
+      presentPane(AppPaneId.Assistant)
+      const published = publishAssistantDirective({
+        accountScope,
+        noteUuid,
+        instruction: `${instruction}${metadataInstruction}\n\nDiscuss proposed changes in this chat. Use the normal permission and change-review controls before editing the note.`,
+        selectedText: text,
+        contextKind: hasTextSelection ? 'selection' : 'note',
+      })
+      if (!published) {
+        addToast({ type: ToastType.Error, message: 'The note context could not be sent to the Assistant.' })
       }
     },
     [application, editor, noteUuid, presentPane],
   )
 
-  const disabledBase = !hasSelection || !availability.available
+  const disabledBase = (!hasSelection && !noteUuid) || !availability.available
 
   return (
     <div className="flex min-w-0 items-stretch gap-1.5" aria-label="AI selection tools">
-      <div className="border-border flex flex-col gap-0.5 border-r pr-1.5" role="tablist" aria-label="AI action groups">
+      <div
+        className="border-border grid grid-cols-2 content-center gap-0.5 border-r pr-1.5"
+        role="tablist"
+        aria-label="AI action groups"
+      >
         {ACTION_GROUPS.map((group) => (
           <button
             key={group.id}
@@ -318,7 +283,11 @@ const SelectionTools: FunctionComponent<{ editor: LexicalEditor; hasSelection: b
           </button>
         ))}
       </div>
-      <div className="flex flex-col justify-center gap-0.5" role="tabpanel" aria-label={`${activeGroup} actions`}>
+      <div
+        className="grid grid-flow-col grid-rows-2 items-center gap-0.5"
+        role="tabpanel"
+        aria-label={`${activeGroup} actions`}
+      >
         {visibleActions.map((action) => (
           <ActionButton
             key={action.id}

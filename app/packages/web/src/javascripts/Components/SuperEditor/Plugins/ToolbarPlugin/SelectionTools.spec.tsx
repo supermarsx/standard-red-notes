@@ -5,6 +5,18 @@ import { PrefKey } from '@standardnotes/snjs'
 import { useApplication } from '@/Components/ApplicationProvider'
 import { useResponsiveAppPane } from '@/Components/Panes/ResponsivePaneProvider'
 import SelectionTools from './SelectionTools'
+import { captureSelectionSnapshot } from './SelectionReplacement'
+import { publishAssistantDirective } from '@/Assistant/assistantDirectives'
+
+jest.mock('@standardnotes/toast', () => ({ addToast: jest.fn(), ToastType: { Error: 'error' } }))
+jest.mock('./SelectionReplacement', () => ({ captureSelectionSnapshot: jest.fn(() => ({ text: 'exact selection' })) }))
+jest.mock('@/Assistant/assistantDirectives', () => ({
+  publishAssistantDirective: jest.fn(() => ({ id: 'published' })),
+}))
+jest.mock('lexical', () => ({
+  ...jest.requireActual('lexical'),
+  $getRoot: () => ({ getTextContent: () => 'whole note text' }),
+}))
 
 jest.mock('@/Components/ApplicationProvider', () => ({ useApplication: jest.fn() }))
 jest.mock('@/Components/Panes/ResponsivePaneProvider', () => ({ useResponsiveAppPane: jest.fn() }))
@@ -22,6 +34,10 @@ const application = {
     return key === PrefKey.AssistantConnectionMode ? 'proxy' : fallback
   }),
   hasAccount: jest.fn(() => true),
+  identifier: 'app',
+  sessions: { getUser: () => ({ uuid: 'account' }) },
+  items: { findItem: () => ({ uuid: 'note-1' }) },
+  isAuthorizedToRenderItem: jest.fn(() => true),
 }
 
 describe('SelectionTools AI action subtabs', () => {
@@ -29,6 +45,13 @@ describe('SelectionTools AI action subtabs', () => {
   let root: Root
 
   beforeEach(() => {
+    application.getPreference.mockImplementation((key: PrefKey, fallback: unknown) =>
+      key === PrefKey.AssistantConnectionMode ? 'proxy' : fallback,
+    )
+    application.hasAccount.mockReturnValue(true)
+    application.isAuthorizedToRenderItem.mockReturnValue(true)
+    jest.mocked(captureSelectionSnapshot).mockReturnValue({ text: 'exact selection' } as never)
+    jest.mocked(publishAssistantDirective).mockReturnValue({ id: 'published' } as never)
     container = document.createElement('div')
     document.body.appendChild(container)
     root = createRoot(container)
@@ -61,11 +84,12 @@ describe('SelectionTools AI action subtabs', () => {
 
   it('renders icon-and-label subtabs with text review actions in the requested line order', () => {
     const tabs = Array.from(container.querySelectorAll('[role="tab"]'))
-    expect(tabs.map((tab) => tab.textContent)).toEqual(['Text review', 'Transforms', 'Assistant'])
+    expect(tabs.map((tab) => tab.textContent)).toEqual(['Text review', 'Transforms', 'Assistant', 'Checklist'])
     expect(tabs.map((tab) => tab.querySelector('[data-icon]')?.getAttribute('data-icon'))).toEqual([
       'pencil-filled',
       'arrows-sort-down',
       'assistant',
+      'list-check',
     ])
     expect(tabs[0].getAttribute('aria-selected')).toBe('true')
     expect(actionLabels()).toEqual(['Refine', 'Expand', 'Summarize'])
@@ -77,5 +101,39 @@ describe('SelectionTools AI action subtabs', () => {
 
     selectTab('Assistant')
     expect(actionLabels()).toEqual(['Ask AI…', 'Explain in-depth'])
+  })
+  it('routes replacement and checklist actions into chat without changing editor text', async () => {
+    const refine = container.querySelector<HTMLButtonElement>('[aria-label="Refine"]')!
+    await act(async () => refine.click())
+    expect(publishAssistantDirective).toHaveBeenCalledWith(
+      expect.objectContaining({ noteUuid: 'note-1', selectedText: 'exact selection', contextKind: 'selection' }),
+    )
+    selectTab('Checklist')
+    expect(actionLabels()).toEqual(['Organize checklist', 'Categorize items', 'Improve tasks', 'Split tasks'])
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Categorize items"]')!.click())
+    expect(publishAssistantDirective).toHaveBeenLastCalledWith(
+      expect.objectContaining({ instruction: expect.stringContaining('categories') }),
+    )
+  })
+
+  it('uses this editor’s note when no text is selected, and rechecks read access before publishing', async () => {
+    jest.mocked(captureSelectionSnapshot).mockReturnValueOnce(null)
+    act(() =>
+      root.render(
+        <SelectionTools
+          editor={{ getRootElement: () => null, getEditorState: () => ({ read: (fn: () => string) => fn() }) } as never}
+          hasSelection={false}
+          noteUuid="note-1"
+        />,
+      ),
+    )
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Refine"]')!.click())
+    expect(publishAssistantDirective).toHaveBeenLastCalledWith(
+      expect.objectContaining({ selectedText: 'whole note text', contextKind: 'note' }),
+    )
+    const count = jest.mocked(publishAssistantDirective).mock.calls.length
+    application.isAuthorizedToRenderItem.mockReturnValueOnce(false)
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Refine"]')!.click())
+    expect(publishAssistantDirective).toHaveBeenCalledTimes(count)
   })
 })

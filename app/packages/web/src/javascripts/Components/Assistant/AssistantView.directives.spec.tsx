@@ -7,6 +7,7 @@ import { ApplicationEvent } from '@standardnotes/snjs'
 import { publishAssistantDirective, resetAssistantDirectivesForTests } from '@/Assistant/assistantDirectives'
 import ConversationPanel from './ConversationPanel'
 import AssistantView from './AssistantView'
+jest.mock('@standardnotes/toast', () => ({ addToast: jest.fn(), ToastType: { Error: 'error' } }))
 jest.mock('@/Assistant/assistantSyncedChats', () => ({
   AssistantSyncedChats: class {
     async read() {
@@ -91,7 +92,7 @@ describe('AssistantView editor directive routing', () => {
     resetAssistantDirectivesForTests()
   })
 
-  it('delivers queued directives FIFO to the tab active when each directive was published', async () => {
+  it('delivers directives FIFO and creates another chat for a different selection or note', async () => {
     const application = createApplication()
     const first = publishAssistantDirective({
       accountScope: 'account-a',
@@ -127,8 +128,20 @@ describe('AssistantView editor directive routing', () => {
     await act(async () => firstProps?.onDirectiveConsumed?.(first.id))
     const secondProps = latestDirectiveProps()
     expect(secondProps?.directive?.id).toBe(second.id)
-    expect(secondProps?.tabId).toBe(firstTabId)
+    expect(secondProps?.tabId).not.toBe(firstTabId)
     await act(async () => secondProps?.onDirectiveConsumed?.(second.id))
+    let same!: NonNullable<ReturnType<typeof publishAssistantDirective>>
+    await act(async () => {
+      same = publishAssistantDirective({
+        accountScope: 'account-a',
+        noteUuid: 'note-a',
+        instruction: 'Continue with that context',
+        selectedText: 'second selection',
+      })!
+    })
+    const sameProps = latestDirectiveProps()
+    expect(sameProps?.tabId).toBe(secondProps?.tabId)
+    await act(async () => sameProps?.onDirectiveConsumed?.(same.id))
 
     await act(async () => {
       container.querySelector<HTMLButtonElement>('button[aria-label="New chat"]')?.click()

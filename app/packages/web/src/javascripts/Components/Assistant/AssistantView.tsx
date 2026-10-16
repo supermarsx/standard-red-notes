@@ -1,3 +1,5 @@
+import { addToast, ToastType } from '@standardnotes/toast'
+import { assistantDirectiveContextMatches, AssistantChatContextSnapshot } from '@/Assistant/assistantDirectiveContext'
 import { forwardRef, ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { observer } from 'mobx-react-lite'
 import { classNames } from '@standardnotes/utils'
@@ -106,6 +108,7 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
   const workspaceActivationRef = useRef(0)
   const workspaceActivationChainRef = useRef(Promise.resolve())
   const observedAccountScopeRef = useRef(accountScope)
+  const chatContextsRef = useRef(new Map<string, AssistantChatContextSnapshot>())
   const workspaceClaimRef = useRef<AssistantWorkspaceClaim | null>(null)
   const pendingWorkspaceReleasesRef = useRef(new Set<Promise<void>>())
   const workspaceManifestChainRef = useRef(Promise.resolve(true))
@@ -194,6 +197,7 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
         setSharedReady(false)
         clearAssistantDirectives()
         setPendingDirectives([])
+        chatContextsRef.current.clear()
         setWorkspaceLocked(true)
         setWorkspacePersistence('pending')
         setWorkspacePersistenceNotice('')
@@ -462,6 +466,7 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
       setEditingTabId(null)
       setMenu(null)
       setPendingDirectives([])
+      chatContextsRef.current.clear()
       setLoadedChatAccountScope(chatAccountScope)
       setManifestTabIds(durable ? manifestIds : [])
       setRetainedCleanupTabIds(durable ? retainedCleanupIds : [])
@@ -534,17 +539,31 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
         return
       }
       const current = tabsRef.current
-      let target =
-        current.find((tab) => tab.id === activeTabIdRef.current && (!tab.kind || tab.kind === 'chat')) ??
-        current.find((tab) => !tab.kind || tab.kind === 'chat')
+      let target = current.find(
+        (tab) =>
+          tab.id === activeTabIdRef.current &&
+          (!tab.kind || tab.kind === 'chat') &&
+          assistantDirectiveContextMatches(chatContextsRef.current.get(tab.id), directive),
+      )
       if (!target) {
-        if (current.length >= MAX_CHAT_TABS) {
+        if (current.filter((tab) => !closedTabIds.includes(tab.id)).length >= MAX_CHAT_TABS) {
+          addToast({
+            type: ToastType.Error,
+            message: 'Close an Assistant chat tab before starting this action in a new context.',
+          })
           return
         }
         target = createTab()
+        checkpointMetadata(target)
+        tabsRef.current = [...current, target]
         setTabs((previous) => [...previous, target!])
       }
       const targetTabId = target.id
+      activeTabIdRef.current = targetTabId
+      chatContextsRef.current.set(targetTabId, {
+        noteUuids: directive.noteUuid ? [directive.noteUuid] : [],
+        ...(directive.contextKind === 'note' ? {} : { selectedText: directive.selectedText }),
+      })
       setClosedTabIds((previous) => previous.filter((id) => id !== targetTabId))
       setActiveTabId(targetTabId)
       setTabs((previous) =>
@@ -556,7 +575,15 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
           : [...current, { directive, targetTabId }]
       })
     })
-  }, [accountScope, chatAccountScope, loadedChatAccountScope, workspaceLocked, workspacePersistence])
+  }, [
+    accountScope,
+    chatAccountScope,
+    loadedChatAccountScope,
+    workspaceLocked,
+    workspacePersistence,
+    closedTabIds,
+    checkpointMetadata,
+  ])
 
   // Persist the tab strip (id + title + userRenamed) so it survives a reload.
   useEffect(() => {
@@ -1259,6 +1286,15 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
                         pendingDirectives[0]?.targetTabId === tab.id ? pendingDirectives[0].directive : undefined
                       }
                       onDirectiveConsumed={consumeDirective}
+                      onContextSnapshot={(snapshot) => {
+                        if (
+                          !workspaceLockedRef.current &&
+                          loadedChatAccountScope === chatAccountScope &&
+                          observedAccountScopeRef.current === accountScope
+                        ) {
+                          chatContextsRef.current.set(tab.id, snapshot)
+                        }
+                      }}
                       recentChats={<AssistantRecentChats tabs={tabs} currentTabId={tab.id} onResume={resumeTab} />}
                     />
                   )}

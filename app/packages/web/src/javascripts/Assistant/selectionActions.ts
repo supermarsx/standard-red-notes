@@ -14,9 +14,20 @@ import {
 import { loadSamplingSettings, SamplingSettings } from './samplingSettings'
 import { UNTRUSTED_CONTEXT_BEGIN, UNTRUSTED_CONTEXT_END, wrapUntrustedNoteContext } from './prompts'
 
-export type BuiltInSelectionActionId = 'ask' | 'refine' | 'summarize' | 'expand' | 'translate' | 'organize' | 'explain'
+export type BuiltInSelectionActionId =
+  | 'ask'
+  | 'refine'
+  | 'summarize'
+  | 'expand'
+  | 'translate'
+  | 'organize'
+  | 'explain'
+  | 'organize-checklist'
+  | 'categorize-tasks'
+  | 'improve-tasks'
+  | 'split-tasks'
 
-export type SelectionActionGroup = 'text-review' | 'transforms' | 'assistant'
+export type SelectionActionGroup = 'text-review' | 'transforms' | 'assistant' | 'checklists'
 export type SelectionActionBehavior = 'replace' | 'chat'
 
 /**
@@ -69,7 +80,7 @@ export const DEFAULT_SELECTION_ACTIONS: SelectionAction[] = [
     icon: 'pencil-filled',
     enabled: true,
     group: 'text-review',
-    behavior: 'replace',
+    behavior: 'chat',
     prompt: 'Improve the clarity, grammar, and flow of the following text while preserving its meaning and tone.',
   },
   {
@@ -78,7 +89,7 @@ export const DEFAULT_SELECTION_ACTIONS: SelectionAction[] = [
     icon: 'add',
     enabled: true,
     group: 'text-review',
-    behavior: 'replace',
+    behavior: 'chat',
     prompt: 'Expand on the following text, adding helpful detail while keeping the same voice and intent.',
   },
   {
@@ -87,7 +98,7 @@ export const DEFAULT_SELECTION_ACTIONS: SelectionAction[] = [
     icon: 'list-bulleted',
     enabled: true,
     group: 'text-review',
-    behavior: 'replace',
+    behavior: 'chat',
     prompt: 'Summarize the following text concisely.',
   },
   {
@@ -96,7 +107,7 @@ export const DEFAULT_SELECTION_ACTIONS: SelectionAction[] = [
     icon: 'comment',
     enabled: true,
     group: 'transforms',
-    behavior: 'replace',
+    behavior: 'chat',
     needsLanguage: true,
     prompt:
       'Translate the following text into {language}. Preserve meaning, tone, formatting, and any names or code. ' +
@@ -108,7 +119,7 @@ export const DEFAULT_SELECTION_ACTIONS: SelectionAction[] = [
     icon: 'arrows-sort-down',
     enabled: true,
     group: 'transforms',
-    behavior: 'replace',
+    behavior: 'chat',
     prompt:
       'Organize the following text for clarity using a logical structure. Preserve every fact and, for checklist ' +
       'content, preserve the original row order.',
@@ -131,6 +142,46 @@ export const DEFAULT_SELECTION_ACTIONS: SelectionAction[] = [
     group: 'assistant',
     behavior: 'chat',
     prompt: 'Explain this selection in depth, including its meaning, important details, and relevant implications.',
+  },
+  {
+    id: 'organize-checklist',
+    label: 'Organize checklist',
+    icon: 'arrows-sort-down',
+    enabled: true,
+    group: 'checklists',
+    behavior: 'chat',
+    prompt:
+      'Suggest a clearer order for these checklist items. Preserve completion state, dates, recurrence, priorities, pins, per-person ticks, comments, and task identities. Explain the proposed organization and show changes for review before applying anything.',
+  },
+  {
+    id: 'categorize-tasks',
+    label: 'Categorize items',
+    icon: 'list-bulleted',
+    enabled: true,
+    group: 'checklists',
+    behavior: 'chat',
+    prompt:
+      'Suggest useful categories for these checklist items, grouping related work without dropping tasks or changing their completion state or metadata. Show the proposed categories for review before making changes.',
+  },
+  {
+    id: 'improve-tasks',
+    label: 'Improve tasks',
+    icon: 'pencil-filled',
+    enabled: true,
+    group: 'checklists',
+    behavior: 'chat',
+    prompt:
+      'Suggest clearer, actionable wording for these checklist items, preserving their meaning, identities, completion state and all task metadata. Show the proposed improvements for review before applying changes.',
+  },
+  {
+    id: 'split-tasks',
+    label: 'Split tasks',
+    icon: 'list-check',
+    enabled: true,
+    group: 'checklists',
+    behavior: 'chat',
+    prompt:
+      'Identify checklist items that are too broad and propose smaller actionable subtasks. Preserve the original tasks and their completion state and metadata until changes are reviewed. Do not invent deadlines or mark new subtasks complete.',
   },
 ]
 
@@ -285,7 +336,10 @@ function normalizeCustomAction(record: unknown): SelectionAction | null {
     enabled: typeof candidate.enabled === 'boolean' ? candidate.enabled : true,
     prompt: candidate.prompt,
     needsLanguage: candidate.needsLanguage === true,
-    group: candidate.group === 'assistant' || candidate.group === 'text-review' ? candidate.group : 'transforms',
+    group:
+      candidate.group === 'assistant' || candidate.group === 'text-review' || candidate.group === 'checklists'
+        ? candidate.group
+        : 'transforms',
     behavior: candidate.behavior === 'chat' ? 'chat' : 'replace',
     custom: true,
   }
