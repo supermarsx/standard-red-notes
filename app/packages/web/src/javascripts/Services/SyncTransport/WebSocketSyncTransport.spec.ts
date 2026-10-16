@@ -13,6 +13,7 @@ import {
 class FakeWorker {
   onmessage: ((event: MessageEvent<SyncWorkerToMainMessage>) => void) | null = null
   onerror: (() => void) | null = null
+  onexpired: (() => void) | null = null
   posts: MainToSyncWorkerMessage[] = []
   terminated = false
 
@@ -84,6 +85,228 @@ describe('WebSocketSyncTransport', () => {
       isHttpOnly: () => false,
       ...overrides,
     })
+
+  it('ignores queued callbacks from a replaced worker and accepts shutdown acknowledgment only from the retiring owner', async () => {
+    const previous = new FakeWorker()
+    const replacement = new FakeWorker()
+    const workers = [previous, replacement]
+    let index = 0
+    const transport = createTransport({ workerFactory: () => workers[index++] })
+    const oldRequest = transport.openAuthenticatedRpcStream({ method: 'GET', path: '/v1/workflows/status' })
+    const oldRejected = expect(oldRequest).rejects.toMatchObject({ code: 'WORKER_ERROR' })
+    await flush()
+    // Retain the functions themselves: resetting an event property cannot retract
+    // callbacks the browser had already queued before replacement.
+    const oldMessage = previous.onmessage!
+    const oldError = previous.onerror!
+    const oldExpired = previous.onexpired!
+    previous.fail()
+    await oldRejected
+    const nextRequest = transport.openAuthenticatedRpcStream({ method: 'GET', path: '/v1/workflows/status' })
+    await flush()
+    const open = replacement.posts.find((message) => message.type === 'OPEN_RPC') as Extract<
+      MainToSyncWorkerMessage,
+      { type: 'OPEN_RPC' }
+    >
+    replacement.emit({ type: 'STATE', state: 'READY' })
+    replacement.emit({
+      type: 'NEGOTIATED',
+      sessionScope: SESSION_A,
+      protocolVersion: 1,
+      endpoint: '/sockets/sync',
+      operations: ['API_RPC'],
+    })
+    oldMessage({
+      data: { type: 'STATE', state: 'HTTP_ONLY', reason: 'worker-error' },
+    } as MessageEvent<SyncWorkerToMainMessage>)
+    oldMessage({
+      data: {
+        type: 'NEGOTIATED',
+        sessionScope: SESSION_A,
+        protocolVersion: 1,
+        endpoint: '/sockets/sync',
+        operations: ['SYNC_ITEMS'],
+      },
+    } as MessageEvent<SyncWorkerToMainMessage>)
+    oldMessage({
+      data: {
+        type: 'RPC_ERROR',
+        clientRequestId: open.clientRequestId,
+        code: 'WORKER_ERROR',
+        retryable: true,
+        safeToFallback: false,
+      },
+    } as MessageEvent<SyncWorkerToMainMessage>)
+    oldError()
+    oldExpired()
+    await flush()
+    expect(replacement.terminated).toBe(false)
+    expect(transport.transportStatus).toMatchObject({ state: 'READY', operations: ['API_RPC'] })
+    replacement.emit({
+      type: 'RPC_RESPONSE',
+      clientRequestId: open.clientRequestId,
+      status: 200,
+      headers: {},
+      body: { healthy: true },
+      stream: false,
+    })
+    replacement.emit({ type: 'RPC_END', clientRequestId: open.clientRequestId })
+    await expect(nextRequest).resolves.toMatchObject({ status: 200, body: { healthy: true } })
+    transport.deinit()
+    oldMessage({ data: { type: 'SHUTDOWN_COMPLETE' } } as MessageEvent<SyncWorkerToMainMessage>)
+    expect(replacement.terminated).toBe(false)
+    replacement.emit({ type: 'SHUTDOWN_COMPLETE' })
+    expect(replacement.terminated).toBe(true)
+  })
+
+  it('arms graceful retirement before posting shutdown, including an immediate acknowledgment', async () => {
+    const transport = createTransport()
+    const result = transport.openAuthenticatedRpcStream({ method: 'GET', path: '/v1/workflows/status' })
+    const rejected = expect(result).rejects.toMatchObject({ code: 'SHUTDOWN' })
+    await flush()
+    const post = worker.postMessage.bind(worker)
+    worker.postMessage = (message) => {
+      post(message)
+      if (message.type === 'SHUTDOWN') {
+        worker.emit({ type: 'SHUTDOWN_COMPLETE' })
+      }
+    }
+    transport.deinit()
+    await rejected
+    expect(worker.terminated).toBe(true)
+  })
+
+  it.each(['mint-resolves', 'mint-rejects', 'probe-resolves'] as const)(
+    'does not let an obsolete %s continuation cache a failure or quarantine a replacement session',
+    async (scenario) => {
+      const previous = new FakeWorker()
+      const replacement = new FakeWorker()
+      const workers = [previous, replacement]
+      let index = 0
+      let scope = SESSION_A
+      let settle!: () => void
+      if (scenario === 'probe-resolves') {
+        controlPlane.createTicket.mockRejectedValueOnce(new Error('temporary failure'))
+        jest.mocked(controlPlane.getCapabilities!).mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              settle = () => resolve({ capabilities: [] })
+            }),
+        )
+      } else {
+        controlPlane.createTicket.mockImplementationOnce(
+          () =>
+            new Promise((resolve, reject) => {
+              settle = () =>
+                scenario === 'mint-rejects'
+                  ? reject(new Error('late network error'))
+                  : resolve({
+                      ticket: 'ticket'.repeat(8),
+                      expiresAt: Date.now() + 30_000,
+                      endpoint: '/sockets/sync',
+                      capability: 'ws-sync',
+                      version: 1,
+                    })
+            }),
+        )
+      }
+      const transport = createTransport({
+        getAuthenticatedSessionScope: async () => scope,
+        workerFactory: () => workers[index++],
+      })
+      const oldRequest = transport.openAuthenticatedRpcStream({ method: 'GET', path: '/v1/workflows/status' })
+      const oldRejected = expect(oldRequest).rejects.toMatchObject({ code: 'WORKER_ERROR' })
+      await flush()
+      const oldOpen = previous.posts.find((message) => message.type === 'OPEN_RPC') as Extract<
+        MainToSyncWorkerMessage,
+        { type: 'OPEN_RPC' }
+      >
+      previous.emit({ type: 'NEED_TICKET', clientRequestId: oldOpen.clientRequestId, reconnect: false })
+      await flush()
+      previous.fail()
+      await oldRejected
+      scope = SESSION_B
+      const fallback = jest.fn().mockResolvedValue(response('replacement'))
+      const next = transport.execute(request('replacement'), fallback)
+      await flush()
+      const execute = replacement.posts.find((message) => message.type === 'EXECUTE') as Extract<
+        MainToSyncWorkerMessage,
+        { type: 'EXECUTE' }
+      >
+      settle()
+      await flush()
+      await flush()
+      expect(replacement.terminated).toBe(false)
+      expect(replacement.posts.some((message) => message.type === 'SESSION_REVOKED')).toBe(false)
+      expect(
+        previous.posts.some((message) => message.type === 'CONNECT' || message.type === 'TICKET_UNAVAILABLE'),
+      ).toBe(false)
+      replacement.emit({ type: 'NEED_TICKET', clientRequestId: execute.clientRequestId, reconnect: false })
+      await flush()
+      await flush()
+      expect(controlPlane.createTicket).toHaveBeenCalledTimes(2)
+      expect(replacement.posts).toContainEqual(
+        expect.objectContaining({ type: 'CONNECT', clientRequestId: execute.clientRequestId, sessionScope: SESSION_B }),
+      )
+      replacement.emit({
+        type: 'HTTP_FALLBACK',
+        clientRequestId: execute.clientRequestId,
+        reason: 'capability-unavailable',
+        body: request('replacement'),
+      })
+      await expect(next).resolves.toEqual({ response: response('replacement') })
+      transport.deinit()
+      replacement.emit({ type: 'SHUTDOWN_COMPLETE' })
+    },
+  )
+
+  it('does not apply an old worker session rejection after its scope lookup resumes in a replacement session', async () => {
+    const previous = new FakeWorker()
+    const replacement = new FakeWorker()
+    const workers = [previous, replacement]
+    let index = 0
+    let scope: () => Promise<string> = async () => SESSION_A
+    const transport = createTransport({
+      getAuthenticatedSessionScope: () => scope(),
+      workerFactory: () => workers[index++],
+    })
+    const oldRequest = transport.openAuthenticatedRpcStream({ method: 'GET', path: '/v1/workflows/status' })
+    const oldRejected = expect(oldRequest).rejects.toMatchObject({ code: 'WORKER_ERROR' })
+    await flush()
+    let resume!: (scope: string) => void
+    scope = () =>
+      new Promise((resolve) => {
+        resume = resolve
+      })
+    previous.emit({ type: 'SESSION_NOT_AUTHORIZED', sessionScope: SESSION_A })
+    await flush()
+    previous.fail()
+    await oldRejected
+    scope = async () => SESSION_B
+    const next = transport.openAuthenticatedRpcStream({ method: 'GET', path: '/v1/workflows/status' })
+    await flush()
+    resume(SESSION_B)
+    await flush()
+    await flush()
+    expect(replacement.terminated).toBe(false)
+    expect(replacement.posts.some((message) => message.type === 'SESSION_REVOKED')).toBe(false)
+    const open = replacement.posts.find((message) => message.type === 'OPEN_RPC') as Extract<
+      MainToSyncWorkerMessage,
+      { type: 'OPEN_RPC' }
+    >
+    replacement.emit({
+      type: 'RPC_RESPONSE',
+      clientRequestId: open.clientRequestId,
+      status: 200,
+      headers: {},
+      body: { healthy: true },
+      stream: false,
+    })
+    replacement.emit({ type: 'RPC_END', clientRequestId: open.clientRequestId })
+    await expect(next).resolves.toMatchObject({ status: 200 })
+    transport.deinit()
+    replacement.emit({ type: 'SHUTDOWN_COMPLETE' })
+  })
 
   it('completes non-streaming fence claims for actual main clients on both shared broker ports', async () => {
     const runtime = {

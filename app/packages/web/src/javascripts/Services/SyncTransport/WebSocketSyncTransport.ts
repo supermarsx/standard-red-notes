@@ -553,6 +553,7 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
   private lastLoggedRecoveryDeferral?: string
   private pageHideListener?: () => void
   private shutdownBarrier?: () => void
+  private shutdownWorker?: SyncWorkerLike
   /**
    * The session-long record of what this lane has done. In memory and bounded; see
    * `LaneDegradationLedger` for why it does not survive a reload.
@@ -1456,7 +1457,21 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
   }
 
   async notifySessionRevoked(): Promise<void> {
+    const sourceWorker = this.worker
     const sessionScope = (await this.currentSessionScope()) ?? this.workerSessionScope
+    if (this.worker !== sourceWorker) {
+      return
+    }
+    return this.revokeSessionScope(sessionScope, sourceWorker)
+  }
+
+  private async revokeSessionScope(
+    sessionScope: string | undefined,
+    sourceWorker: SyncWorkerLike | undefined,
+  ): Promise<void> {
+    if (this.worker !== sourceWorker) {
+      return
+    }
     if (!sessionScope) {
       this.terminateWorker()
       // No reason, and the previous one is CLEARED rather than carried: the lane is
@@ -1512,6 +1527,9 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       this.setTransportState('HTTP_ONLY', this.fallbackReason)
       return
     }
+    if (this.worker !== worker) {
+      return
+    }
     const requestId = this.nextRequestId('revoke')
     try {
       await new Promise<void>((resolve, reject) => {
@@ -1524,8 +1542,10 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       })
       this.acknowledgedRevokedSessionScopes.add(sessionScope)
     } finally {
-      this.terminateWorker()
-      this.setTransportState('HTTP_ONLY', undefined)
+      if (this.worker === worker) {
+        this.terminateWorker()
+        this.setTransportState('HTTP_ONLY', undefined)
+      }
     }
   }
 
@@ -1542,8 +1562,8 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       // `terminate()` used to run in the same tick as SHUTDOWN, so the worker
       // never reached the line that hands its owner lease back and the next tab
       // waited out the whole lease TTL before it could sync over the socket.
-      worker.postMessage({ type: 'SHUTDOWN' })
       void this.terminateAfterShutdown(worker)
+      worker.postMessage({ type: 'SHUTDOWN' })
     }
     const error = transportError('Websocket sync transport was deinitialized.')
     for (const pending of this.pending.values()) {
@@ -1830,9 +1850,29 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
         worker.terminate()
         return undefined
       }
-      worker.onmessage = (event) => void this.onWorkerMessage(event.data)
-      worker.onerror = () => void this.onWorkerError()
-      worker.onexpired = () => void this.onWorkerError().then(() => this.maintainSocketReadiness())
+      worker.onmessage = (event) => {
+        // A terminated/replaced worker can still have callbacks queued. Only its
+        // own graceful shutdown acknowledgment may outlive active ownership.
+        if (event.data.type === 'SHUTDOWN_COMPLETE') {
+          if (this.shutdownWorker === worker) {
+            this.shutdownBarrier?.()
+          }
+          return
+        }
+        if (this.worker === worker && !this.deinitialized) {
+          void this.onWorkerMessage(event.data)
+        }
+      }
+      worker.onerror = () => {
+        if (this.worker === worker && !this.deinitialized) {
+          void this.onWorkerError()
+        }
+      }
+      worker.onexpired = () => {
+        if (this.worker === worker && !this.deinitialized) {
+          void this.onWorkerError().then(() => this.maintainSocketReadiness())
+        }
+      }
       this.worker = worker
       this.workerBuildReport = { startedAtMs: Date.now() }
       this.workerSessionScope = sessionScope
@@ -1866,7 +1906,9 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       })
       this.acknowledgedRevokedSessionScopes.add(sessionScope)
     } finally {
-      this.terminateWorker()
+      if (this.worker === worker) {
+        this.terminateWorker()
+      }
     }
   }
 
@@ -1897,12 +1939,14 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
         clearTimeout(timeout)
         if (this.shutdownBarrier === finish) {
           this.shutdownBarrier = undefined
+          this.shutdownWorker = undefined
         }
         worker.terminate()
         resolve()
       }
       const timeout = setTimeout(finish, WORKER_SHUTDOWN_GRACE_MS)
       this.shutdownBarrier = finish
+      this.shutdownWorker = worker
     })
   }
 
@@ -2126,7 +2170,8 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       return
     }
     if (message.type === 'SHUTDOWN_COMPLETE') {
-      this.shutdownBarrier?.()
+      // The worker-bound callback owns shutdown acknowledgments; a bare message
+      // cannot identify which retiring worker completed its cleanup.
       return
     }
     if (message.type === 'DIAL_HOLD_ARMED') {
@@ -2242,6 +2287,14 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       return
     }
     if (message.type === 'SESSION_NOT_AUTHORIZED') {
+      const sourceWorker = this.worker
+      if (!sourceWorker || this.workerSessionScope !== message.sessionScope) {
+        return
+      }
+      const currentScope = await this.currentSessionScope()
+      if (this.worker !== sourceWorker || currentScope !== message.sessionScope) {
+        return
+      }
       /**
        * The gateway closed the socket because the session plane says this session
        * does not authenticate — a sign-out, a deletion, an explicit revocation or a
@@ -2258,7 +2311,7 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
        * session layer's own 401 handling takes the user to sign in again. The
        * socket deliberately does not sign anyone out by itself.
        */
-      await this.notifySessionRevoked()
+      await this.revokeSessionScope(message.sessionScope, sourceWorker)
       return
     }
     const pending = 'clientRequestId' in message ? this.pending.get(message.clientRequestId) : undefined
@@ -2772,8 +2825,11 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     ) {
       return
     }
+    const ownsWorker = () => this.worker === worker && !this.deinitialized && this.workerSessionScope === sessionScope
     const unavailable = (reason: SyncFallbackReason) => {
-      worker.postMessage({ type: 'TICKET_UNAVAILABLE', clientRequestId, reason })
+      if (ownsWorker()) {
+        worker.postMessage({ type: 'TICKET_UNAVAILABLE', clientRequestId, reason })
+      }
     }
     const laneUnavailable = this.sessionLaneUnavailableReason()
     if (laneUnavailable) {
@@ -2802,16 +2858,24 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       return
     }
     const cacheAndReport = (reason: SyncFallbackReason) => {
-      this.ticketFailureCache = { reason, until: Date.now() + CAPABILITY_REPROBE_MS }
-      unavailable(reason)
+      if (ownsWorker()) {
+        this.ticketFailureCache = { reason, until: Date.now() + CAPABILITY_REPROBE_MS }
+        unavailable(reason)
+      }
     }
 
     let ticket: SyncTicketResponse | SyncControlPlaneRefusal | undefined
     let receivedAt: number
     try {
       ticket = await this.options.controlPlane.createTicket(this.options.deviceId)
+      if (!ownsWorker()) {
+        return
+      }
       receivedAt = Date.now()
     } catch {
+      if (!ownsWorker()) {
+        return
+      }
       // No answer at all (network error, timeout, aborted fetch). The capability
       // may well exist; only a probe that the server answers can say otherwise.
       cacheAndReport((await this.probeCapabilityOnce()) === 'absent' ? 'capability-unavailable' : 'ticket-unavailable')
@@ -2819,6 +2883,9 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     }
     try {
       const currentScope = await this.currentSessionScope()
+      if (!ownsWorker()) {
+        return
+      }
       if (currentScope !== sessionScope || this.revokedSessionScopes.has(sessionScope)) {
         const pending = this.pending.get(clientRequestId)
         const collaborationPending = this.pendingCollaboration.get(clientRequestId)
@@ -2833,7 +2900,9 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
           this.rejectRpc(clientRequestId, rpcPending, new AuthenticatedRpcError('SESSION_CHANGED', false, true))
         }
         invitePending?.options.onError?.(new AuthenticatedRpcError('SESSION_CHANGED', false, true))
-        await this.quarantineWorkerScope(sessionScope)
+        if (ownsWorker()) {
+          await this.quarantineWorkerScope(sessionScope)
+        }
         return
       }
       if (isSyncControlPlaneRefusal(ticket)) {
