@@ -4,6 +4,8 @@ import { useApplication } from '@/Components/ApplicationProvider'
 import { useItemVaultInfo } from '@/Hooks/useItemVaultInfo'
 import { MentionCandidate } from './mentions'
 
+const NO_MEMBERS: SharedVaultUserServerHash[] = []
+
 /**
  * Source the @mention autocomplete from the note's shared-vault membership — the
  * SAME source the title bar collaborators popup (`useVaultRoster`) uses: the server-backed member list
@@ -17,25 +19,42 @@ import { MentionCandidate } from './mentions'
 export function useMentionCandidates(note: SNNote): MentionCandidate[] {
   const application = useApplication()
   const { vault } = useItemVaultInfo(note)
-  const [members, setMembers] = useState<SharedVaultUserServerHash[]>([])
-
-  const selfUuid = application.sessions.getUser()?.uuid
+  const user = application.sessions.getUser()
+  const selfUuid = user?.uuid
+  const scope = JSON.stringify([
+    note.uuid,
+    note.shared_vault_uuid,
+    note.key_system_identifier,
+    vault?.uuid,
+    vault?.isSharedVaultListing() ? vault.sharing.sharedVaultUuid : undefined,
+  ])
+  const [fetched, setFetched] = useState<{
+    scope: string
+    user: typeof user
+    members: SharedVaultUserServerHash[]
+  }>()
+  // A note can move between vaults without changing its UUID or remounting this
+  // hook. Hide the previous scope before the new request/effect even starts.
+  const members = fetched?.scope === scope && fetched.user === user ? fetched.members : NO_MEMBERS
 
   useEffect(() => {
     let cancelled = false
-    if (!vault || !vault.isSharedVaultListing()) {
-      setMembers([])
+    if (!user || !vault || !vault.isSharedVaultListing()) {
       return
     }
-    void application.vaultUsers.getSharedVaultUsersFromServer(vault).then((users) => {
-      if (!cancelled && users) {
-        setMembers(users)
+    const publish = (members: SharedVaultUserServerHash[]) => {
+      if (!cancelled && application.sessions.getUser() === user) {
+        setFetched({ scope, user, members })
       }
-    })
+    }
+    void application.vaultUsers
+      .getSharedVaultUsersFromServer(vault)
+      .then((users) => publish(users ?? NO_MEMBERS))
+      .catch(() => publish(NO_MEMBERS))
     return () => {
       cancelled = true
     }
-  }, [application.vaultUsers, vault])
+  }, [application.sessions, application.vaultUsers, scope, user, vault])
 
   return useMemo<MentionCandidate[]>(() => {
     return [
