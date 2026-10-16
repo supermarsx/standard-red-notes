@@ -103,6 +103,7 @@ describe('AssistantTools todo.write', () => {
 
 describe('AssistantTools notes.retrieve', () => {
   const appWithNotes = {
+    sessions: { getUser: () => undefined },
     items: {
       getItems: () => [
         { uuid: 'n1', title: 'Sourdough', text: 'feed the starter with flour and water', trashed: false },
@@ -256,6 +257,7 @@ describe('AssistantTools selected note scope', () => {
     },
   ]
   const application = {
+    sessions: { getUser: () => undefined },
     items: {
       getItems: () => notes,
       findItem: (uuid: string) => notes.find((note) => note.uuid === uuid),
@@ -466,7 +468,7 @@ describe('AssistantTools bypass confirmation boundaries', () => {
       ...(options.lite ? { payload: { content: { __lazyLite: true } } } : {}),
     }
     const application = {
-      sessions: { isCurrentSessionReadOnly: () => options.sessionReadOnly === true },
+      sessions: { getUser: () => undefined, isCurrentSessionReadOnly: () => options.sessionReadOnly === true },
       items: {
         findItem: (uuid: string) => (uuid === note.uuid ? candidate : undefined),
         getItems: () => [candidate],
@@ -610,7 +612,7 @@ describe('AssistantTools bypass confirmation boundaries', () => {
       const requestConfirmation = jest.fn(async () => true)
       const vault = { isSharedVaultListing: () => true }
       const application = {
-        sessions: { isCurrentSessionReadOnly: () => false },
+        sessions: { getUser: () => undefined, isCurrentSessionReadOnly: () => false },
         isAuthorizedToRenderItem: (item: { uuid: string }) => protection !== 'render' || item.uuid !== tag.uuid,
         items: {
           findItem: (uuid: string) => (uuid === scopedNote.uuid ? scopedNote : uuid === tag.uuid ? tag : undefined),
@@ -687,7 +689,7 @@ describe('AssistantTools bypass confirmation boundaries', () => {
       const findOrCreateTag = jest.fn()
       const vault = { isSharedVaultListing: () => true }
       const application = {
-        sessions: { isCurrentSessionReadOnly: () => false },
+        sessions: { getUser: () => undefined, isCurrentSessionReadOnly: () => false },
         isAuthorizedToRenderItem: (item: { uuid: string }) => protection !== 'render' || item.uuid !== tag.uuid,
         items: { getItems: () => [tag] },
         vaults: { getItemVault: () => (protection === 'vault' ? vault : undefined) },
@@ -716,7 +718,7 @@ describe('AssistantTools bypass confirmation boundaries', () => {
     const scopedNote = { ...note, key_system_identifier: 'note-vault-key' }
     const addTagToNote = jest.fn()
     const application = {
-      sessions: { isCurrentSessionReadOnly: () => false },
+      sessions: { getUser: () => undefined, isCurrentSessionReadOnly: () => false },
       isAuthorizedToRenderItem: () => true,
       items: {
         findItem: (uuid: string) => (uuid === scopedNote.uuid ? scopedNote : uuid === tag.uuid ? tag : undefined),
