@@ -1,4 +1,5 @@
 import { WebCrypto } from '@/Application/Crypto'
+import { bindCommentRange, hasValidCommentRangeDigest } from './CommentRangeAnchor'
 import type { WebApplication } from '@/Application/WebApplication'
 import type { NoteEncryptionIdentity } from '@/Components/SuperEditor/Collaboration/CollaborationKeyDerivation'
 import type { SNNote } from '@standardnotes/snjs'
@@ -78,6 +79,9 @@ function canonicalAnchor(comment: NoteComment): unknown {
 export function canonicalCommentAuthorshipMessage(noteUuid: string, value: NoteComment): string | undefined {
   const comment = normalizeComment(value)
   if (!noteUuid || !comment) {
+    return undefined
+  }
+  if (comment.anchor?.kind === 'super' && comment.anchor.exactRange && !hasValidCommentRangeDigest(comment.anchor)) {
     return undefined
   }
   return JSON.stringify([
@@ -370,6 +374,9 @@ export function attestLocalComment(
 
     const unsigned = { ...comment }
     delete unsigned.authorship
+    if (unsigned.anchor?.kind === 'super' && unsigned.anchor.exactRange) {
+      unsigned.anchor = bindCommentRange(unsigned.anchor)
+    }
     const message = canonicalCommentAuthorshipMessage(expectedIdentity.noteUuid, unsigned)
     if (!message) {
       return undefined

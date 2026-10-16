@@ -1,14 +1,17 @@
 import Dropdown from '@/Components/Dropdown/Dropdown'
-import { Component, lazy, ReactNode, Suspense, useEffect, useState, useSyncExternalStore } from 'react'
+import { Component, lazy, ReactNode, Suspense, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
 import { $getRoot, $getNodeByKey, $isElementNode, LexicalNode } from 'lexical'
 import { ApplicationEvent, ContentType, SNNote } from '@standardnotes/snjs'
 import { useApplication } from '@/Components/ApplicationProvider'
 import { readPrivateNoteComments } from '@/Comments/PrivateNoteComments'
 import { readDisplayNoteComments } from '@/Comments/CommentAuthorship'
+import { canUseCommentRange, isBoundCommentRange } from '@/Comments/CommentRangeAnchor'
 import { useEditorControlsState } from './EditorControlsContext'
 import { $getChecklistTodoId, $isChecklistItemNode } from './Lexical/Nodes/ChecklistItemNode'
 import type { CommentAnchor } from '@/Comments/comments'
+import { captureAssistantCommentTarget, type CapturedCommentTarget } from '@/Comments/CommentTargets'
+import { lexicalCommentBlockRanges } from './Plugins/CommentsPlugin/LexicalCommentTargets'
 
 const CommentsPanel = lazy(() => import('@/Components/Comments/CommentsPanel'))
 
@@ -40,6 +43,9 @@ export function CommentsSidebar({ note }: { note: SNNote }) {
   const [visited, setVisited] = useState(layout.commentsOpen)
   const [tasks, setTasks] = useState<{ todoId: string; text: string; key: string }[]>([])
   const [navigationStatus, setNavigationStatus] = useState('')
+  const capturedRef = useRef<{ anchor: CommentAnchor; snapshot: string; capture?: CapturedCommentTarget } | undefined>(
+    undefined,
+  )
   useEffect(() => {
     let revealed = false
     const reveal = () => {
@@ -110,6 +116,9 @@ export function CommentsSidebar({ note }: { note: SNNote }) {
   const task = layout.commentTarget ? tasks.find((row) => row.todoId === layout.commentTarget) : undefined
   const anchor =
     layout.commentAnchor ?? (task ? { kind: 'checklist' as const, todoId: task.todoId, snippet: task.text } : undefined)
+  if (anchor && capturedRef.current?.anchor !== anchor) {
+    capturedRef.current = { anchor, snapshot: JSON.stringify(editor.getEditorState().toJSON()) }
+  }
   const control =
     'rounded border border-border px-2 py-1 text-xs hover:bg-contrast focus-visible:ring-2 focus-visible:ring-info'
   const navigate = (target: CommentAnchor) => {
@@ -118,6 +127,20 @@ export function CommentsSidebar({ note }: { note: SNNote }) {
       if (target.kind === 'checklist') {
         key = tasks.find((row) => row.todoId === target.todoId)?.key
       } else if (target.kind === 'super') {
+        if (target.exactRange) {
+          const range = target.exactRange
+          if (canUseCommentRange(target) && $getRoot().getTextContent().slice(range.start, range.end) === range.text) {
+            try {
+              key = lexicalCommentBlockRanges().find((block) => block.start < range.end && block.end > range.start)?.key
+            } catch {
+              // Unsupported projections cannot safely relocate an exact selection.
+            }
+          }
+          return
+        }
+        if (isBoundCommentRange(target)) {
+          return
+        }
         const node = $getNodeByKey(target.blockKey)
         const snippet = target.snippet?.replace(/…$/, '')
         if (node?.isAttached() && (!snippet || node.getTextContent().includes(snippet))) {
@@ -228,38 +251,78 @@ export function CommentsSidebar({ note }: { note: SNNote }) {
             {navigationStatus}
           </p>
         )}
-        <div className="mb-3 text-xs">
-          <Dropdown
-            portal
-            label="Comment target"
-            showLabel
-            fullWidth
-            popoverPlacement="bottom-start"
-            classNameOverride={{ button: '!min-w-0' }}
-            value={layout.commentTarget ?? (layout.commentAnchor ? 'selection' : 'note')}
-            onChange={(value) => {
-              if (value !== 'selection') {
-                controls.setCommentTarget(value === 'note' ? undefined : value)
-              }
-            }}
-            items={[
-              { value: 'note', label: 'Whole note' },
-              ...(layout.commentAnchor?.kind === 'super' ? [{ value: 'selection', label: 'Selected text' }] : []),
-              ...(layout.commentTarget && !task ? [{ value: layout.commentTarget, label: 'Removed task' }] : []),
-              ...tasks.map((row) => ({ value: row.todoId, label: row.text })),
-            ]}
-          />
-        </div>
         {layout.commentTarget && !task ? (
           <p className="text-sm">This task is no longer in the note.</p>
         ) : (
           <CommentsBoundary key={note.uuid}>
             <Suspense fallback={<p role="status">Loading comments…</p>}>
               <CommentsPanel
-                key={`${note.uuid}:${anchor?.kind === 'checklist' ? `checklist:${anchor.todoId}` : anchor?.kind === 'super' ? `super:${anchor.blockKey}` : 'note'}`}
+                key={note.uuid}
                 note={note}
                 anchor={anchor}
                 onNavigate={navigate}
+                validateTarget={(visibility, replying) => {
+                  const noteTarget = captureAssistantCommentTarget(application, note.uuid, 'note')
+                  noteTarget.assertCurrent({ sharedMutation: visibility === 'collaborative' })
+                  if (!replying && anchor) {
+                    const captured = capturedRef.current
+                    if (
+                      !captured ||
+                      captured.anchor !== anchor ||
+                      (anchor.kind === 'super' &&
+                        captured.snapshot !== JSON.stringify(editor.getEditorState().toJSON()))
+                    ) {
+                      throw new Error(
+                        'The note changed after the comment target was captured. Select the target again before saving.',
+                      )
+                    }
+                    captured.capture?.assertCurrent({ sharedMutation: visibility === 'collaborative' })
+                  }
+                }}
+                targetControl={
+                  <Dropdown
+                    portal
+                    label="Comment target"
+                    popoverPlacement="bottom-start"
+                    classNameOverride={{
+                      button: '!min-w-0 !px-2 !py-1 [&_div]:!text-xs',
+                      wrapper: 'max-w-full text-xs',
+                    }}
+                    value={
+                      layout.commentTarget ??
+                      (layout.commentAnchor?.kind === 'super' ? (layout.commentAnchor.target ?? 'selection') : 'note')
+                    }
+                    onChange={(value) => {
+                      if (value === 'selection' || value === 'section') {
+                        try {
+                          const capture = captureAssistantCommentTarget(application, note.uuid, value)
+                          if (!capture.anchor) {
+                            throw new Error('Select the target in the live editor first.')
+                          }
+                          capturedRef.current = {
+                            anchor: capture.anchor,
+                            snapshot: JSON.stringify(editor.getEditorState().toJSON()),
+                            capture,
+                          }
+                          controls.openComments(capture.anchor)
+                          setNavigationStatus('')
+                        } catch (error) {
+                          setNavigationStatus(
+                            error instanceof Error ? error.message : 'The comment target is unavailable.',
+                          )
+                        }
+                      } else {
+                        controls.setCommentTarget(value === 'note' ? undefined : value)
+                      }
+                    }}
+                    items={[
+                      { value: 'note', label: 'Whole note' },
+                      { value: 'selection', label: 'Selected text' },
+                      { value: 'section', label: 'Current section' },
+                      ...tasks.map((row) => ({ value: row.todoId, label: `Item: ${row.text}` })),
+                    ]}
+                  />
+                }
               />
             </Suspense>
           </CommentsBoundary>

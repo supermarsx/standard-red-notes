@@ -126,6 +126,9 @@ export type SuperCommentAnchor = {
   blockKey: string
   /** Short snippet of the block's text, shown as context + used to relocate. */
   snippet?: string
+  /** Exact UTF-16 offsets in Lexical root plaintext; never relocated by fuzzy text. */
+  exactRange?: { start: number; end: number; text: string }
+  target?: 'selection' | 'section'
 }
 
 /** Anchor pointing at a character range inside a plaintext note (best-effort). */
@@ -315,6 +318,27 @@ function normalizeAnchor(value: unknown): CommentAnchor | undefined {
       anchor.snippet = candidate.snippet
     } else if (candidate.snippet !== undefined) {
       return undefined
+    }
+    if (candidate.exactRange !== undefined || candidate.target !== undefined) {
+      const range = candidate.exactRange as Record<string, unknown> | null
+      if (
+        !range ||
+        typeof range !== 'object' ||
+        Array.isArray(range) ||
+        (candidate.target !== 'selection' && candidate.target !== 'section') ||
+        typeof range.start !== 'number' ||
+        typeof range.end !== 'number' ||
+        !Number.isSafeInteger(range.start) ||
+        !Number.isSafeInteger(range.end) ||
+        range.start < 0 ||
+        range.end <= range.start ||
+        !isBoundedNonEmptyString(range.text, MAX_COMMENT_TEXT_LENGTH) ||
+        range.end - range.start !== range.text.length
+      ) {
+        return undefined
+      }
+      anchor.exactRange = { start: range.start, end: range.end, text: range.text }
+      anchor.target = candidate.target
     }
     return anchor
   }

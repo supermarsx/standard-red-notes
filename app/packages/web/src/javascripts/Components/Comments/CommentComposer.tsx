@@ -8,7 +8,7 @@ type Props = {
   placeholder?: string
   autoFocus?: boolean
   submitLabel?: string
-  onSubmit: (text: string, notifyOthers: boolean) => void
+  onSubmit: (text: string, notifyOthers: boolean) => void | Promise<boolean>
   showNotifyOthers?: boolean
   defaultNotifyOthers?: boolean
   onCancel?: () => void
@@ -52,6 +52,8 @@ export const CommentComposer: FunctionComponent<Props> = ({
     [controls, draftKey],
   )
   const [query, setQuery] = useState<{ query: string; replaceStart: number; replaceEnd: number } | null>(null)
+  const submitting = useRef(false)
+  const [isSubmitting, setIsSubmitting] = useState(false)
   const [highlighted, setHighlighted] = useState(0)
   const [notifyOverride, setNotifyOverride] = useState<boolean>()
   const notifyOthers = notifyOverride ?? defaultNotifyOthers
@@ -114,12 +116,31 @@ export const CommentComposer: FunctionComponent<Props> = ({
 
   const submit = useCallback(() => {
     const trimmed = value.trim()
-    if (!trimmed) {
+    if (!trimmed || submitting.current) {
       return
     }
-    onSubmit(trimmed, showNotifyOthers && notifyOthers)
-    setValue('')
-    setQuery(null)
+    const clear = () => {
+      setValue('')
+      setQuery(null)
+    }
+    const result = onSubmit(trimmed, showNotifyOthers && notifyOthers)
+    if (result) {
+      submitting.current = true
+      setIsSubmitting(true)
+      void result
+        .then((saved) => {
+          if (saved) {
+            clear()
+          }
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          submitting.current = false
+          setIsSubmitting(false)
+        })
+    } else {
+      clear()
+    }
   }, [value, onSubmit, setValue, showNotifyOthers, notifyOthers])
 
   const handleKeyDown = useCallback(
@@ -164,6 +185,7 @@ export const CommentComposer: FunctionComponent<Props> = ({
       <textarea
         ref={textareaRef}
         value={value}
+        disabled={isSubmitting}
         autoFocus={autoFocus}
         onChange={handleChange}
         onKeyDown={handleKeyDown}
@@ -221,7 +243,7 @@ export const CommentComposer: FunctionComponent<Props> = ({
         <button
           type="button"
           onClick={submit}
-          disabled={value.trim().length === 0}
+          disabled={isSubmitting || value.trim().length === 0}
           className="bg-info text-info-contrast rounded px-3 py-1 text-xs font-semibold disabled:opacity-50"
         >
           {submitLabel}

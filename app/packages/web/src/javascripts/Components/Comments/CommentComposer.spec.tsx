@@ -47,3 +47,44 @@ it('uses the shared-comment default until overridden and submits the same choice
   await act(async () => root.unmount())
   container.remove()
 })
+
+it('retains a failed draft for retry and blocks duplicate submission while persistence is pending', async () => {
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = createRoot(container)
+  let finish!: (saved: boolean) => void
+  const onSubmit = jest.fn(
+    () =>
+      new Promise<boolean>((resolve) => {
+        finish = resolve
+      }),
+  )
+  try {
+    await act(async () =>
+      root.render(
+        <EditorControlsProvider identity={{}}>
+          <CommentComposer candidates={[]} onSubmit={onSubmit} />
+        </EditorControlsProvider>,
+      ),
+    )
+    await act(async () => {
+      const textarea = container.querySelector('textarea')!
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(textarea, 'Keep this draft')
+      textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => {
+      container.querySelector('button')!.click()
+      container.querySelector('textarea')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    })
+    expect(onSubmit).toHaveBeenCalledTimes(1)
+    expect(container.querySelector('button')!.disabled).toBe(true)
+    await act(async () => finish(false))
+    expect(container.querySelector('textarea')!.value).toBe('Keep this draft')
+    await act(async () => container.querySelector('button')!.click())
+    await act(async () => finish(true))
+    expect(container.querySelector('textarea')!.value).toBe('')
+  } finally {
+    await act(async () => root.unmount())
+    container.remove()
+  }
+})

@@ -42,6 +42,20 @@ export function buildMentionToken(candidate: MentionCandidate): string {
   return `@[${safeName}](${candidate.userUuid})`
 }
 
+/** Resolve the literal self alias without changing already structured mentions. */
+export function resolveSelfMentions(text: string, selfUuid: string | undefined): string {
+  if (!selfUuid) {
+    return text
+  }
+  const token = buildMentionToken({ userUuid: selfUuid, name: 'self' })
+  return text
+    .split(/(@\[[^\]]+\]\([^)]+\))/g)
+    .map((part, index) => {
+      return index % 2 ? part : part.replace(/(^|[^\w@])@self\b/gi, (_match, prefix: string) => `${prefix}${token}`)
+    })
+    .join('')
+}
+
 /** Parse every mention token out of `text`, in order of appearance. */
 export function parseMentions(text: string): ParsedMention[] {
   const result: ParsedMention[] = []

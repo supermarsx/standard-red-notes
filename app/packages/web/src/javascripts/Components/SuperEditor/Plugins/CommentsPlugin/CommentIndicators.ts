@@ -1,6 +1,8 @@
 import { $getNodeByKey, $getRoot, $isElementNode, LexicalEditor, LexicalNode } from 'lexical'
 import type { CommentAnchor } from '@/Comments/comments'
+import { canUseCommentRange, isBoundCommentRange } from '@/Comments/CommentRangeAnchor'
 import { $getChecklistTodoId, $isChecklistItemNode } from '../../Lexical/Nodes/ChecklistItemNode'
+import { lexicalCommentBlockRanges } from './LexicalCommentTargets'
 
 /** DOM-only adornments: never modify encrypted note text or the undo history. */
 export function markCommentAnchors(editor: LexicalEditor, anchors: CommentAnchor[]): () => void {
@@ -10,6 +12,8 @@ export function markCommentAnchors(editor: LexicalEditor, anchors: CommentAnchor
   }
   editor.getEditorState().read(() => {
     const root = $getRoot()
+    let exactBlocks: ReturnType<typeof lexicalCommentBlockRanges> | undefined
+    let exactUnavailable = false
     const tasks = new Map<string, LexicalNode>()
     const stack = anchors.some((anchor) => anchor.kind === 'checklist') ? [...root.getChildren()] : []
     let remaining = 50_000
@@ -28,6 +32,33 @@ export function markCommentAnchors(editor: LexicalEditor, anchors: CommentAnchor
       if (anchor.kind === 'checklist') {
         node = tasks.get(anchor.todoId)
       } else if (anchor.kind === 'super') {
+        if (anchor.exactRange) {
+          if (exactUnavailable || !canUseCommentRange(anchor)) {
+            continue
+          }
+          const range = anchor.exactRange
+          if (root.getTextContent().slice(range.start, range.end) === range.text) {
+            try {
+              exactBlocks ??= lexicalCommentBlockRanges()
+            } catch {
+              exactUnavailable = true
+              continue
+            }
+            for (const block of exactBlocks) {
+              if (block.start < range.end && block.end > range.start) {
+                const element = editor.getElementByKey(block.key)
+                if (element) {
+                  element.setAttribute('data-note-comment-indicator', 'true')
+                  marked.add(element)
+                }
+              }
+            }
+          }
+          continue
+        }
+        if (isBoundCommentRange(anchor)) {
+          continue
+        }
         const snippet = anchor.snippet?.replace(/…$/, '')
         node = $getNodeByKey(anchor.blockKey)
         if (!node?.isAttached() || (snippet && !node.getTextContent().includes(snippet))) {

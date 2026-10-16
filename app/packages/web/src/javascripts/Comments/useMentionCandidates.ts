@@ -10,9 +10,9 @@ import { MentionCandidate } from './mentions'
  * (`vaultUsers.getSharedVaultUsersFromServer`) with display names resolved via
  * trusted contacts (`contacts.findContactForServerUser`). The server hash only
  * carries `user_uuid`, so a member with no trusted contact falls back to showing
- * their uuid. The local user is excluded (you can't @mention yourself).
+ * their uuid. The current account is available through the explicit @self alias.
  *
- * Returns an empty list for solo notes, so nothing changes there.
+ * Solo notes offer @self without requesting any shared-vault membership.
  */
 export function useMentionCandidates(note: SNNote): MentionCandidate[] {
   const application = useApplication()
@@ -38,14 +38,17 @@ export function useMentionCandidates(note: SNNote): MentionCandidate[] {
   }, [application.vaultUsers, vault])
 
   return useMemo<MentionCandidate[]>(() => {
-    return members
-      .filter((member) => member.user_uuid !== selfUuid)
-      .map((member) => {
-        const contact = application.contacts.findContactForServerUser(member)
-        return {
-          userUuid: member.user_uuid,
-          name: contact?.name || member.user_uuid,
-        }
-      })
+    return [
+      ...(selfUuid ? [{ userUuid: selfUuid, name: 'self' }] : []),
+      ...members
+        .filter((member) => member.user_uuid !== selfUuid)
+        .map((member) => {
+          const contact = application.contacts.findContactForServerUser(member)
+          return {
+            userUuid: member.user_uuid,
+            name: contact?.name || member.user_uuid,
+          }
+        }),
+    ]
   }, [members, application.contacts, selfUuid])
 }

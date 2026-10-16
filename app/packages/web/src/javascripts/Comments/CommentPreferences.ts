@@ -3,6 +3,7 @@ import type { PrefKey } from '@standardnotes/snjs'
 // Literal keys also work before generated SDK bundles have been rebuilt.
 export const COMMENT_INDICATORS_PREF_KEY = 'showCommentIndicators' as unknown as PrefKey
 export const COMMENT_NOTIFY_DEFAULT_PREF_KEY = 'commentNotifyOthersDefault' as unknown as PrefKey
+export const COMMENT_PRIVATE_HINT_DISMISSED_PREF_KEY = 'commentPrivateHintDismissed' as unknown as PrefKey
 export const showCommentIndicators = (value: unknown): boolean => value !== false
 export const notifyOthersByDefault = (value: unknown): boolean => value === true
 

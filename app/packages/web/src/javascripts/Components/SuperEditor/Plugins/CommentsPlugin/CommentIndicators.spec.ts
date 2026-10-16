@@ -1,4 +1,17 @@
 /** @jest-environment jsdom */
+import { bindCommentRange } from '@/Comments/CommentRangeAnchor'
+
+jest.mock('@/Application/Crypto', () => ({
+  WebCrypto: {
+    sodiumCryptoGenericHash: (message: string) =>
+      jest
+        .requireActual<typeof import('node:crypto')>('node:crypto')
+        .createHash('sha256')
+        .update(message)
+        .digest('hex'),
+  },
+}))
+
 import { $createParagraphNode, $createTextNode, $getRoot, createEditor } from 'lexical'
 import { $createListItemNode, $createListNode, ListItemNode, ListNode } from '@lexical/list'
 import { $setChecklistTodoId } from '../../Lexical/Nodes/ChecklistItemNode'
@@ -75,6 +88,59 @@ it('recovers an anchor after editor keys change only when the snippet is unambig
     )
     markCommentAnchors(view.editor, [
       { kind: 'super', blockKey: 'old-session-key', snippet: 'Paragraph with a comment' },
+    ])
+    expect(view.root.querySelector('[data-note-comment-indicator]')).toBeNull()
+  } finally {
+    view.close()
+  }
+})
+
+it('uses exact range offsets after key changes and refuses fuzzy relocation when quoted text moved', () => {
+  const view = setup()
+  try {
+    const anchor = {
+      kind: 'super' as const,
+      blockKey: 'old-key',
+      target: 'selection' as const,
+      snippet: 'Paragraph',
+      exactRange: { start: 0, end: 9, text: 'Paragraph' },
+    }
+    const before = JSON.stringify(view.editor.getEditorState().toJSON())
+    const clear = markCommentAnchors(view.editor, [anchor])
+    expect(view.editor.getElementByKey(view.blockKey)?.dataset.noteCommentIndicator).toBe('true')
+    expect(JSON.stringify(view.editor.getEditorState().toJSON())).toBe(before)
+    clear()
+    view.editor.update(
+      () => {
+        $getRoot()
+          .getFirstChild()!
+          .insertBefore($createParagraphNode().append($createTextNode('Inserted earlier')))
+      },
+      { discrete: true },
+    )
+    markCommentAnchors(view.editor, [anchor])
+    expect(view.root.querySelector('[data-note-comment-indicator]')).toBeNull()
+  } finally {
+    view.close()
+  }
+})
+it('never uses a signed range with stripped or tampered precision as a fuzzy snippet anchor', () => {
+  const view = setup()
+  try {
+    const anchor = bindCommentRange({
+      kind: 'super',
+      blockKey: view.blockKey,
+      snippet: 'Paragraph',
+      target: 'selection',
+      exactRange: { start: 0, end: 9, text: 'Paragraph' },
+    })
+    const clear = markCommentAnchors(view.editor, [anchor])
+    expect(view.root.querySelector('[data-note-comment-indicator]')).not.toBeNull()
+    clear()
+    markCommentAnchors(view.editor, [
+      { kind: 'super', blockKey: anchor.blockKey, snippet: anchor.snippet },
+      { ...anchor, target: 'section' },
+      { ...anchor, exactRange: { start: 0, end: 4, text: 'Para' } },
     ])
     expect(view.root.querySelector('[data-note-comment-indicator]')).toBeNull()
   } finally {

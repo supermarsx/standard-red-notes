@@ -7,37 +7,40 @@ import { readPrivateNoteComments } from '@/Comments/PrivateNoteComments'
 import { readDisplayNoteComments } from '@/Comments/CommentAuthorship'
 import { COMMENT_INDICATORS_PREF_KEY, showCommentIndicators } from '@/Comments/CommentPreferences'
 import { markCommentAnchors } from './CommentIndicators'
-import type { CommentAnchor, SuperCommentAnchor } from '@/Comments/comments'
+import type { CommentAnchor } from '@/Comments/comments'
 import { $isListItemNode } from '@lexical/list'
-import {
-  $ensureChecklistTodoId,
-  $getChecklistTodoId,
-  $isChecklistItemNode,
-} from '../../Lexical/Nodes/ChecklistItemNode'
+import { registerCommentTargetBridge } from '@/Comments/CommentTargets'
+import { captureLexicalCommentTarget } from './LexicalCommentTargets'
+import { $getChecklistTodoId, $isChecklistItemNode } from '../../Lexical/Nodes/ChecklistItemNode'
 
 /**
  * Standard Red Notes: bridge between the Super (Lexical) editor and the comments
  * panel for INLINE comment anchoring.
  *
- * Dispatching CAPTURE_COMMENT_ANCHOR_COMMAND reads the current selection's
- * top-level block and reports a `super` anchor (the block's Lexical node key +
- * a short text snippet) back through the provided callback. The comments panel
- * can then attach that anchor to a new comment so it shows as an "inline" comment
- * with the quoted context.
+ * Capture reads committed selection offsets and an exact quote, a heading's
+ * section, or an existing persistent task identity without editing the document.
  *
  * Anchored comments receive DOM-only markers. Stored anchors remain unchanged;
- * after a reload a unique snippet can locate a block whose session key changed.
+ * New range anchors fail closed when text moves; only legacy block anchors use
+ * the older unique-snippet relocation behavior.
  */
 export const CAPTURE_COMMENT_ANCHOR_COMMAND = createCommand<(anchor: CommentAnchor | null) => void>(
   'CAPTURE_COMMENT_ANCHOR_COMMAND',
 )
 
-const SNIPPET_MAX = 80
-
 export function CommentsPlugin({ note }: { note?: SNNote }): null {
   const [editor] = useLexicalComposerContext()
   const application = useApplicationOrNull()
   const noteUuid = note?.uuid
+
+  useEffect(() => {
+    if (!application || !noteUuid) {
+      return
+    }
+    return registerCommentTargetBridge(application, noteUuid, {
+      capture: (target, todoId) => captureLexicalCommentTarget(editor, target, todoId),
+    })
+  }, [application, editor, noteUuid])
 
   useEffect(() => {
     if (!application || !noteUuid) {
@@ -113,30 +116,53 @@ export function CommentsPlugin({ note }: { note?: SNNote }): null {
           return true
         }
         try {
+          const signature = [
+            selection.anchor.key,
+            selection.anchor.offset,
+            selection.anchor.type,
+            selection.focus.key,
+            selection.focus.offset,
+            selection.focus.type,
+          ].join(':')
+          let committedSelectionMatches = false
+          editor.getEditorState().read(() => {
+            const committed = $getSelection()
+            committedSelectionMatches =
+              $isRangeSelection(committed) &&
+              [
+                committed.anchor.key,
+                committed.anchor.offset,
+                committed.anchor.type,
+                committed.focus.key,
+                committed.focus.offset,
+                committed.focus.type,
+              ].join(':') === signature
+          })
+          if (!committedSelectionMatches) {
+            report(null)
+            return true
+          }
+          if (!selection.isCollapsed()) {
+            report(captureLexicalCommentTarget(editor, 'selection').anchor ?? null)
+            return true
+          }
           const anchorNode = selection.anchor.getNode()
           let current = anchorNode
           while (current.getParent()) {
             if ($isListItemNode(current) && $isChecklistItemNode(current)) {
-              const todoId =
-                $getChecklistTodoId(current) ?? (editor.isEditable() ? $ensureChecklistTodoId(current) : undefined)
+              const todoId = $getChecklistTodoId(current)
               if (todoId) {
                 report({
                   kind: 'checklist',
                   todoId,
-                  snippet: current.getTextContent().trim().slice(0, SNIPPET_MAX) || undefined,
+                  snippet: current.getTextContent().trim().slice(0, 80) || undefined,
                 })
                 return true
               }
             }
             current = current.getParent()!
           }
-          const block = anchorNode.getTopLevelElementOrThrow()
-          const text = (selection.isCollapsed() ? block.getTextContent() : selection.getTextContent()).trim()
-          const anchor: SuperCommentAnchor = { kind: 'super', blockKey: block.getKey() }
-          if (text) {
-            anchor.snippet = text.length > SNIPPET_MAX ? `${text.slice(0, SNIPPET_MAX)}…` : text
-          }
-          report(anchor)
+          report(captureLexicalCommentTarget(editor, 'section').anchor ?? null)
         } catch {
           report(null)
         }

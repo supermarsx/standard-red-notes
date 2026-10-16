@@ -1,4 +1,5 @@
 import { WebCrypto } from '@/Application/Crypto'
+import { bindCommentRange } from './CommentRangeAnchor'
 import type { WebApplication } from '@/Application/WebApplication'
 import type { NoteEncryptionIdentity } from '@/Components/SuperEditor/Collaboration/CollaborationKeyDerivation'
 import {
@@ -28,6 +29,7 @@ jest.mock('@/Application/Crypto', () => {
   return {
     WebCrypto: {
       initialize: async () => undefined,
+      sodiumCryptoGenericHash: (message: string) => crypto.createHash('sha256').update(message).digest('hex'),
       sodiumCryptoSignSeedKeypair: () => {
         const pair = crypto.generateKeyPairSync('ed25519')
         return {
@@ -78,6 +80,45 @@ const keySet = (signing: string, previousSigning?: string) => ({
 })
 
 describe('comment authorship attestation', () => {
+  it('signs exact selection range coordinates, content and target without changing legacy anchor proofs', () => {
+    const author = applicationFor({ contactCurrentKey: currentPair.publicKey }).application
+    const signed = signedWith(currentPair, {
+      ...baseComment(),
+      anchor: bindCommentRange({
+        kind: 'super',
+        blockKey: 'block-1',
+        target: 'selection',
+        exactRange: { start: 0, end: 5, text: 'Exact' },
+      }),
+    })
+    expect(verifyCommentAuthorship(author, 'note-1', signed).status).toBe('verified')
+    expect(
+      verifyCommentAuthorship(author, 'note-1', {
+        ...signed,
+        anchor: {
+          kind: 'super',
+          blockKey: (signed.anchor as { blockKey: string }).blockKey,
+          target: 'selection',
+          exactRange: { start: 1, end: 6, text: 'Exact' },
+        },
+      }).status,
+    ).toBe('invalid')
+    const stripped = {
+      ...signed,
+      anchor: { kind: 'super' as const, blockKey: (signed.anchor as { blockKey: string }).blockKey },
+    }
+    // A pre-range client normalizes to these three canonical fields only.
+    expect(canonicalCommentAuthorshipMessage('note-1', stripped)).toBe(
+      canonicalCommentAuthorshipMessage('note-1', signed),
+    )
+    expect(verifyCommentAuthorship(author, 'note-1', stripped).status).toBe('verified')
+    expect(
+      verifyCommentAuthorship(author, 'note-1', {
+        ...signed,
+        anchor: { ...signed.anchor!, target: 'section' } as NoteComment['anchor'],
+      }).status,
+    ).toBe('invalid')
+  })
   it('binds a checklist comment proof to its persistent task identity', () => {
     const author = applicationFor({ contactCurrentKey: currentPair.publicKey }).application
     const signed = signedWith(currentPair, {
@@ -239,6 +280,18 @@ describe('comment authorship attestation', () => {
     const signed = attestLocalComment(harness.application, identity, captured!, baseComment())
     expect(signed?.authorship?.signingPublicKey).toBe(currentPair.publicKey)
     expect(verifyCommentAuthorship(harness.application, 'note-1', signed!).status).toBe('verified')
+    const precise = attestLocalComment(harness.application, identity, captured!, {
+      ...baseComment(),
+      anchor: {
+        kind: 'super',
+        blockKey: 'lexical-session-key',
+        snippet: 'Exact',
+        target: 'section',
+        exactRange: { start: 0, end: 5, text: 'Exact' },
+      },
+    })
+    expect(precise?.anchor).toMatchObject({ blockKey: expect.stringMatching(/^range-v1:/), target: 'section' })
+    expect(verifyCommentAuthorship(harness.application, 'note-1', precise!).status).toBe('verified')
 
     harness.replaceRootPair(previousPair)
     expect(attestLocalComment(harness.application, identity, captured!, baseComment())).toBeUndefined()
