@@ -1,9 +1,13 @@
 import { WebApplication } from '@/Application/WebApplication'
-import { PrefKey } from '@standardnotes/snjs'
+import { ApplicationEvent, PrefKey } from '@standardnotes/snjs'
 import { useEffect, useState } from 'react'
 import { AssistantUsage, assistantUsageService, EMPTY_USAGE } from '@/Assistant/AssistantUsageService'
 import { ServerCap } from '@/Components/Footer/assistantUsageFormat'
 import { AssistantUsageResponse } from '@/Assistant/usageMeter'
+import {
+  assistantSessionPrincipalMatches,
+  captureAssistantSessionPrincipal,
+} from '@/Assistant/assistantSessionPrincipal'
 
 export interface AssistantUsageState {
   /** Session token/request totals accumulated from provider responses. */
@@ -32,29 +36,38 @@ export function useAssistantUsage(application: WebApplication): AssistantUsageSt
     return assistantUsageService.subscribe(setSession)
   }, [])
 
-  const connectionMode = application.getPreference(PrefKey.AssistantConnectionMode, 'direct')
-
-  // Server request cap (proxy mode only). The assistant websocket streams
-  // completions, but currently has no separately negotiated usage-event feed.
+  // Authentication events can change the principal without remounting this
+  // memoized footer. Each boundary invalidates pending responses synchronously.
   useEffect(() => {
-    // Only poll the authenticated /v1/assistant/usage endpoint when there is an
-    // actual signed-in server session whose access token can be attached. Note
-    // hasAccount() is true for passcode-only / offline accounts that have NO
-    // server session, which previously caused the usage chip to poll without a
-    // token and spam 401s. Gate on isSignedIn() instead (the same signed-in check
-    // the Footer uses) so signed-out / offline users just see local session token
-    // usage (no cap) and never issue an unauthenticated request.
-    if (connectionMode !== 'proxy' || !application.sessions.isSignedIn()) {
-      setCap(null)
-      return
-    }
-
     let disposed = false
+    let epoch = 0
+    let pendingEpoch: number | undefined
+    let refreshAgain = false
+    let mode = application.getPreference(PrefKey.AssistantConnectionMode, 'direct')
+    let principal = captureAssistantSessionPrincipal(application.sessions)
 
     const refresh = async () => {
+      const requestPrincipal = captureAssistantSessionPrincipal(application.sessions)
+      if (disposed || mode !== 'proxy' || !requestPrincipal.valid || !requestPrincipal.signedIn) {
+        setCap(null)
+        return
+      }
+      if (pendingEpoch === epoch) {
+        refreshAgain = true
+        return
+      }
+      const requestEpoch = epoch
+      pendingEpoch = requestEpoch
       try {
         const result = await application.assistantConfigRequest<AssistantUsageResponse>('/v1/assistant/usage')
-        if (disposed || typeof result?.used !== 'number' || typeof result?.limit !== 'number') {
+        if (
+          disposed ||
+          requestEpoch !== epoch ||
+          !assistantSessionPrincipalMatches(requestPrincipal, captureAssistantSessionPrincipal(application.sessions)) ||
+          application.getPreference(PrefKey.AssistantConnectionMode, 'direct') !== 'proxy' ||
+          typeof result?.used !== 'number' ||
+          typeof result?.limit !== 'number'
+        ) {
           return
         }
         setCap((prev) => {
@@ -63,19 +76,54 @@ export function useAssistantUsage(application: WebApplication): AssistantUsageSt
             : { used: result.used, limit: result.limit }
         })
       } catch {
-        // Best-effort; leave the previous value in place.
+        // Best-effort within the current principal; boundaries clear old figures.
+      } finally {
+        if (!disposed && requestEpoch === epoch) {
+          pendingEpoch = undefined
+          if (refreshAgain) {
+            refreshAgain = false
+            void refresh()
+          }
+        }
       }
     }
-
+    const stopEvents = application.addEventObserver(async (event) => {
+      if (
+        event !== ApplicationEvent.SignedIn &&
+        event !== ApplicationEvent.SignedOut &&
+        event !== ApplicationEvent.PreparingForSignOut &&
+        event !== ApplicationEvent.KeyStatusChanged &&
+        event !== ApplicationEvent.PreferencesChanged
+      ) {
+        return
+      }
+      const nextPrincipal = captureAssistantSessionPrincipal(application.sessions)
+      const nextMode = application.getPreference(PrefKey.AssistantConnectionMode, 'direct')
+      if (
+        event === ApplicationEvent.PreferencesChanged &&
+        nextMode === mode &&
+        assistantSessionPrincipalMatches(principal, nextPrincipal)
+      ) {
+        return
+      }
+      principal = nextPrincipal
+      mode = nextMode
+      epoch += 1
+      refreshAgain = false
+      setCap(null)
+      if (event !== ApplicationEvent.PreparingForSignOut) {
+        void refresh()
+      }
+    })
     void refresh()
-    // A local usage tick means one request actually completed.
     const unsubscribe = assistantUsageService.subscribe(() => void refresh())
-
     return () => {
       disposed = true
+      epoch += 1
+      stopEvents()
       unsubscribe()
     }
-  }, [application, connectionMode])
+  }, [application])
 
   return { session, cap }
 }

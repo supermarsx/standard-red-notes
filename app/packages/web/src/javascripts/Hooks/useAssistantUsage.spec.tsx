@@ -1,6 +1,7 @@
 /**
  * @jest-environment jsdom
  */
+import { ApplicationEvent } from '@standardnotes/snjs'
 import { WebApplication } from '@/Application/WebApplication'
 import { assistantUsageService } from '@/Assistant/AssistantUsageService'
 import { act, createElement, useLayoutEffect } from 'react'
@@ -48,7 +49,8 @@ describe('useAssistantUsage bounded server refresh', () => {
       .mockResolvedValueOnce({ used: 3, limit: 10 })
     const application = {
       getPreference: jest.fn().mockReturnValue('proxy'),
-      sessions: { isSignedIn: jest.fn().mockReturnValue(true) },
+      sessions: { isSignedIn: jest.fn().mockReturnValue(true), getUser: () => ({ uuid: 'account' }) },
+      addEventObserver: () => () => undefined,
       assistantConfigRequest,
       // Deliberately expose a READY transport with assistant streaming. This
       // capability alone must not suppress GET refreshes because it does not
@@ -72,5 +74,81 @@ describe('useAssistantUsage bounded server refresh', () => {
 
     expect(assistantConfigRequest).toHaveBeenCalledTimes(2)
     expect(latest?.cap).toEqual({ used: 3, limit: 10 })
+  })
+  it('clears old caps at auth/key boundaries and rejects delayed prior-principal responses', async () => {
+    let account: string | undefined = 'first'
+    let notify!: (event: ApplicationEvent) => void
+    const pending: Array<(value: { used: number; limit: number }) => void> = []
+    const assistantConfigRequest = jest.fn(() => new Promise((resolve) => pending.push(resolve)))
+    const application = {
+      getPreference: () => 'proxy',
+      sessions: { isSignedIn: () => !!account, getUser: () => (account ? { uuid: account } : undefined) },
+      addEventObserver: (callback: typeof notify) => {
+        notify = callback
+        return () => undefined
+      },
+      assistantConfigRequest,
+    } as unknown as WebApplication
+    let latest: AssistantUsageState | undefined
+    await act(async () => {
+      root.render(createElement(Harness, { application, onResult: (result) => (latest = result) }))
+    })
+    await act(async () => {
+      account = 'second'
+      notify(ApplicationEvent.SignedIn)
+      pending[1]({ used: 2, limit: 20 })
+    })
+    expect(latest?.cap).toEqual({ used: 2, limit: 20 })
+    await act(async () => {
+      pending[0]({ used: 99, limit: 100 })
+    })
+    expect(latest?.cap).toEqual({ used: 2, limit: 20 })
+    act(() => {
+      notify(ApplicationEvent.KeyStatusChanged)
+    })
+    expect(latest?.cap).toBeNull()
+    await act(async () => {
+      account = undefined
+      notify(ApplicationEvent.SignedOut)
+      pending[2]({ used: 7, limit: 20 })
+    })
+    expect(latest?.cap).toBeNull()
+    expect(assistantConfigRequest).toHaveBeenCalledTimes(3)
+  })
+
+  it('coalesces usage bursts and ignores unrelated preference events without missing the trailing refresh', async () => {
+    let notify!: (event: ApplicationEvent) => void
+    const pending: Array<(value: { used: number; limit: number }) => void> = []
+    const assistantConfigRequest = jest.fn(() => new Promise((resolve) => pending.push(resolve)))
+    const application = {
+      getPreference: () => 'proxy',
+      sessions: { isSignedIn: () => true, getUser: () => ({ uuid: 'account' }) },
+      addEventObserver: (callback: typeof notify) => {
+        notify = callback
+        return () => undefined
+      },
+      assistantConfigRequest,
+    } as unknown as WebApplication
+    let latest: AssistantUsageState | undefined
+    await act(async () => {
+      root.render(createElement(Harness, { application, onResult: (result) => (latest = result) }))
+      assistantUsageService.record({ totalTokens: 1 })
+      assistantUsageService.record({ totalTokens: 1 })
+    })
+    await act(async () => {
+      assistantUsageService.record({ totalTokens: 1 })
+      assistantUsageService.record({ totalTokens: 1 })
+      notify(ApplicationEvent.PreferencesChanged)
+    })
+    expect(assistantConfigRequest).toHaveBeenCalledTimes(1)
+    await act(async () => {
+      pending[0]({ used: 1, limit: 10 })
+    })
+    expect(assistantConfigRequest).toHaveBeenCalledTimes(2)
+    await act(async () => {
+      pending[1]({ used: 5, limit: 10 })
+    })
+    expect(latest?.cap).toEqual({ used: 5, limit: 10 })
+    expect(assistantConfigRequest).toHaveBeenCalledTimes(2)
   })
 })
