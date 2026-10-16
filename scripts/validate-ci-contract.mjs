@@ -1430,8 +1430,8 @@ export function validateCiContract(files) {
     ],
     [
       "--project=firefox --project=chromium --reporter=list,json",
-      1,
-      "engine check in both Firefox and Chromium",
+      2,
+      "engine and concurrent sync checks in both Firefox and Chromium",
     ],
     [
       // Once in Playwright's Firefox and Chromium, once in stock Firefox. A
@@ -1453,13 +1453,23 @@ export function validateCiContract(files) {
       // `--min-expected 12` with none of them in Firefox. These two floors are
       // what make "Firefox ran" a checked fact rather than a flag on a command.
       "--min-expected-in firefox=6",
-      1,
+      2,
       "floor on the engine tests that passed in Firefox",
     ],
     [
       "--min-expected-in chromium=6",
-      1,
+      2,
       "floor on the engine tests that passed in Chromium",
+    ],
+    [
+      "tests/independent-sync-workers.spec.ts tests/concurrent-sync-journal.spec.ts",
+      1,
+      "native journal and independent collaboration browser checks",
+    ],
+    [
+      "playwright-parallel-sync.json",
+      2,
+      "concurrent sync report written and then verified",
     ],
     [
       "--project=stock-firefox --reporter=list,json",

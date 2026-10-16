@@ -1057,13 +1057,13 @@ test("the Firefox and Chromium engine check cannot be silently disarmed", () => 
   // `firefox` sat in playwright.config.ts for months while every per-push
   // browser step said `--project=chromium`, and two Firefox-only defects reached
   // the owner's browser under an all-green pipeline. Each way of taking Firefox
-  // back out of this step has to be refused, and each fragment has to occur
-  // once, or flipping it here would leave a second copy satisfying the rule.
-  for (const [current, replacement, expected] of [
+  // back out of either the engine or concurrent-sync step has to be refused.
+  for (const [current, replacement, expected, occurrences = 1] of [
     [
       "--project=firefox --project=chromium --reporter=list,json",
       "--project=chromium --reporter=list,json",
-      /container-smoke must apply the engine check in both Firefox and Chromium exactly 1 times, found 0/,
+      /container-smoke must apply the engine and concurrent sync checks in both Firefox and Chromium exactly 2 times, found 1/,
+      2,
     ],
     [
       "playwright install --with-deps chromium firefox\n",
@@ -1073,12 +1073,14 @@ test("the Firefox and Chromium engine check cannot be silently disarmed", () => 
     [
       "--min-expected-in firefox=6",
       "--min-expected-in firefox=0",
-      /container-smoke must apply the floor on the engine tests that passed in Firefox exactly 1 times, found 0/,
+      /container-smoke must apply the floor on the engine tests that passed in Firefox exactly 2 times, found 1/,
+      2,
     ],
     [
       "--min-expected-in chromium=6",
       "--min-expected-in chromium=0",
-      /container-smoke must apply the floor on the engine tests that passed in Chromium exactly 1 times, found 0/,
+      /container-smoke must apply the floor on the engine tests that passed in Chromium exactly 2 times, found 1/,
+      2,
     ],
     [
       "--report e2e/artifacts/playwright-engines.json",
@@ -1091,11 +1093,20 @@ test("the Firefox and Chromium engine check cannot be silently disarmed", () => 
       /container-smoke must apply the Firefox and Chromium engine report written and then verified exactly 2 times, found 1/,
     ],
   ]) {
-    const files = withFileChanged(".github/workflows/ci.yml", (content) => {
-      assert.equal(content.split(current).length - 1, 1, current);
-      return content.replace(current, replacement);
-    });
-    assert.match(validateCiContract(files).join("\n"), expected);
+    assert.equal(
+      baseline.get(".github/workflows/ci.yml").split(current).length - 1,
+      occurrences,
+      current,
+    );
+    for (let occurrence = 0; occurrence < occurrences; occurrence++) {
+      const files = withOccurrenceChanged(
+        ".github/workflows/ci.yml",
+        current,
+        occurrence,
+        replacement,
+      );
+      assert.match(validateCiContract(files).join("\n"), expected);
+    }
   }
 });
 
@@ -1135,12 +1146,12 @@ test("a commented-out engine check does not count as one", () => {
   const active =
     "          --project=firefox --project=chromium --reporter=list,json\n";
   const files = withFileChanged(".github/workflows/ci.yml", (content) => {
-    assert.equal(content.split(active).length - 1, 1);
+    assert.equal(content.split(active).length - 1, 2);
     return content.replace(active, `          # ${active.trimStart()}`);
   });
   assert.match(
     validateCiContract(files).join("\n"),
-    /container-smoke must apply the engine check in both Firefox and Chromium exactly 1 times, found 0/,
+    /container-smoke must apply the engine and concurrent sync checks in both Firefox and Chromium exactly 2 times, found 1/,
   );
 });
 
@@ -1225,9 +1236,9 @@ test("the engine checks cannot run before the stack, out of order, or after publ
   );
   // After the images have been exported, a red check can no longer stop them.
   assert.match(
-    validateCiContract(
-      withEngineBlockBefore("Collect stack diagnostics"),
-    ).join("\n"),
+    validateCiContract(withEngineBlockBefore("Collect stack diagnostics")).join(
+      "\n",
+    ),
     ordering,
   );
 
@@ -1397,7 +1408,11 @@ test("neither Firefox spec can be skipped for an engine, and neither may be retr
   // The download defect was a race. A retry turns a race into `flaky`, and
   // `flaky` into something people stop reading.
   for (const [current, replacement, expected] of [
-    ["retries: 0,", "retries: 2,", /missing zero-retry Playwright configuration/],
+    [
+      "retries: 0,",
+      "retries: 2,",
+      /missing zero-retry Playwright configuration/,
+    ],
     [
       "firefoxUserPrefs: { 'ui.prefersReducedMotion': STOCK_FIREFOX_REDUCED_MOTION }",
       "firefoxUserPrefs: {}",

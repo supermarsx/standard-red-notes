@@ -97,6 +97,31 @@ Each account may hold 16 simultaneous realtime sockets by default; operators may
 set `WEBSOCKET_MAX_CONNECTIONS_PER_USER` to another positive whole number. This
 allows normal tabs and devices while bounding per-account connection fan-out.
 
+Tabs on the same build normally share a worker and its realtime socket. When
+workers cannot be shared, including tabs running different builds, each worker
+can open its own socket. An older tab does not reserve the entire account's
+socket lane. The server still permits only one saving lease per collaborative
+note; having another connection does not grant another writer that lease.
+
+Pending saves have exclusive recovery ownership in the browser's durable
+journal. Workers skip a sibling's live commands and atomically claim abandoned
+commands after release or the 15-second crash timeout. Recovery retains the
+original device identity, command identity, encrypted bytes and socket-only
+constraint, and asks the server for the command's status before replaying it.
+Commands from older builds remain recoverable; new records are namespaced so an
+older worker cannot consume them. No browser database upgrade or tab census is
+needed to use independent connections.
+
+A refused socket-only upload does not pause unrelated rooms. The client retains
+the refused items and waits before retrying the same proof. A new server-issued
+saver proof permits an immediate retry; a delayed refusal for an older proof
+cannot revoke its replacement. When another tab opens a note before this tab
+knows it is collaborative, the server identifies the fenced note in its refusal.
+The client protects that note from HTTP replay without pausing unrelated saves.
+A rejected collaborative body is never replayed
+over HTTP. Account-wide restrictions, such as live sync being disabled or
+read-only access, still apply to the whole save lane.
+
 WebSocket delivery is best-effort; encrypted item sync holds the durable record.
 A live Super note has one saving device, chosen from canonical-ready editors
 whose socket save lane works. That device holds a server lease for the note.
@@ -142,9 +167,13 @@ up to 20 seconds to expire. These safety waits are distinct from an ordinary
 connected handoff, which does not deliberately wait for lease expiry.
 
 When a tab closes normally, the shared socket releases only the saving lease
-issued to that tab. The server checks the current session and the exact lease
-proof; a stale release cannot remove a successor's lease. A crashed process or
-unavailable socket still relies on the unchanged 20-second server lease expiry.
+issued to that tab. When an independent worker's socket closes, the gateway
+releases its server-issued saving proofs itself, including a claim that finishes
+after the connection closes. Internal leases are bound to that connection, so
+delayed cleanup cannot release a replacement connection's lease even if it uses
+the same editor identity. The server still checks the exact owner, device,
+room epoch, lease and token under the write lock. A gateway crash, undetected
+connection loss or unreachable backend retains the 20-second expiry as a fallback.
 
 After a room has been active, brief transient recovery avoids a paused warning:
 the status uses a neutral restoring indication for the first second, a subtle

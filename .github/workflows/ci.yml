@@ -760,6 +760,19 @@ jobs:
         run: npx playwright test tests/grpc-auth-session.spec.ts --project=chromium --reporter=list,json
       - name: Reject a skipped or incomplete socket sync lane sign-in
         run: yarn ci:verify-playwright --report e2e/artifacts/playwright-grpc-auth.json --min-expected 1 --max-skipped 0
+      - name: Verify independent socket workers and durable journal recovery
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_FILE: artifacts/playwright-parallel-sync.json
+        run: >-
+          npx playwright test
+          tests/independent-sync-workers.spec.ts tests/concurrent-sync-journal.spec.ts
+          --project=firefox --project=chromium --reporter=list,json
+          --output artifacts/parallel-sync-check
+      - name: Reject skipped independent socket worker checks
+        run: >-
+          yarn ci:verify-playwright --report e2e/artifacts/playwright-parallel-sync.json
+          --min-expected 12 --min-expected-in firefox=6 --min-expected-in chromium=6 --max-skipped 0
       - name: Resolve retry-stable publication handoff identity
         id: publication_identity
         if: >-
