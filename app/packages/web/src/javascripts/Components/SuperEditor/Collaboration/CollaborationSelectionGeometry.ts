@@ -204,6 +204,7 @@ export const syncCollaborationSelectionGeometry: SyncCursorPositionsFn = (bindin
         for (const rect of selectionRects(element.getClientRects())) {
           const box = root.ownerDocument.createElement('span')
           box.dataset.collaborationRegion = regions.kind
+          box.dataset.collaborationClientId = String(clientId)
           placeBox(box, rect, origin)
           box.style.backgroundColor = cursor.color
           box.style.opacity = '0.25'

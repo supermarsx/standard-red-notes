@@ -3,16 +3,20 @@ import { $getSelection, $isNodeSelection, type LexicalEditor } from 'lexical'
 import { $isTableSelection } from '@lexical/table'
 import type * as Y from 'yjs'
 import { syncCollaborationSelectionGeometry } from './CollaborationSelectionGeometry'
+import { createCollaborationViewportIndicators } from './CollaborationViewportIndicators'
 
 /** Keep the body portal inside the visible editor, including nested scroll panes. */
-export function clipCursorOverlay(overlay: HTMLElement, root: HTMLElement): void {
+export function clipCursorOverlay(
+  overlay: HTMLElement,
+  root: HTMLElement,
+): { top: number; right: number; bottom: number; left: number } {
   const view = root.ownerDocument.defaultView!
   let { top, right, bottom, left } = root.getBoundingClientRect()
   top = Math.max(0, top)
   left = Math.max(0, left)
   right = Math.min(view.innerWidth, right)
   bottom = Math.min(view.innerHeight, bottom)
-  for (let parent = root.parentElement; parent; parent = parent.parentElement) {
+  for (let parent: HTMLElement | null = root; parent; parent = parent.parentElement) {
     const style = view.getComputedStyle(parent)
     const rect = parent.getBoundingClientRect()
     if (/(auto|scroll|hidden|clip)/.test(style.overflowX || style.overflow)) {
@@ -26,6 +30,7 @@ export function clipCursorOverlay(overlay: HTMLElement, root: HTMLElement): void
   }
   overlay.style.visibility = bottom <= top || right <= left ? 'hidden' : 'visible'
   overlay.style.clipPath = `inset(${top}px ${Math.max(0, view.innerWidth - right)}px ${Math.max(0, view.innerHeight - bottom)}px ${left}px)`
+  return { top, right, bottom, left }
 }
 
 export function cursorLabel(name: string, clientId: number, peerUserUuid?: string, selfUserUuid?: string): string {
@@ -50,6 +55,7 @@ export function createCollaborationCursorTracking(
   const root = editor.getRootElement()
   const doc = root?.ownerDocument ?? document
   const view = doc.defaultView!
+  const indicators = createCollaborationViewportIndicators({ document: doc, getRoot: () => editor.getRootElement() })
   let frame: number | undefined
   let disposed = false
   let binding: Parameters<SyncCursorPositionsFn>[0] | undefined
@@ -78,8 +84,9 @@ export function createCollaborationCursorTracking(
     invalidatedPresentations.clear()
     const currentRoot = editor.getRootElement()
     const container = overlay()
+    let viewport: ReturnType<typeof clipCursorOverlay> | undefined
     if (currentRoot && container) {
-      clipCursorOverlay(container, currentRoot)
+      viewport = clipCursorOverlay(container, currentRoot)
     } else if (container) {
       container.style.visibility = 'hidden'
     }
@@ -106,6 +113,11 @@ export function createCollaborationCursorTracking(
     // the custom doc-update renderer. Reapply geometry after that native pass.
     if (binding) {
       syncCollaborationSelectionGeometry(binding, provider)
+    }
+    if (binding && viewport) {
+      indicators.update(binding, provider.awareness, viewport)
+    } else {
+      indicators.clear()
     }
   }
   const schedule = () => {
@@ -208,6 +220,7 @@ export function createCollaborationCursorTracking(
   doc.addEventListener('focusin', schedule, true)
   doc.addEventListener('focusout', schedule, true)
   doc.addEventListener('selectionchange', schedule)
+  doc.addEventListener('visibilitychange', schedule)
   view.addEventListener('focus', schedule)
   view.addEventListener('blur', schedule)
   view.addEventListener('resize', schedule)
@@ -235,6 +248,7 @@ export function createCollaborationCursorTracking(
       doc.removeEventListener('focusin', schedule, true)
       doc.removeEventListener('focusout', schedule, true)
       doc.removeEventListener('selectionchange', schedule)
+      doc.removeEventListener('visibilitychange', schedule)
       view.removeEventListener('focus', schedule)
       view.removeEventListener('blur', schedule)
       view.removeEventListener('resize', schedule)
@@ -243,6 +257,7 @@ export function createCollaborationCursorTracking(
       awareness.off('update', schedule)
       ydoc?.off('afterTransaction', observeBinding)
       binding = undefined
+      indicators.dispose()
       doc.fonts?.removeEventListener('loadingdone', schedule)
       resize?.disconnect()
       unregisterRoot()

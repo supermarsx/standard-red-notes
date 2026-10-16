@@ -152,6 +152,56 @@ it('repaints after scrolling before any remote document edit and coalesces rapid
   expect(repaint).toHaveBeenCalledTimes(1)
 })
 
+it('excludes the editor root’s own borders and scrollbar from the visible cursor area', () => {
+  root.style.overflowY = 'auto'
+  root.style.overflowX = 'auto'
+  Object.defineProperties(root, {
+    clientLeft: { value: 2 },
+    clientTop: { value: 3 },
+    clientWidth: { value: 280 },
+    clientHeight: { value: 570 },
+  })
+  expect(clipCursorOverlay(overlay, root)).toEqual({ top: 23, right: 292, bottom: 200, left: 12 })
+})
+
+it('updates minimal offscreen indicators from the same clipped cursor paint and removes them with the editor', () => {
+  const { tracker } = tracking()
+  const caret = document.createElement('span')
+  let caretTop = -40
+  caret.getBoundingClientRect = () => rect(40, caretTop, 1, 16)
+  overlay.append(caret)
+  awareness.states.set(20, { focusing: true, name: 'Ada' })
+  const binding = {
+    editor,
+    doc,
+    collabNodeMap: new Map(),
+    cursorsContainer: overlay,
+    cursors: new Map([[20, { name: 'Ada', color: 'red', selection: { caret } }]]),
+  }
+  doc.transact(() => {}, binding)
+  jest.advanceTimersByTime(20)
+  const indicator = () => document.querySelector<HTMLButtonElement>('[data-collaboration-viewport-peer="20"]')
+  expect(indicator()?.textContent).toBe('↑')
+  expect(indicator()?.title).toContain('Ada is working above')
+  expect(indicator()?.style.top).toBe('20px')
+  caretTop = 300
+  pane.dispatchEvent(new Event('scroll'))
+  jest.advanceTimersByTime(20)
+  expect(indicator()?.textContent).toBe('↓')
+  expect(indicator()?.style.top).toBe('178px')
+  caretTop = 100
+  pane.dispatchEvent(new Event('scroll'))
+  jest.advanceTimersByTime(20)
+  expect(indicator()).toBeNull()
+  caretTop = -40
+  pane.dispatchEvent(new Event('scroll'))
+  jest.advanceTimersByTime(20)
+  expect(indicator()).not.toBeNull()
+  tracker.dispose()
+  expect(indicator()).toBeNull()
+  expect(document.querySelector('[data-collaboration-viewport-indicators]')).toBeNull()
+})
+
 it('follows reflow, local document updates, window resizing and replacement editor roots', () => {
   const { tracker } = tracking()
   const repaint = jest.fn()
