@@ -154,7 +154,8 @@ const negations = (Array.isArray(tailwindContent) ? tailwindContent : []).filter
 )
 const missingExclusions = [
   negations.some((entry) => /(^|\/)scripts\//.test(entry.slice(1))) ? null : 'the scripts/ directory (build tooling)',
-  negations.some((entry) => /\.spec\.[jt]sx?$/.test(entry)) ? null : 'the *.spec.tsx test fixtures',
+  negations.some((entry) => /\.spec\.tsx$/.test(entry)) ? null : 'the *.spec.tsx test fixtures',
+  negations.some((entry) => /\.spec\.ts$/.test(entry)) ? null : 'the *.spec.ts test fixtures',
 ].filter(Boolean)
 
 if (missingExclusions.length > 0) {
@@ -169,5 +170,5 @@ if (missingExclusions.length > 0) {
 }
 
 console.log(
-  'No Tailwind v4 bracket CSS-variable arbitrary values found; tailwind.config.js still excludes scripts/ and *.spec.tsx.',
+  'No Tailwind v4 bracket CSS-variable arbitrary values found; tailwind.config.js still excludes scripts/ and TS/TSX test fixtures.',
 )

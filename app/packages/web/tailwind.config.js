@@ -30,6 +30,7 @@ module.exports = {
     '../toast/src/**/*.tsx',
     '!./scripts/**/*',
     '!./src/javascripts/**/*.spec.tsx',
+    '!./src/javascripts/**/*.spec.ts',
   ],
   theme: {
     extend: {

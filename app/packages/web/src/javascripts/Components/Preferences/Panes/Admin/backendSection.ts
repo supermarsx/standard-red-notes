@@ -1833,7 +1833,7 @@ function probeEvidence(service: KnownService, outcome: ServiceOutcome, witness: 
  *
  *   - `docker-compose.yml` declares NO files service. Its one `server` container
  *     runs every backend process under one supervisord, which declares
- *     `[program:files]` and `[program:api-gateway]` as siblings with no per-program
+ *     files and api-gateway program sections as siblings with no per-program
  *     `environment=`, and the compose file's own comment names `server:3104 for
  *     files`. The entrypoint exports `FILES_SERVER_PORT=3104` unconditionally and
  *     then sets `API_GATEWAY_WEBSOCKET_SYNC_FILES_URL=http://localhost:$FILES_SERVER_PORT`
