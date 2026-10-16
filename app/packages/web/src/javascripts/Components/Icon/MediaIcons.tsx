@@ -31,6 +31,16 @@ export const SparkleIcon = (props: SVGProps<SVGSVGElement>) => (
   </svg>
 )
 
+/** A conversation bubble with a single sparkle, readable at toolbar sizes. */
+export const AssistantIcon = (props: SVGProps<SVGSVGElement>) => (
+  <svg viewBox="0 0 24 24" {...props}>
+    <g fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20.5 15a3.5 3.5 0 0 1-3.5 3.5H9l-5.5 3V7A3.5 3.5 0 0 1 7 3.5h10A3.5 3.5 0 0 1 20.5 7z" />
+      <path d="m12 6.5 1.2 3.3 3.3 1.2-3.3 1.2-1.2 3.3-1.2-3.3L7.5 11l3.3-1.2z" />
+    </g>
+  </svg>
+)
+
 export const MicIcon = (props: SVGProps<SVGSVGElement>) => (
   <svg viewBox="0 0 24 24" {...props}>
     <path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3z" />

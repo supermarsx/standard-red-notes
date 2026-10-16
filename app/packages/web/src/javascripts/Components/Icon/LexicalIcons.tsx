@@ -1,5 +1,6 @@
 import * as icons from '@standardnotes/icons'
 import {
+  AssistantIcon,
   CalendarIcon,
   EmphasisMarksIcon,
   HighlighterIcon,
@@ -16,6 +17,7 @@ import {
 } from './MediaIcons'
 
 export const LexicalIconNameToSvgMapping = {
+  assistant: AssistantIcon,
   play: PlayIcon,
   pause: PauseIcon,
   stop: StopIcon,

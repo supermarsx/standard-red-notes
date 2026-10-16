@@ -1679,7 +1679,7 @@ export const ToolActivity = ({
   return (
     <div className="border-border bg-contrast text-neutral rounded border px-2 py-1.5 text-xs">
       <div className="flex items-center gap-1 font-semibold">
-        <Icon type="dashboard" size="small" />
+        <Icon type="assistant" size="small" />
         {presentation.label}
       </div>
       {presentation.detail && <div className="text-passive-0 mt-0.5 whitespace-pre-wrap">{presentation.detail}</div>}

@@ -176,7 +176,7 @@ const Navigation = forwardRef<HTMLDivElement, Props>(({ application, className, 
           className="bg-default ml-2.5"
           onClick={() => presentPane(AppPaneId.Assistant)}
           label="Open AI assistant"
-          icon="dashboard"
+          icon="assistant"
         />
         <PreferencesButton openPreferences={() => application.preferencesController.openPreferences()} />
         <QuickSettingsButton application={application} isMobileNavigation />

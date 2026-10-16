@@ -174,7 +174,7 @@ const ActionButton: FunctionComponent<{
 const ACTION_GROUPS: { id: SelectionActionGroup; label: string; icon: string }[] = [
   { id: 'text-review', label: 'Text review', icon: 'pencil-filled' },
   { id: 'transforms', label: 'Transforms', icon: 'arrows-sort-down' },
-  { id: 'assistant', label: 'Assistant', icon: 'dashboard' },
+  { id: 'assistant', label: 'Assistant', icon: 'assistant' },
 ]
 
 const SelectionTools: FunctionComponent<{ editor: LexicalEditor; hasSelection: boolean; noteUuid?: string }> = ({

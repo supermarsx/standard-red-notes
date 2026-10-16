@@ -1,9 +1,9 @@
-import { IconType } from '@standardnotes/snjs'
+import type Icon from '@/Components/Icon/Icon'
 import { PreferencePaneId } from '@standardnotes/services'
 
 export interface PreferencesMenuItem {
   readonly id: PreferencePaneId
-  readonly icon: IconType
+  readonly icon: Parameters<typeof Icon>[0]['type']
   readonly label: string
   readonly order: number
   readonly bubbleCount?: number

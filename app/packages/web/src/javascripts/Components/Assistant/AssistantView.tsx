@@ -544,7 +544,7 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
     >
       <div className="border-border bg-contrast flex items-center justify-between border-b px-4 py-3">
         <div className="flex items-center gap-2">
-          <Icon type="dashboard" className="text-info" />
+          <Icon type="assistant" className="text-info" />
           <span className="text-base font-bold">Assistant</span>
         </div>
         <div className="flex items-center gap-1">

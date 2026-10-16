@@ -1,11 +1,11 @@
 import Icon from '@/Components/Icon/Icon'
 import { FunctionComponent } from 'react'
-import { IconType, classNames } from '@standardnotes/snjs'
+import { classNames } from '@standardnotes/snjs'
 import { ErrorCircle } from '@/Components/UIElements/ErrorCircle'
 import CountBubble from './CountBubble'
 
 interface Props {
-  iconType: IconType
+  iconType: Parameters<typeof Icon>[0]['type']
   label: string
   /**
    * Optional secondary line shown beneath the label, used by Preferences search

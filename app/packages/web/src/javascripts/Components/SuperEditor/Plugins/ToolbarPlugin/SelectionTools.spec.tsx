@@ -65,7 +65,7 @@ describe('SelectionTools AI action subtabs', () => {
     expect(tabs.map((tab) => tab.querySelector('[data-icon]')?.getAttribute('data-icon'))).toEqual([
       'pencil-filled',
       'arrows-sort-down',
-      'dashboard',
+      'assistant',
     ])
     expect(tabs[0].getAttribute('aria-selected')).toBe('true')
     expect(actionLabels()).toEqual(['Refine', 'Expand', 'Summarize'])

@@ -1,13 +1,12 @@
 import { ComponentPropsWithoutRef, ForwardedRef, forwardRef, MouseEventHandler } from 'react'
 import Icon from '@/Components/Icon/Icon'
-import { IconType } from '@standardnotes/snjs'
 import { classNames } from '@standardnotes/utils'
 import StyledTooltip from '../StyledTooltip/StyledTooltip'
 
 type Props = {
   onClick: MouseEventHandler
   className?: string
-  icon: IconType
+  icon: Parameters<typeof Icon>[0]['type']
   iconClassName?: string
   iconProps?: Partial<Parameters<typeof Icon>[0]>
   label: string
