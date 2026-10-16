@@ -25,6 +25,23 @@ const textNode = (text: string, format = 0) => ({
   version: 1,
 })
 
+it('reports per-person completion separately from the unrelated shared checked bit in structural reads', async () => {
+  ensureCrypto()
+  const task = {
+    ...checklistItem('Each person', 'personal', true),
+    $: { srnChecklistTodoId: 'personal', srnChecklistPerPerson: true, srnChecklistTick_peer: true },
+  }
+  const text = JSON.stringify({
+    root: { type: 'root', children: [{ type: 'list', listType: 'check', children: [task] }] },
+  })
+  const view = await readAssistantSuperStructure(text, { view: 'blocks' })
+  expect(view.blocks?.find((block) => block.todoId === 'personal')).toMatchObject({
+    completionMode: 'per-person',
+    checkedBy: ['peer'],
+  })
+  expect(view.blocks?.find((block) => block.todoId === 'personal')?.checked).toBeUndefined()
+})
+
 const checklistItem = (text: string, id: string, checked = false) => ({
   $: { srnChecklistTodoId: id, preservedFutureState: { version: 9, opaque: true } },
   checked,

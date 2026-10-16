@@ -1,4 +1,5 @@
 import { createChecklistTodoId } from '@/Components/SuperEditor/Lexical/Nodes/ChecklistItemNode'
+import { serializedChecklistCompletion } from './noteChecklistContext'
 import {
   AssistantRichBlock,
   createAssistantMarkdownFragmentNodes,
@@ -106,6 +107,9 @@ export type AssistantStructureBlock = {
   text: string
   headingLevel?: number
   checked?: boolean
+  completionMode?: 'single' | 'per-person'
+  checkedBy?: string[]
+  checkedByTruncated?: boolean
   todoId?: string
   inline?: AssistantStructureInlineRun[]
   list?: {
@@ -511,13 +515,14 @@ function safeBlock(record: NodeRecord): AssistantStructureBlock {
     }
   }
   const listParent = record.parent?.type === 'list' ? record.parent : undefined
+  const completion = listParent?.listType === 'check' ? serializedChecklistCompletion(node) : undefined
   return {
     locator: locatorFor(record),
     path: record.path,
     type: typeof node.type === 'string' ? node.type : 'unknown',
     text: textContent(node).slice(0, 4_096),
     ...(level ? { headingLevel: level } : {}),
-    ...(typeof node.checked === 'boolean' ? { checked: node.checked } : {}),
+    ...(completion ? { ...completion, checked: completion.checked ?? undefined } : {}),
     ...(id ? { todoId: id } : {}),
     ...(inlineRuns(record.node).length > 0 ? { inline: inlineRuns(record.node) } : {}),
     ...(listParent && typeof listParent.listType === 'string'

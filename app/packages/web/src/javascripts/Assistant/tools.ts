@@ -50,6 +50,7 @@ import {
   flushAssistantNoteEditors,
 } from './assistantNoteChanges'
 import { extractPlaintextFromNoteText } from '@/Utils/NoteStats'
+import { projectNoteChecklist, checklistForNote, checklistForPassage } from './noteChecklistContext'
 import { assertSuperNoteMarkdownRewriteSafe } from './superNoteMarkdownRewriteGuard'
 import { sanitizeAssistantNoteChange } from './assistantChatHistory'
 import { readPrivateNoteComments, mutatePrivateNoteComments } from '@/Comments/PrivateNoteComments'
@@ -823,7 +824,16 @@ export class AssistantTools implements ToolSession {
       .filter((note) => this.isReadableNote(note))
       .filter((note) => doesItemMatchSearchQuery(note as DecryptedItemInterface<ItemContent>, query, this.application))
       .slice(0, limit)
-    return { count: matches.length, notes: matches.map(noteSummary) }
+    return {
+      count: matches.length,
+      notes: matches.map((note) => ({
+        ...noteSummary(note),
+        checklist: checklistForPassage(
+          projectNoteChecklist(note.text, note.noteType, this.application.sessions.getUser()?.uuid),
+          note.preview_plain ?? '',
+        ),
+      })),
+    }
   }
 
   private notesRetrieve(args: Record<string, unknown>) {
@@ -833,12 +843,23 @@ export class AssistantTools implements ToolSession {
     }
     const limit = typeof args.limit === 'number' ? args.limit : 5
     const perNote = args.perNote !== false
+    const projections = new Map<string, ReturnType<typeof projectNoteChecklist>>()
     const docs = this.allNotes()
       .filter((note) => this.isReadableNote(note))
       .filter((note) => !note.trashed)
-      .map((note) => ({ uuid: note.uuid, title: note.title, text: note.text }))
+      .map((note) => {
+        const projection = projectNoteChecklist(note.text, note.noteType, this.application.sessions.getUser()?.uuid)
+        projections.set(note.uuid, projection)
+        return { uuid: note.uuid, title: note.title, text: projection.text }
+      })
     const results = retrieve(docs, query, { limit, perNote })
-    return { count: results.length, results }
+    return {
+      count: results.length,
+      results: results.map((hit) => ({
+        ...hit,
+        checklist: checklistForPassage(projections.get(hit.noteUuid)!, hit.snippet),
+      })),
+    }
   }
 
   private todoWrite(args: Record<string, unknown>) {
@@ -864,6 +885,9 @@ export class AssistantTools implements ToolSession {
     return {
       ...noteSummary(note),
       text: note.text,
+      checklist: checklistForNote(
+        projectNoteChecklist(note.text, note.noteType, this.application.sessions.getUser()?.uuid),
+      ),
       tags: this.application.items
         .getSortedTagsForItem(note)
         .filter((tag) => this.isReadableTag(tag))
@@ -1175,11 +1199,25 @@ export class AssistantTools implements ToolSession {
   private async notesReadSuper(args: Record<string, unknown>) {
     const note = this.requireReadableNote(args.uuid)
     if (note.noteType !== NoteType.Super) {
-      return { ...noteSummary(note), super: false, markdown: note.text }
+      return {
+        ...noteSummary(note),
+        super: false,
+        markdown: note.text,
+        checklist: checklistForNote(
+          projectNoteChecklist(note.text, note.noteType, this.application.sessions.getUser()?.uuid),
+        ),
+      }
     }
     try {
       const markdown = await this.superConverter.convertSuperStringToOtherFormat(note.text, 'md')
-      return { ...noteSummary(note), super: true, markdown }
+      return {
+        ...noteSummary(note),
+        super: true,
+        markdown,
+        checklist: checklistForNote(
+          projectNoteChecklist(note.text, note.noteType, this.application.sessions.getUser()?.uuid),
+        ),
+      }
     } catch (error) {
       throw new Error(
         `Could not read the Super note as markdown: ${error instanceof Error ? error.message : String(error)}`,
@@ -2218,7 +2256,8 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'notes.search',
-    description: 'Search notes by title/content text. Returns matching note summaries.',
+    description:
+      'Search notes by title/content text. Returns summaries and structured checklist states only for items visible in the preview. Read the note for remaining tasks. checked:null is unknown or per-person, never globally complete; per-person checkedBy lists account IDs, not assignees.',
     mutating: false,
     inputSchema: {
       type: 'object',
@@ -2232,7 +2271,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'notes.retrieve',
     description:
-      'Relevance-rank the user notes for a question and return the most relevant passages (snippets) with their note uuids and scores. Prefer this over reading many notes when answering a question — it finds the right context across the whole corpus. Use notes.read on a returned uuid to get the full note.',
+      'Relevance-rank notes and return passages with checklist [x]/[ ]/[?]/[per-person] markers and structured states for tasks in that passage. checked:null is unknown or per-person, never globally complete. checkedBy lists people who ticked, not assignees. Use notes.read for full note/task context.',
     mutating: false,
     inputSchema: {
       type: 'object',
@@ -2246,7 +2285,8 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'notes.read',
-    description: 'Read the full text and tags of a single note by uuid.',
+    description:
+      'Read full note text, tags and bounded structured checklist states. checked:null is unknown or per-person, never globally complete. checkedBy contains accounts who ticked, not assignees. Respect checklist.truncated; missing items are not unchecked.',
     mutating: false,
     inputSchema: {
       type: 'object',
@@ -2336,7 +2376,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'notes.readSuper',
     description:
-      'Read a Super note as MARKDOWN for export or an explicitly requested full-document replacement. For ordinary edits prefer bounded notes.readBlocks so you do not load/rewrite the whole document.',
+      'Read a Super note as MARKDOWN plus structured checklist states. For per-person tasks use structured checkedBy, never infer global completion from the exported Markdown checkbox. For ordinary edits prefer bounded notes.readBlocks.',
     mutating: false,
     inputSchema: {
       type: 'object',
