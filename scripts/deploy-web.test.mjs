@@ -9,6 +9,36 @@ import {
   locationBlocks,
 } from "./deploy-web.mjs";
 
+test("socket build checks automatically resolve the stable web facade in every shipped topology", () => {
+  const source = (path) =>
+    readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+  assert.ok(
+    source("docker-compose.yml").includes(
+      "WEB_APP_INTERNAL_ORIGIN: ${WEB_APP_INTERNAL_ORIGIN:-http://app:8080}",
+    ),
+  );
+  assert.ok(
+    source("server/docker/docker-entrypoint.sh").includes(
+      'export API_GATEWAY_WEB_APP_INTERNAL_ORIGIN="${WEB_APP_INTERNAL_ORIGIN:-http://app:8080}"',
+    ),
+  );
+  assert.ok(
+    source("docker-compose.single.yml").includes(
+      "WEB_APP_INTERNAL_ORIGIN: ${WEB_APP_INTERNAL_ORIGIN:-http://127.0.0.1:8080}",
+    ),
+  );
+  assert.ok(
+    source("server/docker/single/entrypoint.sh").includes(
+      'put WEB_APP_INTERNAL_ORIGIN "${WEB_APP_INTERNAL_ORIGIN:-http://127.0.0.1:8080}"',
+    ),
+  );
+  assert.ok(
+    source("deploy/lxc/install.sh").includes(
+      "WEB_APP_INTERNAL_ORIGIN=http://127.0.0.1:${HTTP_PORT}",
+    ),
+  );
+});
+
 test("malformed Compose output cannot leak configuration contents through parser errors", async () => {
   await assert.rejects(
     deployWeb({

@@ -620,6 +620,7 @@ if [ -z "$API_GATEWAY_LOG_LEVEL" ]; then
 fi
 export API_GATEWAY_NODE_ENV=production
 export API_GATEWAY_VERSION=local
+export API_GATEWAY_WEB_APP_INTERNAL_ORIGIN="${WEB_APP_INTERNAL_ORIGIN:-http://app:8080}"
 
 # Optional public deployment identity. The sourced helper first removes direct
 # API_GATEWAY_* injection, then validates the unprefixed Compose expectation.

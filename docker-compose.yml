@@ -134,6 +134,8 @@ x-server-env: &server-env
   # workflows or subscription pairing. The setup scripts generate it for local
   # and production installs; a hand-written raw Compose deploy fails closed.
   PUBLIC_URL: ${PUBLIC_URL:-}
+  # Stable web facade follows the healthy frontend release during handovers.
+  WEB_APP_INTERNAL_ORIGIN: ${WEB_APP_INTERNAL_ORIGIN:-http://app:8080}
   # Self-hosted realtime WebSocket gateway. It now runs IN-PROCESS inside the
   # api-gateway on the SAME port (:3000) — no separate listener/process. The
   # api-gateway POSTs to its own /sockets/tokens to mint connection tokens, so

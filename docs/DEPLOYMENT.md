@@ -5,6 +5,23 @@ description: Deployment profiles and production guidance.
 
 # Deploying Standard Red Notes
 
+Automatic app-update checks use the authenticated `API_RPC` WebSocket lane when
+it is ready. `GET /v1/deployment/web` reads the active **frontend** marker through
+the stable web facade, so a frontend-only handover is detected even while the
+backend remains on its previous build. The browser uses the public marker over
+HTTP during startup, while signed out, or when that socket route is unavailable.
+The server coalesces marker reads and caches successful results for five seconds.
+
+`WEB_APP_INTERNAL_ORIGIN` optionally names that trusted facade origin. Compose
+sets `http://app:8080` automatically; the all-in-one image uses
+`http://127.0.0.1:8080`, and the LXC installer uses its local nginx listen port.
+These defaults require no additional deployment argument. Custom topologies may
+override the origin; without it the server uses the configured `PUBLIC_URL`.
+The origin must contain only HTTP(S), host and optional port, with no credentials,
+path, query or fragment. Marker reads never follow redirects or forward session
+credentials. An unavailable frontend marker is reported as unavailable, never
+replaced by the backend's independent build identity.
+
 There are **three** ways to run Standard Red Notes. All three self-host to
 _themselves_ (the web app syncs to its own origin — never `api.standardnotes.com`)
 and keep your notes end-to-end encrypted.

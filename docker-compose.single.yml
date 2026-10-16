@@ -59,6 +59,7 @@ services:
       # Optional public deployment identity. Empty values preserve local starts.
       SRN_DEPLOY_REVISION: "${SRN_DEPLOY_REVISION:-}"
       SRN_DEPLOY_VERSION: "${SRN_DEPLOY_VERSION:-}"
+      WEB_APP_INTERNAL_ORIGIN: ${WEB_APP_INTERNAL_ORIGIN:-http://127.0.0.1:8080}
       # Shared admin overlay for all named loggers in the home-server process.
       # A custom in-container path also needs a matching persistent mount.
       SERVER_SETTINGS_PATH: ${SERVER_SETTINGS_PATH:-/data/server-settings.json}

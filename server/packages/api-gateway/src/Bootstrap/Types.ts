@@ -4,6 +4,7 @@ export const TYPES = {
   ApiGateway_RateLimitStore: Symbol.for('ApiGateway_RateLimitStore'),
   ApiGateway_AggregateReadinessService: Symbol.for('ApiGateway_AggregateReadinessService'),
   ApiGateway_ReadinessState: Symbol.for('ApiGateway_ReadinessState'),
+  ApiGateway_WebDeploymentMarkerReader: Symbol.for('ApiGateway_WebDeploymentMarkerReader'),
   ApiGateway_HTTPClient: Symbol.for('ApiGateway_HTTPClient'),
   ApiGateway_SNS: Symbol.for('ApiGateway_SNS'),
   ApiGateway_DomainEventPublisher: Symbol.for('ApiGateway_DomainEventPublisher'),

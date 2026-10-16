@@ -44,6 +44,7 @@ import '../src/Controller/v1/WorkflowsController'
 import '../src/Controller/v1/UpdatesController'
 import '../src/Controller/v1/PluginsController'
 import '../src/Controller/v1/SyncWebSocketController'
+import '../src/Controller/v1/WebDeploymentController'
 
 import '../src/Controller/v2/PaymentsControllerV2'
 import '../src/Controller/v2/ActionsControllerV2'
@@ -791,7 +792,8 @@ void container
             backend: syncAdapter,
             collaborationAuthorization: syncAdapter,
             collaborationSaveFence: createCollaborationSaveFenceDispatch(
-              env.get('SYNCING_SERVER_JS_URL'), env.get('AUTH_JWT_SECRET'),
+              env.get('SYNCING_SERVER_JS_URL'),
+              env.get('AUTH_JWT_SECRET'),
             ),
             apiRpc: new LoopbackSyncApiRpcAdapter({
               origin: `http://127.0.0.1:${env.get('PORT', true) || '3000'}`,

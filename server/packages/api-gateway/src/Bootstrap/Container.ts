@@ -8,6 +8,7 @@ import { Container } from 'inversify'
 import { Timer, TimerInterface } from '@standardnotes/time'
 
 import { Env } from './Env'
+import { WebDeploymentMarkerReader } from '../Service/Readiness/WebDeploymentMarker'
 import { parseCollaborationCapabilityTtlSeconds } from './CollaborationCapabilityTtl'
 import { TYPES } from './Types'
 import { ServiceProxyInterface } from '../Service/Proxy/ServiceProxyInterface'
@@ -839,6 +840,12 @@ export class ContainerConfigLoader {
         `http://localhost:${probePort('REVISIONS_SERVER_PORT', 3105)}`,
     }
     container.bind<Record<string, string>>(TYPES.ApiGateway_SERVICE_PROBE_URLS).toConstantValue(serviceProbeUrls)
+    container.bind<WebDeploymentMarkerReader>(TYPES.ApiGateway_WebDeploymentMarkerReader).toConstantValue(
+      new WebDeploymentMarkerReader({
+        internalOrigin: env.get('WEB_APP_INTERNAL_ORIGIN', true),
+        publicUrl: env.get('PUBLIC_URL', true),
+      }),
+    )
 
     // Standard Red Notes: admin-panel SERVICE LIFECYCLE control. Shells out to
     // `supervisorctl` to restart/stop/start the sibling server processes running
