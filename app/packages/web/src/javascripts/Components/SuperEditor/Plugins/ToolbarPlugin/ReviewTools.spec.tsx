@@ -82,6 +82,30 @@ it('opens Review without joining a room and hides owner-only purge from members'
   }
 })
 
+it('pairs every visible Review action with a compact decorative icon and visible label', async () => {
+  mockOwner = true
+  const view = await mount()
+  try {
+    for (const label of [
+      'Show comments',
+      'New comment on selection',
+      'Show comment indicators',
+      'Purge my comments',
+      'Purge all comments',
+    ]) {
+      const button = view.element.querySelector(`button[aria-label="${label}"]`)
+      const icon = button?.querySelector('.super-toolbar-icon')
+      expect(icon).not.toBeNull()
+      expect(icon?.getAttribute('aria-hidden')).toBe('true')
+      expect(icon?.classList.contains('shrink-0')).toBe(true)
+      expect(button?.textContent?.trim().length).toBeGreaterThan(0)
+      expect(icon?.parentElement?.classList.contains('gap-1.5')).toBe(true)
+    }
+  } finally {
+    await view.close()
+  }
+})
+
 it('requires confirmation and independently removes private and authored shared comments', async () => {
   const view = await mount()
   try {

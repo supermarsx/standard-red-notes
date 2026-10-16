@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { ComponentProps, useState } from 'react'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
 import { ButtonType, SNNote } from '@standardnotes/snjs'
 import { useApplication } from '@/Components/ApplicationProvider'
@@ -10,6 +10,16 @@ import { useEditorControlsState } from '../../EditorControlsContext'
 import { CAPTURE_COMMENT_ANCHOR_COMMAND } from '../CommentsPlugin/CommentsPlugin'
 import ToolbarButton from './ToolbarButton'
 import { resolveNoteEncryptionIdentity } from '../../Collaboration/CollaborationKeyDerivation'
+import Icon from '@/Components/Icon/Icon'
+
+function ReviewActionLabel({ icon, label }: { icon: ComponentProps<typeof Icon>['type']; label: string }) {
+  return (
+    <span className="flex items-center gap-1.5 text-xs whitespace-nowrap">
+      <Icon type={icon} size="custom" className="super-toolbar-icon shrink-0 !text-current [&>path]:!text-current" />
+      <span>{label}</span>
+    </span>
+  )
+}
 
 /** Review actions use the same compact, labelled groups as the rest of the ribbon. */
 export function ReviewTools({ note }: { note: SNNote }) {
@@ -73,7 +83,7 @@ export function ReviewTools({ note }: { note: SNNote }) {
       <div role="group" aria-label="Comment tools" className={group}>
         <div className="flex flex-col items-start justify-center gap-0.5 md:min-h-[6.25rem]">
           <ToolbarButton name="Show comments" aria-label="Show comments" onSelect={() => controls.openComments()}>
-            <span className="text-xs">Show comments</span>
+            <ReviewActionLabel icon="comment" label="Show comments" />
           </ToolbarButton>
           <ToolbarButton
             name="New comment on selection"
@@ -84,7 +94,7 @@ export function ReviewTools({ note }: { note: SNNote }) {
               )
             }
           >
-            <span className="text-xs">New comment</span>
+            <ReviewActionLabel icon="pencil-filled" label="New comment" />
           </ToolbarButton>
           <ToolbarButton
             name="Show comment indicators"
@@ -97,7 +107,7 @@ export function ReviewTools({ note }: { note: SNNote }) {
                 .catch(() => setError('Comment display preference could not be saved.'))
             }}
           >
-            <span className="text-xs">Comment indicators</span>
+            <ReviewActionLabel icon={indicators ? 'eye' : 'eye-off'} label="Comment indicators" />
           </ToolbarButton>
         </div>
         <span aria-hidden className={caption}>
@@ -114,7 +124,7 @@ export function ReviewTools({ note }: { note: SNNote }) {
               void purge('mine')
             }}
           >
-            <span className="text-xs">Purge my comments</span>
+            <ReviewActionLabel icon="trash" label="Purge my comments" />
           </ToolbarButton>
           {owner && (
             <ToolbarButton
@@ -125,7 +135,7 @@ export function ReviewTools({ note }: { note: SNNote }) {
                 void purge('all')
               }}
             >
-              <span className="text-xs">Purge all comments</span>
+              <ReviewActionLabel icon="trash-sweep" label="Purge all comments" />
             </ToolbarButton>
           )}
         </div>
