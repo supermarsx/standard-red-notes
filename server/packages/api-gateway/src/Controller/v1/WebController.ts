@@ -3,6 +3,7 @@ import { inject } from 'inversify'
 import { BaseHttpController, controller, httpPost } from 'inversify-express-utils'
 
 import { TYPES } from '../../Bootstrap/Types'
+import { ServerSettingsResolver } from '../../Service/ServerSettings/ServerSettingsResolver'
 import { WebService, WebValidationError } from '../../Service/Web/WebService'
 
 interface FetchRequestBody {
@@ -25,12 +26,38 @@ interface SearchRequestBody {
  */
 @controller('/v1/web')
 export class WebController extends BaseHttpController {
-  constructor(@inject(TYPES.ApiGateway_WebService) private webService: WebService) {
+  constructor(
+    @inject(TYPES.ApiGateway_WebService) private webService: WebService,
+    @inject(TYPES.ApiGateway_ServerSettingsResolver) private settings?: ServerSettingsResolver,
+  ) {
     super()
+  }
+
+  private async admitInternetAccess(response: Response): Promise<boolean> {
+    try {
+      if (!this.settings) {
+        throw new Error('Internet access policy resolver is unavailable.')
+      }
+      if (!(await this.settings.resolveAssistantInternetAccessEnabled())) {
+        response
+          .status(403)
+          .json({ error: { tag: 'internet-access-disabled', message: 'Internet access is disabled by this server.' } })
+        return false
+      }
+      return true
+    } catch {
+      response.status(503).json({
+        error: { tag: 'internet-access-policy-unavailable', message: 'The internet access policy is unavailable.' },
+      })
+      return false
+    }
   }
 
   @httpPost('/fetch', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
   async fetch(request: Request, response: Response): Promise<void> {
+    if (!(await this.admitInternetAccess(response))) {
+      return
+    }
     const body = (request.body ?? {}) as FetchRequestBody
     const url = typeof body.url === 'string' ? body.url : ''
 
@@ -56,6 +83,9 @@ export class WebController extends BaseHttpController {
 
   @httpPost('/search', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
   async search(request: Request, response: Response): Promise<void> {
+    if (!(await this.admitInternetAccess(response))) {
+      return
+    }
     const body = (request.body ?? {}) as SearchRequestBody
     const query = typeof body.query === 'string' ? body.query : ''
 

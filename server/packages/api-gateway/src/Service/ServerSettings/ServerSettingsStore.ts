@@ -61,6 +61,7 @@ import { EmailDeliveryConfig as EmailRelayDeliveryConfig, orderedEnabledRelays }
  */
 
 export interface PersistedAiSettings {
+  internetAccessEnabled?: boolean
   anthropicApiKey?: string
   openaiApiKey?: string
   openaiBaseUrl?: string
@@ -735,6 +736,7 @@ function isPersistedServerSettings(value: unknown): value is PersistedServerSett
           openaiApiKey: isSecret,
           openaiBaseUrl: isHttpUrl,
           ollamaUrl: isHttpUrl,
+          internetAccessEnabled: isBoolean,
           dailyRequestLimit: isNonNegativeSafeInteger,
           fiveHourTokenLimit: isNonNegativeSafeInteger,
           weeklyTokenLimit: isNonNegativeSafeInteger,
@@ -915,6 +917,7 @@ export interface ServerSettingsPatch {
     openaiApiKey?: string | null
     openaiBaseUrl?: string | null
     ollamaUrl?: string | null
+    internetAccessEnabled?: boolean | null
     dailyRequestLimit?: number | null
     fiveHourTokenLimit?: number | null
     weeklyTokenLimit?: number | null
@@ -1087,6 +1090,7 @@ export class ServerSettingsStore {
         this.applyKey(data.ai, 'openaiApiKey', patch.ai.openaiApiKey)
         this.applyKey(data.ai, 'openaiBaseUrl', patch.ai.openaiBaseUrl)
         this.applyKey(data.ai, 'ollamaUrl', patch.ai.ollamaUrl)
+        this.applyKey(data.ai, 'internetAccessEnabled', patch.ai.internetAccessEnabled)
         this.applyKey(data.ai, 'dailyRequestLimit', patch.ai.dailyRequestLimit)
         this.applyKey(data.ai, 'fiveHourTokenLimit', patch.ai.fiveHourTokenLimit)
         this.applyKey(data.ai, 'weeklyTokenLimit', patch.ai.weeklyTokenLimit)

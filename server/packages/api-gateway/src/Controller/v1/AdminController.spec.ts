@@ -138,6 +138,36 @@ describe('AdminController server-status', () => {
     }
   })
 
+  it('admin-gates the internet lockdown and accepts only booleans or explicit reset', async () => {
+    const resolver = {
+      applyPatch: jest.fn(),
+      view: jest.fn().mockResolvedValue({ settings: { ai: { internetAccessEnabled: false } } }),
+    }
+    const controller = makeController({ serverSettingsResolver: resolver as unknown as ServerSettingsResolver })
+    await controller.setServerSettings(
+      { body: { ai: { internetAccessEnabled: false } } } as Request,
+      responseWith([{ name: RoleName.NAMES.CoreUser }]),
+    )
+    expect(statusMock).toHaveBeenLastCalledWith(403)
+    expect(resolver.applyPatch).not.toHaveBeenCalled()
+    for (const value of [false, true, null]) {
+      await controller.setServerSettings(
+        { body: { ai: { internetAccessEnabled: value } } } as Request,
+        responseWith([{ name: RoleName.NAMES.AdminUser }]),
+      )
+      expect(resolver.applyPatch).toHaveBeenLastCalledWith({ ai: { internetAccessEnabled: value } })
+    }
+    resolver.applyPatch.mockClear()
+    for (const value of ['false', 0, {}, []]) {
+      await controller.setServerSettings(
+        { body: { ai: { internetAccessEnabled: value } } } as Request,
+        responseWith([{ name: RoleName.NAMES.AdminUser }]),
+      )
+      expect(statusMock).toHaveBeenLastCalledWith(400)
+      expect(resolver.applyPatch).not.toHaveBeenCalled()
+    }
+  })
+
   it('admin-gates and validates websocket traffic patches without accepting unknown or disabling values', async () => {
     const resolver = {
       applyPatch: jest.fn(async () => undefined),

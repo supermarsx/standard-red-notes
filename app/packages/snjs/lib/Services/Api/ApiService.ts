@@ -1438,6 +1438,7 @@ export class LegacyApiService
       openaiApiKey?: string | null
       openaiBaseUrl?: string | null
       ollamaUrl?: string | null
+      internetAccessEnabled?: boolean | null
       dailyRequestLimit?: number | null
     }
     updateCheck?: {

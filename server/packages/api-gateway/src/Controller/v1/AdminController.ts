@@ -1925,6 +1925,13 @@ export class AdminController extends BaseHttpController {
           changedSettings.push(`ai.${key}`)
         }
       }
+      if (ai.internetAccessEnabled !== undefined) {
+        if (ai.internetAccessEnabled !== null && typeof ai.internetAccessEnabled !== 'boolean') {
+          return { error: 'ai.internetAccessEnabled must be a boolean, or null to clear it.' }
+        }
+        patch.ai.internetAccessEnabled = ai.internetAccessEnabled as boolean | null
+        changedSettings.push('ai.internetAccessEnabled')
+      }
       if (ai.dailyRequestLimit !== undefined) {
         if (ai.dailyRequestLimit === null) {
           patch.ai.dailyRequestLimit = null

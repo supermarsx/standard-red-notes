@@ -97,6 +97,19 @@ describe('ServerSettingsStore + ServerSettingsResolver', () => {
     await expect(store.read()).rejects.toThrow()
   })
 
+  it('applies live internet lockdown, reset, and refuses an unreadable policy', async () => {
+    const store = new ServerSettingsStore(filePath)
+    const resolver = makeResolver()
+    expect(await resolver.resolveAssistantInternetAccessEnabled()).toBe(true)
+    await store.update({ ai: { internetAccessEnabled: false } })
+    expect(await resolver.resolveAssistantInternetAccessEnabled()).toBe(false)
+    expect((await resolver.view()).settings.ai.internetAccessEnabled).toBe(false)
+    await store.update({ ai: { internetAccessEnabled: null } })
+    expect(await resolver.resolveAssistantInternetAccessEnabled()).toBe(true)
+    await fs.writeFile(filePath, '{broken')
+    await expect(resolver.resolveAssistantInternetAccessEnabled()).rejects.toThrow()
+  })
+
   describe('store', () => {
     it('keeps revision env defaults, persists overrides, and clears individual account fields', async () => {
       const user = '00000000-0000-4000-8000-000000000001'

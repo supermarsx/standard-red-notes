@@ -352,6 +352,17 @@ export class AssistantController extends BaseHttpController {
   async config(_request: Request, response: Response): Promise<void> {
     this.setPrivateAuthenticatedResponseHeaders(response)
 
+    let internetAccessEnabled: boolean
+    try {
+      internetAccessEnabled = (await this.serverSettingsResolver?.resolveAssistantInternetAccessEnabled?.()) ?? true
+    } catch {
+      response
+        .status(503)
+        .json({
+          error: { tag: 'internet-access-policy-unavailable', message: 'The internet access policy is unavailable.' },
+        })
+      return
+    }
     const providers = configuredProviders(await this.effectiveProviderConfig())
     let effectiveProfile:
       | {
@@ -399,6 +410,7 @@ export class AssistantController extends BaseHttpController {
           : ''
 
     response.json({
+      internetAccessEnabled,
       providers,
       defaultProvider: effectiveProviderId ?? legacyDefaultProvider,
       defaultModel: effectiveProfile?.model ?? legacyDefaultModel,

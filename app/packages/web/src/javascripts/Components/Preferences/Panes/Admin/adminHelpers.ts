@@ -819,6 +819,7 @@ export type AdminAssignmentsView = {
 
 export type AdminServerSettings = {
   ai?: {
+    internetAccessEnabled?: boolean | null
     anthropicConfigured?: boolean
     openaiConfigured?: boolean
     openaiBaseUrl?: string | null

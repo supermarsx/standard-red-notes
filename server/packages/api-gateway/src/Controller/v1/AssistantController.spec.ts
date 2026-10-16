@@ -577,6 +577,7 @@ describe('AssistantController', () => {
       expect(response.vary).toHaveBeenCalledWith('Authorization')
       expect(response.getHeader('Vary')).toBe('Origin, Authorization')
       expect(jsonMock).toHaveBeenCalledWith({
+        internetAccessEnabled: true,
         providers: ['openai'],
         defaultProvider: 'openai',
         defaultModel: 'local-model',
@@ -616,6 +617,19 @@ describe('AssistantController', () => {
         expect.stringContaining('"kind":"usage","contextWindowTokens":128000'),
       )
       expect(response.write).not.toHaveBeenCalledWith(expect.stringContaining('"promptTokens":'))
+    })
+
+    it('reports server internet lockdown and refuses an unreadable policy', async () => {
+      const policy = jest.fn().mockResolvedValue(false)
+      Object.assign(resolver, { resolveAssistantInternetAccessEnabled: policy })
+      await controller().config({} as Request, responseWith({}))
+      expect(jsonMock).toHaveBeenLastCalledWith(expect.objectContaining({ internetAccessEnabled: false }))
+      policy.mockRejectedValueOnce(new Error('sensitive policy failure'))
+      await controller().config({} as Request, responseWith({}))
+      expect(statusMock).toHaveBeenLastCalledWith(503)
+      expect(jsonMock).toHaveBeenLastCalledWith({
+        error: { tag: 'internet-access-policy-unavailable', message: 'The internet access policy is unavailable.' },
+      })
     })
 
     it('advertises explicit image support only for the authenticated tested adapter', async () => {
@@ -751,6 +765,7 @@ describe('AssistantController', () => {
     await makeController().config({} as Request, response)
 
     expect(jsonMock).toHaveBeenCalledWith({
+      internetAccessEnabled: true,
       providers: ['openai'],
       defaultProvider: 'openai',
       defaultModel: 'gpt-test',

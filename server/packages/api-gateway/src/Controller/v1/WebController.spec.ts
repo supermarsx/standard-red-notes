@@ -5,6 +5,8 @@ import { Request, Response } from 'express'
 import { WebService, WebValidationError } from '../../Service/Web/WebService'
 import { WebController } from './WebController'
 
+const allowedPolicy = { resolveAssistantInternetAccessEnabled: async () => true }
+
 describe('WebController.fetch', () => {
   let service: jest.Mocked<WebService>
   let json: jest.Mock
@@ -29,7 +31,10 @@ describe('WebController.fetch', () => {
       text: 'safe body',
     })
 
-    await new WebController(service).fetch({ body: { url: 'https://example.com/' } } as Request, response)
+    await new WebController(service, allowedPolicy as never).fetch(
+      { body: { url: 'https://example.com/' } } as Request,
+      response,
+    )
 
     expect(service.fetch).toHaveBeenCalledWith('https://example.com/')
     expect(json).toHaveBeenCalledWith({
@@ -50,7 +55,10 @@ describe('WebController.fetch', () => {
   ])('maps the safe %s error to its HTTP status', async (tag, message, expectedStatus) => {
     service.fetch.mockRejectedValue(new WebValidationError(message, tag))
 
-    await new WebController(service).fetch({ body: { url: 'https://example.com/' } } as Request, response)
+    await new WebController(service, allowedPolicy as never).fetch(
+      { body: { url: 'https://example.com/' } } as Request,
+      response,
+    )
 
     expect(status).toHaveBeenCalledWith(expectedStatus)
     expect(json).toHaveBeenCalledWith({ error: { tag, message } })
@@ -59,7 +67,10 @@ describe('WebController.fetch', () => {
   it('does not expose an unexpected implementation error', async () => {
     service.fetch.mockRejectedValue(new Error('socket failure with sensitive upstream details'))
 
-    await new WebController(service).fetch({ body: { url: 'https://example.com/' } } as Request, response)
+    await new WebController(service, allowedPolicy as never).fetch(
+      { body: { url: 'https://example.com/' } } as Request,
+      response,
+    )
 
     expect(status).toHaveBeenCalledWith(502)
     expect(json).toHaveBeenCalledWith({
@@ -70,9 +81,53 @@ describe('WebController.fetch', () => {
   it('normalizes a missing or non-string URL before validation', async () => {
     service.fetch.mockRejectedValue(new WebValidationError('A URL is required.', 'missing-url'))
 
-    await new WebController(service).fetch({ body: { url: 42 } } as unknown as Request, response)
+    await new WebController(service, allowedPolicy as never).fetch(
+      { body: { url: 42 } } as unknown as Request,
+      response,
+    )
 
     expect(service.fetch).toHaveBeenCalledWith('')
     expect(status).toHaveBeenCalledWith(400)
   })
+})
+
+describe('WebController internet policy', () => {
+  it('refuses outbound work if the policy resolver was not attached', async () => {
+    const service = { fetch: jest.fn(), search: jest.fn() } as unknown as WebService
+    const json = jest.fn()
+    const status = jest.fn().mockReturnValue({ json })
+    const response = { status, json } as unknown as Response
+    const controller = new WebController(service)
+    await controller.search({ body: { query: 'q' } } as Request, response)
+    await controller.fetch({ body: { url: 'https://example.com' } } as Request, response)
+    expect(status).toHaveBeenLastCalledWith(503)
+    expect(service.search).not.toHaveBeenCalled()
+    expect(service.fetch).not.toHaveBeenCalled()
+  })
+
+  it.each(['search', 'fetch'] as const)(
+    'refuses %s before any outbound work when disabled and fails closed on unreadable policy',
+    async (method) => {
+      const service = { fetch: jest.fn(), search: jest.fn() } as unknown as WebService
+      const resolver = { resolveAssistantInternetAccessEnabled: jest.fn().mockResolvedValue(false) }
+      const json = jest.fn()
+      const status = jest.fn().mockReturnValue({ json })
+      const response = { status, json } as unknown as Response
+      const controller = new WebController(service, resolver as never)
+      await controller[method]({ body: { query: 'q', url: 'https://example.com/' } } as Request, response)
+      expect(status).toHaveBeenLastCalledWith(403)
+      expect(json).toHaveBeenLastCalledWith({
+        error: { tag: 'internet-access-disabled', message: 'Internet access is disabled by this server.' },
+      })
+      expect(service[method]).not.toHaveBeenCalled()
+      resolver.resolveAssistantInternetAccessEnabled.mockRejectedValueOnce(new Error('private storage details'))
+      await controller[method]({ body: {} } as Request, response)
+      expect(status).toHaveBeenLastCalledWith(503)
+      expect(service[method]).not.toHaveBeenCalled()
+      expect(JSON.stringify(json.mock.calls)).not.toContain('private storage')
+      resolver.resolveAssistantInternetAccessEnabled.mockResolvedValueOnce(true)
+      await controller[method]({ body: { query: 'q', url: 'https://example.com/' } } as Request, response)
+      expect(service[method]).toHaveBeenCalledTimes(1)
+    },
+  )
 })

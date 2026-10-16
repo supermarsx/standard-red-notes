@@ -25,6 +25,7 @@ import {
   settingSourceLabel,
 } from './adminHelpers'
 import AiProfilesSection from './AiProfilesSection'
+import AssistantInternetAccessSetting from './AssistantInternetAccessSetting'
 import BackendProfilesSection from './BackendProfilesSection'
 import ProfileAssignmentsSection from './ProfileAssignmentsSection'
 import CodexPairingWizard from './CodexPairingWizard'
@@ -540,6 +541,23 @@ const AdminAiTab: FunctionComponent<Props> = ({ application, noteIfForbidden }) 
         </div>
       </PreferencesSegment>
 
+      <HorizontalSeparator classes="my-4" />
+
+      <PreferencesSegment>
+        <AssistantInternetAccessSetting
+          enabled={
+            typeof settings?.ai?.internetAccessEnabled === 'boolean' ? settings.ai.internetAccessEnabled : undefined
+          }
+          busy={busy}
+          onChange={(enabled) =>
+            void save('internet-access', { ai: { internetAccessEnabled: enabled } }, 'Internet access policy saved.')
+          }
+          onReset={() =>
+            void save('internet-access', { ai: { internetAccessEnabled: null } }, 'Internet access policy reset.')
+          }
+        />
+        <SourceChip sources={sources} keys={['ai.internetAccessEnabled']} />
+      </PreferencesSegment>
       <HorizontalSeparator classes="my-4" />
 
       {/* Limits */}

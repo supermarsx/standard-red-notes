@@ -526,6 +526,7 @@ export interface ServerSettingsView {
   settings: {
     revisions: RevisionPolicyLimits & { users: NonNullable<RevisionPolicySettings['users']> }
     ai: {
+      internetAccessEnabled: boolean | null
       anthropicConfigured: boolean
       openaiConfigured: boolean
       openaiBaseUrl: string | null
@@ -775,6 +776,12 @@ export class ServerSettingsResolver {
   }
 
   /** Effective global daily AI request ceiling. 0 = unlimited (the default). */
+  async resolveAssistantInternetAccessEnabled(): Promise<boolean> {
+    // A corrupt/unreadable policy must never silently lift an operator lockdown.
+    const persisted = await this.store.read()
+    return persisted.ai?.internetAccessEnabled ?? true
+  }
+
   async resolveAssistantDailyRequestLimit(): Promise<number> {
     const persisted = await this.safeRead()
 
@@ -1208,6 +1215,7 @@ export class ServerSettingsResolver {
       'ai.openaiApiKey': this.source(ai.openaiApiKey, env.assistant.openaiApiKey),
       'ai.openaiBaseUrl': this.source(ai.openaiBaseUrl, env.assistant.openaiBaseURL),
       'ai.ollamaUrl': this.source(ai.ollamaUrl, env.assistant.ollamaUrl),
+      'ai.internetAccessEnabled': this.source(ai.internetAccessEnabled, undefined),
       'ai.dailyRequestLimit': this.source(ai.dailyRequestLimit, env.assistantDailyRequestLimit),
       'ai.fiveHourTokenLimit': this.source(ai.fiveHourTokenLimit, env.assistantFiveHourTokenLimit),
       'ai.weeklyTokenLimit': this.source(ai.weeklyTokenLimit, env.assistantWeeklyTokenLimit),
@@ -1300,6 +1308,7 @@ export class ServerSettingsResolver {
     return {
       settings: {
         ai: {
+          internetAccessEnabled: await this.resolveAssistantInternetAccessEnabled().catch(() => null),
           anthropicConfigured: Boolean(config.anthropicApiKey),
           openaiConfigured: openAiCompatibleConfigured(config),
           openaiBaseUrl: config.openaiBaseURL ?? null,
