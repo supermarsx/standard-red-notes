@@ -120,7 +120,8 @@
 #                           commit stamp on modified sources is a lie, and the
 #                           deployment-identity check is skipped.
 #       --timeout SECONDS   How long to wait for containers to become healthy
-#                           (default: 600).
+#                           (default: 600). Each web-handover readiness phase
+#                           gets this budget separately; builds do not spend it.
 #       --log-lines N       Log lines to print from a failing container
 #                           (default: 200).
 #       --url BASE          Base URL for the post-deploy HTTP check. Default:
@@ -2372,6 +2373,7 @@ fi
 # the next plain ./deploy.sh would take the container off the network again.
 remember_settings
 
+BUILD_START_SECONDS=$SECONDS
 if [ "$WEB_ONLY" -eq 1 ] || [ "$ROLLING_WEB" -eq 1 ]; then
   WEB_ARGS=(--timeout "$HEALTH_TIMEOUT")
   if [ "$WEB_ROLLBACK" -eq 1 ]; then WEB_ARGS+=(--rollback); fi
@@ -2395,7 +2397,12 @@ if [ "$WEB_ONLY" -eq 1 ] || [ "$ROLLING_WEB" -eq 1 ]; then
       -e SRN_DEPLOY_REVISION -e SRN_DEPLOY_VERSION standard-red-notes/web-deployer:local \
       "${WEB_ARGS[@]}" -- docker compose "${COMPOSE_FILE_ARGS[@]}"
   fi
-  if [ "$WEB_ONLY" -eq 1 ]; then exit 0; fi
+  if [ "$WEB_ONLY" -eq 1 ]; then
+    if [ "$DRY_RUN" -eq 0 ]; then
+      info "Web build and handover completed in $((SECONDS - BUILD_START_SECONDS))s."
+    fi
+    exit 0
+  fi
 elif ! run "${BUILD_ENV[@]}" "${COMPOSE[@]}" "${COMPOSE_FILE_ARGS[@]}" up -d --build; then
   err "'$(compose_display) up -d --build' failed."
   if [ -n "$BACKUP_FILE" ]; then
@@ -2404,6 +2411,7 @@ elif ! run "${BUILD_ENV[@]}" "${COMPOSE[@]}" "${COMPOSE_FILE_ARGS[@]}" up -d --b
   exit 1
 fi
 if [ "$DRY_RUN" -eq 0 ]; then
+  info "Build/start phase completed in $((SECONDS - BUILD_START_SECONDS))s. Health verification gets a fresh ${HEALTH_TIMEOUT}s budget."
   ok "Compose reports the stack is up."
 fi
 
@@ -2487,7 +2495,8 @@ while :; do
     exit 1
   fi
   if [ "$printed_waiting" -eq 0 ]; then
-    info "Waiting up to ${HEALTH_TIMEOUT}s for healthchecks (the server allows a 90s start period)..."
+    info "Waiting up to ${HEALTH_TIMEOUT}s for healthchecks after Compose startup..."
+    info "The server's 90s start period is its initial healthcheck grace window."
     printed_waiting=1
   fi
   sleep 5

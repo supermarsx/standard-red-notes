@@ -244,7 +244,7 @@ export function frontendConfig(source, active, previous) {
 function command(
   binary,
   args,
-  { capture = true, allowFailure = false, input } = {},
+  { capture = true, allowFailure = false, input, timeoutMs } = {},
 ) {
   const result = spawnSync(binary, args, {
     input,
@@ -252,8 +252,9 @@ function command(
     maxBuffer: 32 * 1024 * 1024,
     stdio: capture ? "pipe" : "inherit",
     windowsHide: true,
+    timeout: timeoutMs,
   });
-  if (result.error) throw result.error;
+  if (result.error && !allowFailure) throw result.error;
   if (result.status !== 0 && !allowFailure)
     throw new Error(
       `${path.basename(binary)} ${args[0]} failed (exit ${result.status}).`,
@@ -261,18 +262,25 @@ function command(
   return { ok: result.status === 0, stdout: result.stdout?.trim() ?? "" };
 }
 
-export async function deployWeb({
-  compose,
-  timeout = 600,
-  skipBuild = false,
-  rollback = false,
-  fullUpdate = false,
-  stateRoot = path.resolve(".deploy-web"),
-}) {
+export async function deployWeb(
+  {
+    compose,
+    timeout = 600,
+    skipBuild = false,
+    rollback = false,
+    fullUpdate = false,
+    stateRoot = path.resolve(".deploy-web"),
+  },
+  {
+    run = command,
+    now = Date.now,
+    pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  } = {},
+) {
   const [binary, ...prefix] = compose;
   if (!binary) throw new Error("Pass the Compose command after --.");
-  const cc = (...args) => command(binary, [...prefix, ...args]);
-  const docker = (...args) => command("docker", args);
+  const cc = (...args) => run(binary, [...prefix, ...args]);
+  const docker = (...args) => run("docker", args);
   // Compose config can carry credentials: parse it privately; never log it.
   const config = privateJson(cc("config", "--format", "json").stdout);
   const project = config.name;
@@ -291,7 +299,6 @@ export async function deployWeb({
     switched = false,
     committed = false,
     restore;
-  const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   try {
     const ids = cc("ps", "-q", "app").stdout.split(/\s+/).filter(Boolean);
     if (ids.length !== 1)
@@ -344,34 +351,62 @@ export async function deployWeb({
       state = { front, base: current, active: null, previous: null };
     // Refuse unsupported front-door layouts before any backend update begins.
     frontendConfig(state.base, "srn-handover-preflight");
-    const healthy = (name) => {
-      const status = command(
+    // Each readiness phase gets its own budget. Docker start_period is only a
+    // healthcheck grace period, never the deployment startup deadline.
+    const waitFor = async (description, probe) => {
+      const deadline = now() + timeout * 1000;
+      while (true) {
+        const remaining = deadline - now();
+        if (remaining <= 0)
+          throw new Error(
+            `${description} timed out; routing has not been committed.`,
+          );
+        if (probe(Math.min(10000, remaining))) return;
+        await pause(Math.min(1000, Math.max(0, deadline - now())));
+      }
+    };
+    const healthy = (name, timeoutMs = 10000) => {
+      const status = run(
         "docker",
         ["inspect", "--format", "{{.State.Health.Status}}", name],
-        { allowFailure: true },
+        { allowFailure: true, timeoutMs },
       );
       return status.ok && status.stdout === "healthy";
     };
-    const waitHealthy = async (name) => {
-      const deadline = Date.now() + timeout * 1000;
-      while (!healthy(name)) {
-        const status = docker(
-          "inspect",
-          "--format",
-          "{{.State.Status}}",
-          name,
-        ).stdout;
-        if (["exited", "dead"].includes(status) || Date.now() >= deadline)
+    const waitHealthy = (name) =>
+      waitFor("Replacement frontend health", (timeoutMs) => {
+        const deadline = now() + timeoutMs;
+        if (healthy(name, timeoutMs)) return true;
+        if (now() >= deadline) return false;
+        const status = run(
+          "docker",
+          ["inspect", "--format", "{{.State.Status}}", name],
+          { allowFailure: true, timeoutMs: Math.max(1, deadline - now()) },
+        );
+        if (status.ok && ["exited", "dead"].includes(status.stdout))
           throw new Error(
-            "Replacement frontend did not become healthy; the current release is unchanged.",
+            "Replacement frontend exited; the current release is unchanged.",
           );
-        await pause(1000);
-      }
-    };
+        return false;
+      });
+    const reachable = (url, timeoutMs) =>
+      run(
+        "docker",
+        [
+          "exec",
+          front,
+          "wget",
+          "-qO-",
+          "--timeout=5",
+          "--header=X-Forwarded-Proto: https",
+          url,
+        ],
+        { allowFailure: true, timeoutMs },
+      ).ok;
     const install = (contents) => {
       // /tmp is tmpfs in the bundled app. docker cp can write beneath that
       // mount; write through the running container's namespace instead.
-      command(
+      run(
         "docker",
         [
           "exec",
@@ -404,7 +439,7 @@ export async function deployWeb({
         console.log(
           "Building the web image while the current frontend keeps serving.",
         );
-        command(binary, [...prefix, "build", "app"], { capture: false });
+        run(binary, [...prefix, "build", "app"], { capture: false });
       }
       if (fullUpdate) {
         const services = backendServicesForUpdate(
@@ -415,11 +450,11 @@ export async function deployWeb({
         console.log(
           "Updating backend services while the current web frontend keeps serving.",
         );
-        command(binary, [...prefix, "up", "-d", "--build", ...services], {
+        run(binary, [...prefix, "up", "-d", "--build", ...services], {
           capture: false,
         });
       }
-      candidate = `${project.slice(0, 32)}-web-${Date.now().toString(36)}-${randomBytes(3).toString("hex")}`;
+      candidate = `${project.slice(0, 32)}-web-${now().toString(36)}-${randomBytes(3).toString("hex")}`;
       // Compose run inherits runtime settings/networks but publishes no host port.
       cc(
         "run",
@@ -469,7 +504,7 @@ export async function deployWeb({
           { mode: 0o600 },
         );
         backupCandidate = `${project.slice(0, 32)}-web-bootstrap-${randomBytes(4).toString("hex")}`;
-        command(binary, [
+        run(binary, [
           ...prefix,
           "-f",
           backupFile,
@@ -488,7 +523,15 @@ export async function deployWeb({
       }
     }
     // Prove the stable front door can resolve/reach the replacement privately.
-    docker("exec", front, "wget", "-qO-", `http://${active}:8080/health`);
+    await waitFor("Replacement frontend reachability", (timeoutMs) =>
+      reachable(`http://${active}:8080/health`, timeoutMs),
+    );
+    console.log(
+      "Waiting for backend readiness through the existing public frontend before handover.",
+    );
+    await waitFor("Backend readiness", (timeoutMs) =>
+      reachable("http://127.0.0.1:8080/healthcheck/readiness", timeoutMs),
+    );
     const expected = Object.fromEntries(
       ["index.html", "app.js"].map((file) => {
         const hash = docker(
@@ -507,32 +550,24 @@ export async function deployWeb({
     switched = true;
     install(frontendConfig(state.base, active, previous));
     // New workers start asynchronously. Probe the actual public listener, not just the candidate.
-    let verified = false;
-    for (let attempt = 0; attempt < 20; attempt++) {
-      const matches = Object.entries(expected).every(([file, hash]) => {
-        const served = command(
+    await waitFor("Public replacement bundle verification", (timeoutMs) => {
+      const deadline = now() + timeoutMs;
+      return Object.entries(expected).every(([file, hash]) => {
+        if (now() >= deadline) return false;
+        const served = run(
           "docker",
           [
             "exec",
             front,
             "sh",
             "-c",
-            `wget -qO- --header="X-Forwarded-Proto: https" http://127.0.0.1:8080/${file} | sha256sum`,
+            `wget -qO- --timeout=5 --header="X-Forwarded-Proto: https" http://127.0.0.1:8080/${file} | sha256sum`,
           ],
-          { allowFailure: true },
+          { allowFailure: true, timeoutMs: Math.max(1, deadline - now()) },
         );
         return served.ok && served.stdout.split(/\s+/)[0] === hash;
       });
-      if (matches) {
-        verified = true;
-        break;
-      }
-      await pause(250);
-    }
-    if (!verified)
-      throw new Error(
-        "Public frontend did not serve the verified replacement bundle.",
-      );
+    });
     const next = {
       front,
       base: state.base,
@@ -564,15 +599,15 @@ export async function deployWeb({
         id,
       ).stdout.replace(/^\//, "");
       if (name !== active && name !== previous) {
-        command("docker", ["stop", "--time", "30", id], { allowFailure: true });
-        command("docker", ["rm", id], { allowFailure: true });
+        run("docker", ["stop", "--time", "30", id], { allowFailure: true });
+        run("docker", ["rm", id], { allowFailure: true });
       }
     }
     console.log(
       rollback
         ? "Frontend rolled back. Backend containers were not restarted."
         : fullUpdate
-          ? "Healthy frontend is serving. Previous frontend retained; backend update continues through the deploy readiness checks."
+          ? "Healthy frontend is serving after backend readiness passed. Previous frontend retained."
           : "Healthy frontend is serving. Previous release retained; backend containers were not restarted.",
     );
     return next;
@@ -590,9 +625,9 @@ export async function deployWeb({
       );
     }
     if (candidate && !committed)
-      command("docker", ["rm", "-f", candidate], { allowFailure: true });
+      run("docker", ["rm", "-f", candidate], { allowFailure: true });
     if (backupCandidate && !committed)
-      command("docker", ["rm", "-f", backupCandidate], { allowFailure: true });
+      run("docker", ["rm", "-f", backupCandidate], { allowFailure: true });
     throw error;
   } finally {
     rmSync(lock, { recursive: true, force: true });

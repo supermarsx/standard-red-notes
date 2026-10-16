@@ -1208,7 +1208,8 @@ For an existing bundled stack with separate `app` and `server` containers:
 These modes keep the public app container, port and reverse-proxy alias in
 place. A replacement frontend starts privately, with no additional published
 port. Deployment waits for its Docker health check, checks that the public
-container can reach it, validates nginx configuration, then gracefully reloads
+container can reach it and that the backend readiness endpoint answers through
+the existing public frontend, validates nginx configuration, then gracefully reloads
 nginx to switch frontend traffic. The served HTML and JavaScript are compared
 with the replacement before success is reported. A failed handover restores
 the previous routing. Existing API, file-transfer and WebSocket routes are
@@ -1226,8 +1227,15 @@ One previous frontend stays running for rollback and for immutable lazy-loaded
 assets requested by older open tabs. Older managed frontend containers are
 stopped gracefully and removed after the next successful handover. Rollback
 changes the frontend only; it does not roll back databases, backend code or
-runtime administration settings. `--timeout` controls each replacement's health
-deadline. These flags are one-run choices and are not remembered implicitly.
+runtime administration settings. `--timeout` gives each handover wait phase its
+own budget: replacement health, private reachability, backend readiness, and
+verification of the newly served bundle. The default is 600 seconds per phase;
+build time does not consume it. A 389-second build followed by a 158-second
+server startup is supported. The server's 90-second Docker healthcheck start
+period is an initial grace window, not the total startup allowance. The old
+frontend keeps serving while the replacement waits, and a failed readiness
+check leaves its routing unchanged. These flags are one-run choices and are
+not remembered implicitly.
 
 The ignored `.deploy-web/<project>.json` holds routing/rollback state. Keep it
 while using handovers. The public container acts as the stable nginx front door,
@@ -1358,7 +1366,7 @@ state.
 | `--no-backup` | Skip the pre-build snapshot. Default: back up the running data service before rebuilding. |
 | `--backup-dir DIR` | Write snapshots here. Default: `<checkout>/backups`. Create the directory if needed. |
 | `--allow-dirty` | Permit staged or unstaged tracked content changes. If such changes exist, build **unstamped** images and skip deployment-identity verification; a clean checkout still receives its commit stamp. Untracked files and line-ending-only differences are not treated as tracked content changes. |
-| `--timeout SECONDS` | Container health-wait budget after Compose starts. Default `600`; positive integer. It is not an overall build, readiness or socket timeout. |
+| `--timeout SECONDS` | Container health-wait budget after Compose starts, and an independent budget for each web-handover readiness phase. Default `600`; positive integer. Build time is excluded. |
 | `--log-lines N` | Tail this many lines from a failing service. Default `200`; positive integer. |
 | `--url BASE` | Override the readiness and deployment-identity probe origin, for example `https://notes.example.com`. The readiness path is appended automatically; omit it from the argument. |
 | `-y`, `--yes` | Accept confirmation without prompts; also pass `--yes` to first-install setup. It does not bypass configuration, dirty-checkout, backup, state or identity checks. |
