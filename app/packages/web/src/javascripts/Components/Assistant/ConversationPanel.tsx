@@ -9,6 +9,8 @@ import {
 } from '@/Assistant/attachments'
 import { AttachmentPreview } from './ComposerAttachments'
 import AssistantMessageContent from './AssistantMessageContent'
+import AssistantChangeDiff from './AssistantChangeDiff'
+import { useAssistantAutoScroll } from './useAssistantAutoScroll'
 import AssistantActivityGroup from './AssistantActivityGroup'
 import { AssistantActionNotAllowedError } from '@/Assistant/AssistantActionNotAllowedError'
 import type { AssistantChatContextSnapshot } from '@/Assistant/assistantDirectiveContext'
@@ -16,7 +18,7 @@ import AssistantComposer from './AssistantComposer'
 import AssistantModeSelector from './AssistantModeSelector'
 import type { AssistantConversationMode } from '@/Assistant/conversationModes'
 import { runConversationMode } from '@/Assistant/conversationModeRunner'
-import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { ReactNode, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { observer } from 'mobx-react-lite'
 import { ApplicationEvent, ContentType, PrefKey, SNNote, isNote } from '@standardnotes/snjs'
 import { classNames } from '@standardnotes/utils'
@@ -1180,9 +1182,7 @@ function ConversationPanelImpl({
     void refreshUsage()
   }, [refreshUsage])
 
-  useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
-  }, [messages, preparingPrompt])
+  const onMessageScroll = useAssistantAutoScroll(scrollRef, isActive, messages, preparingPrompt)
 
   const newId = () => Math.random().toString(36).slice(2)
 
@@ -2064,7 +2064,7 @@ function ConversationPanelImpl({
         </div>
       )}
 
-      <div ref={scrollRef} className="min-h-0 flex-grow overflow-y-auto px-3 py-3">
+      <div ref={scrollRef} onScroll={onMessageScroll} className="min-h-0 flex-grow overflow-y-auto px-3 py-3">
         {messages.length === 0 && !preparingPrompt && recentChats}
         {!noticeDismissed && (
           <div className="border-warning bg-warning-faded mb-4 rounded border border-solid p-3">
@@ -2265,7 +2265,7 @@ function ConversationPanelImpl({
   )
 }
 
-export const MessageBubble = ({
+export const MessageBubble = memo(function MessageBubble({
   message,
   onApplyNoteChange,
   onRemoveMessage,
@@ -2273,7 +2273,7 @@ export const MessageBubble = ({
   message: UIMessage
   onApplyNoteChange: (toolId: string, direction: AssistantNoteChangeDirection) => void
   onRemoveMessage: (messageId: string) => void | Promise<void>
-}) => {
+}) {
   if (message.kind === 'user') {
     const directive = parseAssistantDirectivePrompt(message.text)
     return (
@@ -2345,15 +2345,15 @@ export const MessageBubble = ({
       )}
     </AssistantMessageActions>
   )
-}
+})
 
-export const ToolActivity = ({
+export const ToolActivity = memo(function ToolActivity({
   tool,
   onApplyNoteChange,
 }: {
   tool: ToolEntry
   onApplyNoteChange: (toolId: string, direction: AssistantNoteChangeDirection) => void
-}) => {
+}) {
   const presentation = tool.persistedLabel
     ? { label: tool.persistedLabel }
     : describeAssistantTool(tool.name, tool.args)
@@ -2430,29 +2430,7 @@ export const ToolActivity = ({
               </button>
             </div>
           </div>
-          <details>
-            <summary className="text-passive-0 cursor-pointer select-none">Git-style diff</summary>
-            <pre
-              className="border-border bg-default mt-1 max-h-72 overflow-auto rounded border p-2 font-mono text-[11px] leading-4"
-              aria-label={`Changes made to ${tool.noteChange.noteTitle}`}
-            >
-              {tool.noteChange.patch.split('\n').map((line, index) => (
-                <span
-                  key={`${index}-${line.slice(0, 16)}`}
-                  className={classNames(
-                    'block min-w-max whitespace-pre',
-                    line.startsWith('+') && !line.startsWith('+++') && 'bg-success/10 text-success',
-                    line.startsWith('-') && !line.startsWith('---') && 'bg-danger/10 text-danger',
-                    line.startsWith('@@') && 'text-info',
-                    (line.startsWith('diff --git') || line.startsWith('---') || line.startsWith('+++')) &&
-                      'text-passive-0 font-semibold',
-                  )}
-                >
-                  {line || ' '}
-                </span>
-              ))}
-            </pre>
-          </details>
+          <AssistantChangeDiff patch={tool.noteChange.patch} noteTitle={tool.noteChange.noteTitle} />
           {tool.noteChangePending && <div className="text-passive-1 mt-1">Applying…</div>}
           {tool.noteChangeError && (
             <div className="text-danger mt-1" role="alert">
@@ -2463,7 +2441,7 @@ export const ToolActivity = ({
       )}
     </details>
   )
-}
+})
 
 const InlineAssistantConfirmation = ({
   confirmation,

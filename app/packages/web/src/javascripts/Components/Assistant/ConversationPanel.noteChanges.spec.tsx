@@ -63,7 +63,11 @@ describe('assistant note change activity', () => {
     expect(activity.open).toBe(true)
     const diff = activity.querySelector('details')!
     expect(diff.open).toBe(false)
-    act(() => diff.querySelector('summary')!.click())
+    expect(container.querySelector('pre')).toBeNull()
+    act(() => {
+      diff.querySelector('summary')!.click()
+      diff.dispatchEvent(new Event('toggle'))
+    })
     expect(diff.open).toBe(true)
     expect(container.textContent).toContain('Changes · +1 −1')
     expect(container.querySelector('pre')?.textContent).toContain('-old+new')
