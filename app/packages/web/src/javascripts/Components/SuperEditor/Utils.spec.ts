@@ -155,6 +155,54 @@ describe('createFlushableDebounce (FIX 1 — flush on blur/unmount)', () => {
     jest.useRealTimers()
   })
 
+  it('checkpoints sustained typing at the batch deadline with the latest state', () => {
+    const spy = jest.fn()
+    const debounced = createFlushableDebounce(spy, 350, () => 350)
+    for (let index = 0; index < 7; index++) {
+      debounced(`state-${index}`)
+      jest.advanceTimersByTime(100)
+    }
+    expect(spy.mock.calls).toEqual([['state-3']])
+    jest.advanceTimersByTime(50)
+    expect(spy.mock.calls).toEqual([['state-3'], ['state-6']])
+    expect(debounced.hasPending()).toBe(false)
+    jest.advanceTimersByTime(1000)
+    expect(spy).toHaveBeenCalledTimes(2)
+  })
+
+  it('clears the batch deadline on lifecycle flush and cancellation', () => {
+    const spy = jest.fn()
+    const debounced = createFlushableDebounce(spy, 350, () => 350)
+    debounced('flush')
+    jest.advanceTimersByTime(100)
+    debounced.flush()
+    debounced('cancel')
+    debounced.cancel()
+    jest.advanceTimersByTime(1000)
+    expect(spy.mock.calls).toEqual([['flush']])
+    debounced('next batch')
+    jest.advanceTimersByTime(350)
+    expect(spy.mock.calls).toEqual([['flush'], ['next batch']])
+  })
+
+  it('uses the current collaboration mode when a new batch starts', () => {
+    const spy = jest.fn()
+    let live = false
+    const debounced = createFlushableDebounce(spy, 350, () => (live ? 350 : undefined))
+    for (let index = 0; index < 10; index++) {
+      debounced('ordinary')
+      jest.advanceTimersByTime(100)
+    }
+    expect(spy).not.toHaveBeenCalled()
+    debounced.flush()
+    live = true
+    for (let index = 0; index < 4; index++) {
+      debounced('live')
+      jest.advanceTimersByTime(100)
+    }
+    expect(spy.mock.calls).toEqual([['ordinary'], ['live']])
+  })
+
   it('debounces rapid calls into a single trailing invocation with the latest args', () => {
     const spy = jest.fn<void, [string]>()
     const debounced = createFlushableDebounce(spy, 350)

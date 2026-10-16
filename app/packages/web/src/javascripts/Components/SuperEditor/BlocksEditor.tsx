@@ -142,6 +142,9 @@ export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
    * save/blur and no trailing edit is lost.
    */
   const SerializeDebounceMs = 350
+  // Live rooms must checkpoint during sustained typing, not only after a pause.
+  const collaborationRef = useRef(collaboration)
+  collaborationRef.current = collaboration
   // Refs keep the debounced serialize stable across renders while always reading
   // the current onChange/previewLength.
   const onChangeRef = useRef(onChange)
@@ -159,14 +162,18 @@ export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
   const flushShouldBypassRef = useRef(false)
 
   const debouncedSerializeRef = useRef(
-    createFlushableDebounce((editorState: EditorState) => {
-      const bypass = flushShouldBypassRef.current
-      editorState.read(() => {
-        handleEditorChange(editorState, previewLengthRef.current, (value, previewText) => {
-          onChangeRef.current?.(value, previewText, bypass)
+    createFlushableDebounce(
+      (editorState: EditorState) => {
+        const bypass = flushShouldBypassRef.current
+        editorState.read(() => {
+          handleEditorChange(editorState, previewLengthRef.current, (value, previewText) => {
+            onChangeRef.current?.(value, previewText, bypass)
+          })
         })
-      })
-    }, SerializeDebounceMs),
+      },
+      SerializeDebounceMs,
+      () => (collaborationRef.current ? SerializeDebounceMs : undefined),
+    ),
   )
 
   // Flush the pending serialize, forwarding bypassDebounce so the lifecycle save is

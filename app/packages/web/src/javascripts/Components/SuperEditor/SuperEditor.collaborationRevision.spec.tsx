@@ -361,6 +361,7 @@ describe('shared note preparation protects the editor before the provider mounts
     expect(mockEditorReadonly).toBe(false)
     await typeIntoEditor('ordinary authoring')
     expect(save).toHaveBeenCalledTimes(1)
+    expect(save.mock.calls[0][0].bypassDebouncer).toBe(false)
   })
 
   it('keeps shared notes editable on deployments without a gateway', async () => {
@@ -421,7 +422,11 @@ describe('a save from a collaborative editor says which state of the shared docu
     await typeIntoEditor('the body as typed')
 
     expect(save).toHaveBeenCalledTimes(1)
-    expect(save.mock.calls[0][0]).toMatchObject({ text: 'the body as typed', isUserModified: true })
+    expect(save.mock.calls[0][0]).toMatchObject({
+      text: 'the body as typed',
+      isUserModified: true,
+      bypassDebouncer: true,
+    })
     expect(stampWrittenBy(save.mock.calls[0])).toEqual({
       v: 1,
       epoch: EPOCH,

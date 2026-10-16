@@ -296,6 +296,14 @@ compatible through that catchup path. A timed-out initialization releases its
 proof and retries; late completion cannot replace a newer saver. Retries reuse
 an unfinished catchup instead of adding more requests to the account queue.
 
+Once a live room is editable, its saver checkpoints the latest document within
+a 350 ms batching window, including during continuous typing. These checkpoints
+bypass the ordinary editor's additional 700 ms save debounce and enter the
+existing fenced socket queue. The separate upload throttle for notes over
+1.5 MB still applies. Encryption, queued work, network latency and the server
+commit still take time; a checkpoint is only considered saved after the server
+acknowledges it. Lifecycle flushes still capture the final pending edit.
+
 The **Checklist** ribbon tab appears when the note contains a checklist and
 provides completion controls, recurrence settings, pins and high, normal or low priority flags.
 Place the cursor in an item to configure it using the compact **Item settings**

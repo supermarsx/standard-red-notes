@@ -703,11 +703,10 @@ export const SuperEditor: FunctionComponent<Props> = ({
         text: value,
         isUserModified: true,
         customMutate: (mutator) => writeCollaborationRevisionStamp(mutator, stampForSavedBody()),
-        // Standard Red Notes (last-edit-loss fix): a lifecycle flush
-        // (note-switch/blur/unmount/logout/unload) forwards bypassDebounce=true so the
-        // edit is dirtied + persisted immediately instead of waiting out the 700ms sync
-        // debounce, which a close/logout/clearAllData could otherwise pre-empt.
-        bypassDebouncer: bypassDebounce,
+        // Live rooms already batch serialization. Send that checkpoint to the
+        // fenced socket queue without adding the controller's 700ms debounce.
+        // Lifecycle flushes also bypass it for ordinary notes.
+        bypassDebouncer: bypassDebounce || collaborationIsLive,
         previews: {
           previewPlain: preview,
           previewHtml: undefined,

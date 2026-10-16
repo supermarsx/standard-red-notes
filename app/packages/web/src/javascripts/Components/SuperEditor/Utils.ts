@@ -36,11 +36,18 @@ export interface FlushableDebounce<Args extends unknown[]> {
 export function createFlushableDebounce<Args extends unknown[]>(
   func: (...args: Args) => void,
   waitMs: number,
+  /** Optional deadline for a batch, even while calls keep arriving. Read per batch. */
+  maxWaitMs?: () => number | undefined,
 ): FlushableDebounce<Args> {
   let timeout: ReturnType<typeof setTimeout> | null = null
+  let deadline: ReturnType<typeof setTimeout> | null = null
   let pendingArgs: Args | null = null
 
   const invoke = () => {
+    if (deadline) {
+      clearTimeout(deadline)
+      deadline = null
+    }
     if (timeout) {
       clearTimeout(timeout)
       timeout = null
@@ -54,6 +61,12 @@ export function createFlushableDebounce<Args extends unknown[]>(
   }
 
   const debounced = ((...args: Args) => {
+    if (pendingArgs === null) {
+      const maximum = maxWaitMs?.()
+      if (maximum !== undefined) {
+        deadline = setTimeout(invoke, Math.max(waitMs, maximum))
+      }
+    }
     pendingArgs = args
     if (timeout) {
       clearTimeout(timeout)
@@ -63,6 +76,10 @@ export function createFlushableDebounce<Args extends unknown[]>(
 
   debounced.flush = invoke
   debounced.cancel = () => {
+    if (deadline) {
+      clearTimeout(deadline)
+      deadline = null
+    }
     if (timeout) {
       clearTimeout(timeout)
       timeout = null
