@@ -25,9 +25,10 @@ import {
 import { createGatewayCollabChannel } from './GatewayCollabChannel'
 import { SUPER_COLLABORATION_TRANSPORT_REASON } from './CollaborationAvailability'
 import { isValidCollaborationRoomEpoch } from './RoomCrypto'
+import { showCollaborationThrottle } from './CollaborationThrottle'
 
 /** A gateway `room-denied` as the client read it (contract C1). */
-export type RoomDenial = { reason: RoomDeniedReason; roomEpoch?: string }
+export type RoomDenial = { reason: RoomDeniedReason; roomEpoch?: string; retryAfterMs?: number }
 
 type LeaseFailure = { reason: string; requiresRemount?: true; denial?: RoomDenial; recovery?: 'terminal' | 'transient' }
 
@@ -666,6 +667,9 @@ async function attemptEditorAccess(
       return {
         reason: beforeReservation.reason,
         recovery: beforeReservation.recovery,
+        ...(beforeReservation.authorizationFailure === 'rate-limited'
+          ? { denial: { reason: 'rate-limited' as const, retryAfterMs: beforeReservation.retryAfterMs } }
+          : {}),
         ...(beforeReservation.authorizationFailure === 'epoch-mismatch' ? { requiresRemount: true as const } : {}),
       }
     }
@@ -724,6 +728,9 @@ async function attemptEditorAccess(
           ? 'The note encryption key changed before collaboration activation.'
           : activationAccess.reason,
         ...(!activationAccess.available ? { recovery: activationAccess.recovery } : {}),
+        ...(!activationAccess.available && activationAccess.authorizationFailure === 'rate-limited'
+          ? { denial: { reason: 'rate-limited' as const, retryAfterMs: activationAccess.retryAfterMs } }
+          : {}),
         ...(!activationAccess.available && activationAccess.authorizationFailure === 'epoch-mismatch'
           ? { requiresRemount: true as const }
           : {}),
@@ -1062,16 +1069,21 @@ export function useCollaborationRoomAccess(
       lastFailedRevision.current = application.items.findItem<SNNote>(noteUuid)?.serverUpdatedAtTimestamp
       recoveryAllowed.current = recovery !== 'terminal' && isRecoverableRoomDenial(denial)
       if (denial?.reason === 'rate-limited' && !cancelled && rateLimitedRetries.current < MAX_RATE_LIMITED_RETRIES) {
+        showCollaborationThrottle()
+        const retryDelay = Math.max(
+          RATE_LIMITED_RETRY_DELAY_MS,
+          Math.min(60_000, denial.retryAfterMs ?? RATE_LIMITED_RETRY_DELAY_MS),
+        )
         rateLimitedRetries.current += 1
-        rateLimitedUntil.current = Date.now() + RATE_LIMITED_RETRY_DELAY_MS
+        rateLimitedUntil.current = Date.now() + retryDelay
         const retryRateLimited = (): void => {
           rateLimitedRetryTimer = undefined
           if (cancelled || hasReadyAccess.current) {
             return
           }
           if (document.visibilityState !== 'visible') {
-            rateLimitedUntil.current = Date.now() + RATE_LIMITED_RETRY_DELAY_MS
-            rateLimitedRetryTimer = setTimeout(retryRateLimited, RATE_LIMITED_RETRY_DELAY_MS)
+            rateLimitedUntil.current = Date.now() + retryDelay
+            rateLimitedRetryTimer = setTimeout(retryRateLimited, retryDelay)
             return
           }
           rateLimitedUntil.current = 0
@@ -1079,7 +1091,7 @@ export function useCollaborationRoomAccess(
             retryPreparation()
           }
         }
-        rateLimitedRetryTimer = setTimeout(retryRateLimited, RATE_LIMITED_RETRY_DELAY_MS)
+        rateLimitedRetryTimer = setTimeout(retryRateLimited, retryDelay)
       } else if (!cancelled && recoveryAllowed.current) {
         const delay = recoveryDelay.current
         recoveryDelay.current = Math.min(ROOM_RECOVERY_MAX_DELAY_MS, delay * 2)

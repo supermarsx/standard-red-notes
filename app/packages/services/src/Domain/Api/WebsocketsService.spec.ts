@@ -109,6 +109,18 @@ describe('webSocketsService', () => {
       }
     })
 
+    it('preserves HTTP throttling as a transient typed failure without exposing response text', async () => {
+      webSocketApiService.authorizeCollaboration = jest
+        .fn()
+        .mockResolvedValue({ status: 429, error: { message: 'private server detail' } })
+      await expect(
+        createService().authorizeCollaborationRoom('note-1', undefined, undefined, roomEpoch, true),
+      ).rejects.toMatchObject({ code: 'COLLABORATION_RATE_LIMITED', retryAfterMs: 10_000 })
+      await expect(
+        createService().authorizeCollaborationRoom('note-1', undefined, undefined, roomEpoch),
+      ).resolves.toBeUndefined()
+    })
+
     it('exposes a malformed successful grant as a closed protocol failure without its payload', async () => {
       webSocketApiService.authorizeCollaboration = jest
         .fn()

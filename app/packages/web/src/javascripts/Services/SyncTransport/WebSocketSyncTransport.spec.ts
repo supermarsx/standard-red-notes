@@ -2012,6 +2012,7 @@ describe('WebSocketSyncTransport', () => {
   it.each([
     ['epoch-mismatch', 'COLLABORATION_EPOCH_CHANGED'],
     ['not-authorized', 'COLLABORATION_NOT_AUTHORIZED'],
+    ['rate-limited', 'COLLABORATION_RATE_LIMITED'],
   ] as const)('preserves typed collaboration denial %s for scoped recovery', async (reason, code) => {
     const transport = createTransport()
     const pending = transport.authorizeCollaborationRoom('note-1', 'lease-1', 'challenge-1')

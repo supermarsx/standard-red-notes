@@ -22,6 +22,7 @@ import {
 import { EphemeralRoomPresence, type CollaborationPresenceActivity } from './EphemeralRoomPresence'
 import { isCollaborationCipherError, type RoomCipher } from './RoomCrypto'
 import type { ActiveEditorCollaborationLease, RoomDenial } from './useCollaborationRoomAccess'
+import { showCollaborationThrottle } from './CollaborationThrottle'
 
 type Listener = (...args: never[]) => void
 const MAX_JOIN_RETRIES = 5
@@ -698,7 +699,10 @@ export class EncryptedYjsProvider implements Provider {
         } else if (lease.requiresRemount) {
           this.options.onBootstrapRetry?.()
         } else if (this.connected && this.channel.isConnected()) {
-          this.scheduleJoinRetry()
+          if (lease.denial?.reason === 'rate-limited') {
+            showCollaborationThrottle()
+          }
+          this.scheduleJoinRetry(lease.denial?.reason === 'rate-limited' ? (lease.denial.retryAfterMs ?? 10_000) : 0)
         }
         return
       }
@@ -1999,11 +2003,19 @@ export class EncryptedYjsProvider implements Provider {
                 this.setStateServingReady(false)
                 this.setLocalStateReadiness(false)
                 this.options.onBootstrapRetry?.()
+              } else if (deniedReason === 'rate-limited') {
+                showCollaborationThrottle()
+                this.scheduleJoinRetry(10_000)
               } else {
                 void this.reactivateAfterReconnect(generation)
               }
             } else {
-              void this.joinWithCapability()
+              if (deniedReason === 'rate-limited') {
+                showCollaborationThrottle()
+                this.scheduleJoinRetry(10_000)
+              } else {
+                void this.joinWithCapability()
+              }
             }
           }
         }
@@ -3136,7 +3148,7 @@ export class EncryptedYjsProvider implements Provider {
     return 'The server did not authorize live editing for this note. Check note access before reconnecting.'
   }
 
-  private scheduleJoinRetry(): void {
+  private scheduleJoinRetry(minimumDelayMs = 0): void {
     if (this.recoveryStopped || this.joinRetryTimeout !== undefined || !this.connected || !this.channel.isConnected()) {
       return
     }
@@ -3166,7 +3178,7 @@ export class EncryptedYjsProvider implements Provider {
       return
     }
     const baseDelay = Math.min(30_000, 1_000 * 2 ** this.joinRetryAttempts)
-    const delay = baseDelay * (0.5 + Math.random() * 0.5)
+    const delay = Math.max(minimumDelayMs, baseDelay * (0.5 + Math.random() * 0.5))
     this.joinRetryAttempts += 1
     this.joinRetryTimeout = setTimeout(() => {
       this.joinRetryTimeout = undefined

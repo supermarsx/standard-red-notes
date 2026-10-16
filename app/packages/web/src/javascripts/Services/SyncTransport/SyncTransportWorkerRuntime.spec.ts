@@ -638,6 +638,24 @@ describe('SyncTransportWorkerRuntime', () => {
     )
   }
 
+  it('keeps the socket up and returns a retryable lane denial for collaboration throttling', async () => {
+    const harness = setup()
+    const { socket, discovery } = await startCollaborationHandshake(harness)
+    socket.receive({
+      ...serverFrame('ERROR', discovery.commandId, { code: 'RATE_LIMITED' }),
+      requestId: discovery.requestId,
+    })
+    await flush()
+    expect(harness.messages).toContainEqual({
+      type: 'COLLABORATION_DENIED',
+      clientRequestId: 'collaboration-client-1',
+      reason: 'rate-limited',
+      retryAfterMs: 10_000,
+    })
+    expect(socket.readyState).toBe(1)
+    expect(harness.outbox.records.size).toBe(0)
+  })
+
   it('distinguishes a changed room epoch from a permission denial without closing the healthy socket', async () => {
     const harness = setup()
     const { socket, discovery } = await startCollaborationHandshake(harness)

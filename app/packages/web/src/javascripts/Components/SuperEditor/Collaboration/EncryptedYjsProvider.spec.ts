@@ -2643,6 +2643,46 @@ describe('EncryptedYjsProvider convergence', () => {
     }
   })
 
+  it('waits out throttling before reauthorizing an accepted room and retains local work', async () => {
+    jest.useFakeTimers()
+    const sent: CollabFrame[] = []
+    let inbound: ((frame: CollabFrame) => void) | undefined
+    const authorize = jest.fn().mockResolvedValue('renewed-capability')
+    const doc = new Y.Doc()
+    const provider = new EncryptedYjsProvider(
+      doc,
+      'throttled-room',
+      {
+        isConnected: () => true,
+        authorize,
+        subscribe: (handler) => {
+          inbound = handler
+          return () => undefined
+        },
+        send: (frame) => sent.push(frame),
+      },
+      createTestTransportCipher(),
+      'initial-capability',
+    )
+    try {
+      provider.connect()
+      const join = sent[0] as Extract<CollabFrame, { t: 'room-join' }>
+      inbound?.({ t: 'room-joined', room: 'throttled-room', requestId: join.requestId })
+      await provider.flush()
+      doc.getText('draft').insert(0, 'unsent local draft')
+      inbound?.({ t: 'room-denied', room: 'throttled-room', requestId: join.requestId, reason: 'rate-limited' })
+      await jest.advanceTimersByTimeAsync(9_999)
+      expect(authorize).not.toHaveBeenCalled()
+      expect(doc.getText('draft').toString()).toBe('unsent local draft')
+      await jest.advanceTimersByTimeAsync(1)
+      expect(authorize).toHaveBeenCalledTimes(1)
+    } finally {
+      provider.destroy()
+      doc.destroy()
+      jest.useRealTimers()
+    }
+  })
+
   it.each(['reservation-expired', 'capability-expired'] as const)(
     'reauthorizes after an accepted membership expires with %s',
     async (reason) => {

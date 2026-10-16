@@ -190,7 +190,10 @@ export type CollaborationRoomAuthorization = {
 }
 
 class CollaborationAuthorizationError extends Error {
-  constructor(readonly code: 'COLLABORATION_NOT_AUTHORIZED' | 'COLLABORATION_PROTOCOL_INVALID') {
+  constructor(
+    readonly code: 'COLLABORATION_NOT_AUTHORIZED' | 'COLLABORATION_PROTOCOL_INVALID' | 'COLLABORATION_RATE_LIMITED',
+    readonly retryAfterMs?: number,
+  ) {
     super('Collaboration authorization failed')
   }
 }
@@ -200,9 +203,12 @@ function isTypedCollaborationAuthorizationError(error: unknown): boolean {
     !!error &&
     typeof error === 'object' &&
     'code' in error &&
-    ['COLLABORATION_NOT_AUTHORIZED', 'COLLABORATION_PROTOCOL_INVALID', 'COLLABORATION_EPOCH_CHANGED'].includes(
-      String(error.code),
-    )
+    [
+      'COLLABORATION_NOT_AUTHORIZED',
+      'COLLABORATION_PROTOCOL_INVALID',
+      'COLLABORATION_EPOCH_CHANGED',
+      'COLLABORATION_RATE_LIMITED',
+    ].includes(String(error.code))
   )
 }
 
@@ -867,6 +873,9 @@ export class WebSocketsService extends AbstractService<
     if (!isValidCollaborationEpoch(exactRoomEpoch)) {
       const discoveryResponse = await this.webSocketApiService.discoverCollaborationRoomEpoch(noteUuid)
       if (isErrorResponse(discoveryResponse)) {
+        if (Number(discoveryResponse.status) === 429) {
+          throw new CollaborationAuthorizationError('COLLABORATION_RATE_LIMITED', 10_000)
+        }
         if (discoveryResponse.status === 403) {
           throw new CollaborationAuthorizationError('COLLABORATION_NOT_AUTHORIZED')
         }
@@ -886,6 +895,9 @@ export class WebSocketsService extends AbstractService<
       exactRoomEpoch,
     )
     if (isErrorResponse(response)) {
+      if (Number(response.status) === 429) {
+        throw new CollaborationAuthorizationError('COLLABORATION_RATE_LIMITED', 10_000)
+      }
       if (response.status === 403) {
         throw new CollaborationAuthorizationError('COLLABORATION_NOT_AUTHORIZED')
       }

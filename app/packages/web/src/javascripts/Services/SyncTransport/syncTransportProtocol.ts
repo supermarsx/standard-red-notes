@@ -1108,7 +1108,8 @@ export type SyncWorkerToMainMessage =
       type: 'COLLABORATION_DENIED'
       clientRequestId: string
       /** Older workers omit this; absence is never evidence of permission revocation. */
-      reason?: 'epoch-mismatch' | 'not-authorized'
+      reason?: 'epoch-mismatch' | 'not-authorized' | 'rate-limited'
+      retryAfterMs?: number
     }
   | { type: 'COLLABORATION_FALLBACK'; clientRequestId: string; reason: SyncFallbackReason }
   | { type: 'RPC_ACCEPTED'; clientRequestId: string }

@@ -43,6 +43,7 @@ import {
 } from './syncTransportProtocol'
 import { LANE_STATE_CARRIER, LaneDegradationLedger, type LaneLedgerReading } from './LaneDegradationLedger'
 import { OWNER_LEASE_TTL_MS } from './SyncTransportOutbox'
+import { showCollaborationThrottle } from '../../Components/SuperEditor/Collaboration/CollaborationThrottle'
 import { authoredLogMessage } from '@standardnotes/utils'
 import { reportLocalStorageHealth } from '@/Utils/LocalStorageHealth'
 
@@ -265,6 +266,7 @@ export class AuthenticatedRpcError extends Error {
     readonly retryable: boolean,
     /** True only when no RPC request bytes crossed the authenticated socket. */
     readonly safeToFallback: boolean,
+    readonly retryAfterMs?: number,
   ) {
     super(`Authenticated websocket RPC failed: ${code}`)
   }
@@ -634,6 +636,9 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     reason: SyncFallbackReason | undefined,
     socketPreserved = false,
   ): void {
+    if (reason === 'rate-limited') {
+      showCollaborationThrottle('realtime')
+    }
     this.state = state
     this.fallbackReason = reason
     this.ledger.recordTransition(state, reason, socketPreserved)
@@ -2426,9 +2431,14 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
         if (message.reason) {
           collaborationPending.reject(
             new AuthenticatedRpcError(
-              message.reason === 'epoch-mismatch' ? 'COLLABORATION_EPOCH_CHANGED' : 'COLLABORATION_NOT_AUTHORIZED',
+              message.reason === 'rate-limited'
+                ? 'COLLABORATION_RATE_LIMITED'
+                : message.reason === 'epoch-mismatch'
+                  ? 'COLLABORATION_EPOCH_CHANGED'
+                  : 'COLLABORATION_NOT_AUTHORIZED',
+              message.reason === 'rate-limited',
               false,
-              false,
+              message.reason === 'rate-limited' ? message.retryAfterMs : undefined,
             ),
           )
         } else {

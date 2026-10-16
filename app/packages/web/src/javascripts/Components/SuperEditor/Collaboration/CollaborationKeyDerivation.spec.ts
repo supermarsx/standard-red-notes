@@ -90,6 +90,7 @@ maybe('collaboration room-key derivation', () => {
     'COLLABORATION_NOT_AUTHORIZED',
     'COLLABORATION_PROTOCOL_INVALID',
     'COLLABORATION_EPOCH_CHANGED',
+    'COLLABORATION_RATE_LIMITED',
     'NETWORK_TIMEOUT',
   ])('carries structured recovery semantics for %s without relying on private error text', async (code) => {
     const sessionUser = { uuid: 'user-a', email: 'alice@example.com' }
@@ -122,6 +123,13 @@ maybe('collaboration room-key derivation', () => {
     expect(JSON.stringify(result)).not.toContain('private backend details')
     if (code === 'COLLABORATION_EPOCH_CHANGED') {
       expect(result).toHaveProperty('authorizationFailure', 'epoch-mismatch')
+    }
+    if (code === 'COLLABORATION_RATE_LIMITED') {
+      expect(result).toMatchObject({ authorizationFailure: 'rate-limited', retryAfterMs: 10_000 })
+      expect(result).toHaveProperty(
+        'reason',
+        'Live collaboration is temporarily throttled. It will retry automatically.',
+      )
     }
   })
 

@@ -265,7 +265,8 @@ export type PreparedCollaborationAccess =
       reason: string
       sourceId?: string
       recovery?: 'terminal' | 'transient'
-      authorizationFailure?: 'epoch-mismatch'
+      authorizationFailure?: 'epoch-mismatch' | 'rate-limited'
+      retryAfterMs?: number
     }
   | {
       available: true
@@ -318,17 +319,27 @@ export async function prepareCollaborationAccess(
     ])
   } catch (error: unknown) {
     const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined
+    const rateLimited = code === 'COLLABORATION_RATE_LIMITED'
+    const retryAfter =
+      error && typeof error === 'object' && 'retryAfterMs' in error ? Number(error.retryAfterMs) : 10_000
     const terminal = code === 'COLLABORATION_NOT_AUTHORIZED' || code === 'COLLABORATION_PROTOCOL_INVALID'
     return {
       available: false,
-      reason:
-        code === 'COLLABORATION_NOT_AUTHORIZED'
+      reason: rateLimited
+        ? 'Live collaboration is temporarily throttled. It will retry automatically.'
+        : code === 'COLLABORATION_NOT_AUTHORIZED'
           ? 'The server did not authorize live editing for this note. Edit permission is required.'
           : code === 'COLLABORATION_PROTOCOL_INVALID'
             ? 'The collaboration gateway did not provide a valid encrypted room authorization.'
             : 'Live collaboration could not establish a secure room.',
       sourceId: before.sourceId,
       recovery: terminal ? 'terminal' : 'transient',
+      ...(rateLimited
+        ? {
+            authorizationFailure: 'rate-limited' as const,
+            retryAfterMs: Number.isFinite(retryAfter) ? Math.max(1_000, Math.min(60_000, retryAfter)) : 10_000,
+          }
+        : {}),
       ...(code === 'COLLABORATION_EPOCH_CHANGED' ? { authorizationFailure: 'epoch-mismatch' as const } : {}),
     }
   }

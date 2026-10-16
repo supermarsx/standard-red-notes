@@ -2549,7 +2549,16 @@ export class SyncTransportWorkerRuntime {
           this.clearAckDeadline()
           return
         }
-        if (frame.payload.code === 'NOT_AUTHORIZED') {
+        if (frame.payload.code === 'RATE_LIMITED' || frame.payload.code === 'RESOURCE_EXHAUSTED') {
+          const clientRequestId = active.clientRequestId
+          this.active = undefined
+          this.dependencies.postMessage({
+            type: 'COLLABORATION_DENIED',
+            clientRequestId,
+            reason: 'rate-limited',
+            retryAfterMs: 10_000,
+          })
+        } else if (frame.payload.code === 'NOT_AUTHORIZED') {
           const clientRequestId = active.clientRequestId
           this.active = undefined
           this.reconnectAttempts = 0
