@@ -6,6 +6,7 @@ import Button from '@/Components/Button/Button'
 interface Props {
   input: string
   running: boolean
+  stopping?: boolean
   configured: boolean
   onInput: (value: string) => void
   onSend: () => void
@@ -25,6 +26,7 @@ interface Props {
 export default function AssistantComposer({
   input,
   running,
+  stopping = false,
   configured,
   onInput,
   onSend,
@@ -41,7 +43,7 @@ export default function AssistantComposer({
 }: Props) {
   const guidanceId = useId()
   const picker = useRef<HTMLInputElement>(null)
-  const ready = Boolean(input.trim() || attachments.length) && !attachmentsBusy
+  const ready = Boolean(input.trim() || attachments.length) && !attachmentsBusy && !stopping
   const steer = allowSteering && attachments.length === 0
 
   return (
@@ -107,6 +109,9 @@ export default function AssistantComposer({
         onKeyDown={(event) => {
           if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
             event.preventDefault()
+            if (stopping) {
+              return
+            }
             if (running) {
               if (steer) {
                 onSteer()
@@ -158,9 +163,10 @@ export default function AssistantComposer({
             <Button
               small
               className="px-2! py-1! text-[11px]!"
-              label="Stop"
+              label={stopping ? 'Stopping…' : 'Stop'}
               title="Stop this response and clear queued messages"
               onClick={onStop}
+              disabled={stopping}
             />
           </>
         ) : (

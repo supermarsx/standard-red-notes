@@ -310,6 +310,7 @@ function ConversationPanelImpl({
   )
   const [input, setInput] = useState('')
   const [isRunning, setIsRunning] = useState(false)
+  const [isStopping, setIsStopping] = useState(false)
   // Per-user rolling-window TOKEN usage (5h + weekly) for the in-chat meter.
   const [tokenWindows, setTokenWindows] = useState<{
     fiveHour?: TokenWindowUsage
@@ -1337,6 +1338,7 @@ function ConversationPanelImpl({
 
       const controller = new AbortController()
       abortRef.current = controller
+      setIsStopping(false)
       setIsRunning(true)
       const shared = sharedChatRef.current
       if (shared) {
@@ -1947,6 +1949,9 @@ function ConversationPanelImpl({
 
   // Interrupt: abort the current run and drop any pending steers/queue.
   const handleStop = useCallback(() => {
+    if (abortRef.current && !abortRef.current.signal.aborted) {
+      setIsStopping(true)
+    }
     queueRef.current = []
     setQueue([])
     steerQueueRef.current = []
@@ -1963,6 +1968,24 @@ function ConversationPanelImpl({
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
+      {isRunning && (
+        <div className="border-border bg-default flex shrink-0 items-center justify-between gap-2 border-b px-3 py-1.5">
+          <span className="text-passive-1 text-xs" role="status">
+            {isStopping ? 'Stopping…' : 'Current request'}
+          </span>
+          <button
+            type="button"
+            aria-label="Stop current assistant request"
+            title="Stop this response and clear queued messages"
+            disabled={isStopping}
+            onClick={handleStop}
+            className="text-text hover:bg-contrast focus-visible:ring-info inline-flex shrink-0 items-center gap-1.5 rounded px-2 py-1 text-xs outline-none focus-visible:ring-2 disabled:cursor-wait disabled:opacity-50"
+          >
+            <span aria-hidden className="h-2 w-2 rounded-sm bg-current" />
+            {isStopping ? 'Stopping…' : 'Stop'}
+          </button>
+        </div>
+      )}
       {historyPersistenceFailed && (
         <div className="border-warning bg-warning-faded text-text border-b px-3 py-2 text-xs">
           Saved chat history could not be read safely. This conversation is temporarily in-memory and will not overwrite
@@ -2161,6 +2184,7 @@ function ConversationPanelImpl({
           }}
           input={input}
           running={isRunning}
+          stopping={isRunning && isStopping}
           configured={isConfigured}
           allowSteering={
             (isRunning ? activeRunModeRef.current : conversationMode) !== 'research' &&

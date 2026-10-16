@@ -236,6 +236,37 @@ describe('Assistant conversation activity timeline', () => {
     expect(runConversationMode).toHaveBeenCalledTimes(1)
   })
 
+  it('stops from the visible current-request control and clears queued work while pending actions settle', async () => {
+    await act(async () => {
+      render()
+      await flush()
+    })
+    await act(async () => {
+      options.onToolCall?.({ id: 'pending', name: 'notes.read', args: { uuid: 'note-one' } })
+      render('queued-after-current')
+      await flush()
+    })
+    expect(container.querySelector('[aria-label="Remove from queue"]')).not.toBeNull()
+    const stop = container.querySelector<HTMLButtonElement>('[aria-label="Stop current assistant request"]')!
+    expect(stop.disabled).toBe(false)
+    await act(async () => {
+      stop.click()
+      await flush()
+    })
+    expect(options.signal?.aborted).toBe(true)
+    expect(stop.disabled).toBe(true)
+    expect(stop.textContent).toContain('Stopping')
+    expect(container.querySelector('[aria-label="Remove from queue"]')).toBeNull()
+    await act(async () => {
+      resolveRun({ finalText: '', stopReason: 'aborted', steps: 1 })
+      await flush()
+    })
+    expect(container.querySelector('[aria-label="Stop current assistant request"]')).toBeNull()
+    expect(container.querySelector('summary')?.textContent).toContain('1 interrupted')
+    expect(runConversationMode).toHaveBeenCalledTimes(1)
+    expect(Array.from(container.querySelectorAll('button')).some((button) => button.textContent === 'Send')).toBe(true)
+  })
+
   it('does not append a buffered delta after the authenticated principal becomes invalid', async () => {
     await act(async () => {
       render()

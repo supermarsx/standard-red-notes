@@ -33,6 +33,15 @@ it('keeps the same typing area after Send, explains the running controls, and ro
     click('Stop this response and clear queued messages')
     expect(props.onQueue).toHaveBeenCalledTimes(1)
     expect(props.onStop).toHaveBeenCalledTimes(1)
+    act(() => root.render(<AssistantComposer {...props} running stopping />))
+    const stopping = container.querySelector<HTMLButtonElement>(
+      '[title="Stop this response and clear queued messages"]',
+    )!
+    expect(stopping.disabled).toBe(true)
+    expect(stopping.textContent).toContain('Stopping')
+    act(() => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
+    expect(props.onSteer).not.toHaveBeenCalled()
+    act(() => root.render(<AssistantComposer {...props} running />))
     act(() => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, isComposing: true })))
     expect(props.onSteer).not.toHaveBeenCalled()
     act(() => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
