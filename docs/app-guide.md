@@ -528,6 +528,8 @@ Track tasks with checkable items inside notes.
 
 Use a checklist/tasks note, or a checklist block inside a Super note, to track to-dos. Check items off as you complete them; completed items can be grouped or hidden depending on the editor.
 
+In a Super note, select a checklist item to open the Checklist ribbon. Organize can sink completed tasks within your selection, sink them to the bottom of the current heading section, or move that section’s completed tasks into a Completed tasks section. These actions preserve task settings and keep subtasks with their parent; completed subtasks can sink within their own list. Per-person checkboxes stay active because they have no shared completion state.
+
 > **Tip.** Combine a daily note with checklist blocks to build a lightweight calendar-style to-do system.
 
 Related: [editors/super](#editors-super), [organization/smart-views](#organization-smart-views)
@@ -865,6 +867,8 @@ Chat about and act on your notes, optionally fully local.
 Search, summarize, create, edit, and organize your notes from chat.
 
 Open the assistant from the toolbar to chat about your notes and take actions on them — search, summarize, draft new notes, edit existing ones, and help with organization.
+
+AI ribbon actions open a conversation using your selected text, or the current note when nothing is selected. A matching current chat is reused; a different context opens a new chat. The Checklist group can organize or categorize items, improve task wording, or split large tasks into smaller steps. The assistant uses the usual tool permissions and change-review flow rather than replacing editor text directly.
 
 Signed-in chat history is encrypted in your account and follows ordinary item sync across tabs, browsers and devices, including socket delivery when available. Opening a remote chat does not start another AI run. History lists conversations without stealing focus; middle-click hides a chat tab while its running work continues. Delete removes its synced history and leaves an encrypted deletion marker so an older checkpoint cannot restore it.
 

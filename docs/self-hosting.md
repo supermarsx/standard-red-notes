@@ -237,6 +237,12 @@ stops responding. Legacy requests without a chat proof keep their existing
 behavior. Direct connections rely on participating clients for coordination;
 the server cannot enforce or cancel a request sent directly to another provider.
 
+Assistant SSE responses send a comment keepalive every 15 seconds during silent
+provider work. This prevents idle proxy timeouts; it does not extend the total
+request budget. The assistant streaming socket route permits 330 seconds (the
+five-minute protected generation limit plus cleanup margin); other RPC routes
+retain their 120-second maximum.
+
 Abandoned chat fence counters expire after 90 days; opaque lease identities
 still reject stale renewals and releases after that counter retention resets.
 Stopping a server-proxied run signals cancellation to its provider, but does not

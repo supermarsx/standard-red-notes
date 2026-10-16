@@ -687,6 +687,10 @@ export const DOC_CATEGORIES: DocCategory[] = [
             text: 'Use a checklist/tasks note, or a checklist block inside a Super note, to track to-dos. Check items off as you complete them; completed items can be grouped or hidden depending on the editor.',
           },
           {
+            type: 'paragraph',
+            text: 'In a Super note, select a checklist item to open the Checklist ribbon. Organize can sink completed tasks within your selection, sink them to the bottom of the current heading section, or move that section’s completed tasks into a Completed tasks section. These actions preserve task settings and keep subtasks with their parent; completed subtasks can sink within their own list. Per-person checkboxes stay active because they have no shared completion state.',
+          },
+          {
             type: 'callout',
             variant: 'tip',
             text: 'Combine a daily note with checklist blocks to build a lightweight calendar-style to-do system.',
@@ -1193,6 +1197,10 @@ export const DOC_CATEGORIES: DocCategory[] = [
           {
             type: 'paragraph',
             text: 'Open the assistant from the toolbar to chat about your notes and take actions on them — search, summarize, draft new notes, edit existing ones, and help with organization.',
+          },
+          {
+            type: 'paragraph',
+            text: 'AI ribbon actions open a conversation using your selected text, or the current note when nothing is selected. A matching current chat is reused; a different context opens a new chat. The Checklist group can organize or categorize items, improve task wording, or split large tasks into smaller steps. The assistant uses the usual tool permissions and change-review flow rather than replacing editor text directly.',
           },
           {
             type: 'paragraph',
