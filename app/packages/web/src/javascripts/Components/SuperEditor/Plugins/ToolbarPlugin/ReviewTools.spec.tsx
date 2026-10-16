@@ -106,6 +106,28 @@ it('pairs every visible Review action with a compact decorative icon and visible
   }
 })
 
+it('keeps purge actions in one Comments group, stacking on narrow screens and using three ribbon rows at sm+', async () => {
+  mockOwner = true
+  const view = await mount()
+  try {
+    const groups = view.element.querySelectorAll('[role="group"]')
+    expect(groups).toHaveLength(1)
+    const group = groups[0]
+    expect(group.getAttribute('aria-label')).toBe('Comment tools')
+    expect(group.querySelectorAll('button')).toHaveLength(5)
+    expect(group.querySelector('[aria-label="Purge my comments"]')).not.toBeNull()
+    expect(group.querySelector('[aria-label="Purge all comments"]')).not.toBeNull()
+    expect(group.firstElementChild?.classList.contains('grid-cols-1')).toBe(true)
+    expect(group.firstElementChild?.classList.contains('sm:grid-flow-col')).toBe(true)
+    expect(group.firstElementChild?.classList.contains('sm:grid-cols-none')).toBe(true)
+    expect(group.firstElementChild?.classList.contains('sm:grid-rows-3')).toBe(true)
+    expect(group.lastElementChild?.textContent?.trim()).toBe('Comments')
+    expect(view.element.querySelector('[aria-label="Remove comments"]')).toBeNull()
+  } finally {
+    await view.close()
+  }
+})
+
 it('requires confirmation and independently removes private and authored shared comments', async () => {
   const view = await mount()
   try {

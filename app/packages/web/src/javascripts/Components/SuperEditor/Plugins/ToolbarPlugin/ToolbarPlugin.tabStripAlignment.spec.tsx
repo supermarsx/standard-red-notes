@@ -152,7 +152,7 @@ const CONTAINER_CLASS = '@container' + '/utility-bar'
 const NARROW_FALLBACK_CLASS = '@max-' + '4xl' + '/utility-bar:hidden'
 
 const bar = () => container.querySelector('[data-super-toolbar-utility-bar]') as HTMLElement
-const utilityHalf = () => bar().querySelector('[aria-label="Clipboard and history tools"]') as HTMLElement
+const utilityHalf = () => bar().querySelector('[aria-label="AI change tools"]') as HTMLElement
 const tabStrip = () => bar().querySelector('[role="tablist"][aria-label="Formatting groups"]') as HTMLElement
 const spacer = () => bar().querySelector('[data-super-toolbar-tabs-spacer]') as HTMLElement
 
@@ -165,15 +165,15 @@ describe('ribbon tab strip is centred on the utility bar', () => {
     expect(bar().className).toContain(CONTAINER_CLASS)
   })
 
-  it('renders exactly three flex children: utility half, tab strip, trailing spacer — in that order', async () => {
+  it('renders exactly three flex children: leading spacer, tab strip, right AI tools — in that order', async () => {
     await mount()
     const children = Array.from(bar().children)
     expect(children).toHaveLength(3)
     // Order is load-bearing: a spacer placed BEFORE the strip would push it hard
     // right at every width, which is the behaviour being replaced.
-    expect(children[0]).toBe(utilityHalf())
+    expect(children[0]).toBe(spacer())
     expect(children[1]).toBe(tabStrip())
-    expect(children[2]).toBe(spacer())
+    expect(children[2]).toBe(utilityHalf())
   })
 
   it('gives the utility half and the spacer the same growth, which is what centres the strip', async () => {

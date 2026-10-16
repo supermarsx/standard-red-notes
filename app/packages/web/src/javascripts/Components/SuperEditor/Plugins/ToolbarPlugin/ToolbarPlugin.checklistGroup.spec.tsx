@@ -206,6 +206,47 @@ const clickTab = async (name: string) => {
   })
 }
 
+it('places TOC insertion, navigation and formatting together in Review beside comment tools', async () => {
+  await mount(false)
+  await clickTab('Insert')
+  expect(container.querySelector('[role="group"][aria-label="Table of contents"]')).toBeNull()
+  await clickTab('Review')
+  expect([...container.querySelectorAll('[role="tab"]')].filter((tab) => tab.textContent === 'Review')).toHaveLength(1)
+  const group = container.querySelector<HTMLElement>('[role="group"][aria-label="Table of contents"]')!
+  expect(group).not.toBeNull()
+  expect(group.classList.contains('super-toolbar-group')).toBe(true)
+  expect([...group.querySelectorAll('button')].map((button) => button.textContent?.trim())).toEqual([
+    'Insert',
+    'Navigate headings',
+    'Format',
+  ])
+  expect(container.querySelector('[aria-label="Comment tools"]')).not.toBeNull()
+  await act(async () => group.querySelector<HTMLButtonElement>('button')!.click())
+  editor.getEditorState().read(() =>
+    expect(
+      $getRoot()
+        .getChildren()
+        .some((node) => node.getType() === 'table-of-contents'),
+    ).toBe(true),
+  )
+  expect(group.querySelectorAll('button')).toHaveLength(3)
+})
+
+it('shows concise visible labels beside list icons in the Insert Lists group', async () => {
+  await mount(false)
+  await clickTab('Insert')
+  const groups = [...container.querySelectorAll<HTMLElement>('[role="group"]')]
+  const lists = groups.find((group) => group.getAttribute('aria-label') === 'blockCategoryLists')!
+  expect(lists).toBeDefined()
+  const labels = [...lists.querySelectorAll('button span')].map((label) => label.textContent?.trim())
+  expect(labels.some((label) => /bulleted/i.test(label ?? ''))).toBe(true)
+  expect(labels.some((label) => /numbered/i.test(label ?? ''))).toBe(true)
+  expect(labels.some((label) => /checklist/i.test(label ?? ''))).toBe(true)
+  for (const button of lists.querySelectorAll('button')) {
+    expect(button.querySelector('svg')).not.toBeNull()
+  }
+})
+
 it('uses ribbon groups for per-item settings and Review, with no duplicate task or comment list', async () => {
   await mount(false)
   expect(findTab('Review')).toBeDefined()
@@ -233,7 +274,7 @@ it('uses ribbon groups for per-item settings and Review, with no duplicate task 
   const review = container.querySelector<HTMLElement>('[aria-label="Comment tools"]')!
   expect(review.classList.contains('super-toolbar-group')).toBe(true)
   expect(review.closest('[role="toolbar"]')).not.toBeNull()
-  expect(review.querySelectorAll('button')).toHaveLength(3)
+  expect(review.querySelectorAll('button')).toHaveLength(4)
   expect(container.querySelector('[aria-label="Comment draft"]')).toBeNull()
   await clickTab('Home')
   expect(container.querySelector('[aria-label="Comment tools"]')).toBeNull()

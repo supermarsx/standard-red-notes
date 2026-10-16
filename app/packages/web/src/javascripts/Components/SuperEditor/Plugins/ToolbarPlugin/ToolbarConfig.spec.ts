@@ -18,6 +18,7 @@ import {
   normalizeToolbarConfig,
   ToolbarButtonId,
   ToolbarGroupId,
+  groupsBySuperGroup,
 } from './ToolbarConfig'
 
 const groupIds = (groups: { id: ToolbarGroupId }[]) => groups.map((g) => g.id)
@@ -25,6 +26,15 @@ const allButtonIds = (groups: { buttons: { id: ToolbarButtonId }[] }[]) =>
   groups.flatMap((g) => g.buttons.map((b) => b.id))
 
 describe('applyToolbarConfig', () => {
+  it('assigns the complete table-of-contents group to Review rather than Insert', () => {
+    const tabs = groupsBySuperGroup(applyToolbarConfig(undefined))
+    expect(tabs.find((tab) => tab.id === 'review')?.groups.map((group) => group.id)).toEqual([
+      ToolbarGroupId.TableOfContents,
+    ])
+    expect(tabs.find((tab) => tab.id === 'insert')?.groups.map((group) => group.id)).not.toContain(
+      ToolbarGroupId.TableOfContents,
+    )
+  })
   it('groups table of contents navigation, insertion and formatting outside Selection', () => {
     const groups = applyToolbarConfig(undefined)
     expect(
@@ -161,18 +171,18 @@ describe('Insert-sections vanish guard (static source assertion)', () => {
   })
 })
 
-describe('Clipboard/history utility row (static source assertion)', () => {
+describe('Home history and clipboard actions (static source assertion)', () => {
   // The full ToolbarPlugin closes over live Lexical/editor state and is not a
   // practical jsdom mount target. Keep a source-level contract for the ribbon
-  // layout: clipboard + history live in the compact row above the tabs, and are
-  // filtered out of the tabbed Home groups so they do not render twice.
+  // layout: clipboard + history live in the compact Home row and are filtered
+  // out of the tabbed Home groups so they do not render twice.
   const source = readFileSync(join(__dirname, 'ToolbarPlugin.tsx'), 'utf8')
 
-  it('renders Cut, Copy, Paste, divider, Undo, Redo, divider, Print in that utility-row order', () => {
-    const utilityIds = source.match(/const TOOLBAR_UTILITY_BUTTON_IDS = \[([\s\S]*?)\] as const/)
+  it('renders Undo, Redo, Print, Cut, Copy and Paste in the Home row in that order', () => {
+    const utilityIds = source.match(/const HOME_PRIMARY_BUTTON_IDS = \[([\s\S]*?)\] as const/)
     expect(utilityIds).toBeTruthy()
     expect(utilityIds![1]).toMatch(
-      /ToolbarButtonId\.Cut[\s\S]*ToolbarButtonId\.Copy[\s\S]*ToolbarButtonId\.Paste[\s\S]*ToolbarButtonId\.Divider[\s\S]*ToolbarButtonId\.Undo[\s\S]*ToolbarButtonId\.Redo[\s\S]*ToolbarButtonId\.Divider[\s\S]*ToolbarButtonId\.Print/,
+      /ToolbarButtonId\.Undo[\s\S]*ToolbarButtonId\.Redo[\s\S]*ToolbarButtonId\.Print[\s\S]*ToolbarButtonId\.Cut[\s\S]*ToolbarButtonId\.Copy[\s\S]*ToolbarButtonId\.Paste/,
     )
   })
 
@@ -187,9 +197,9 @@ describe('Clipboard/history utility row (static source assertion)', () => {
     expect(source).toContain('printActiveNote({ noteUuid: activeNoteUuid })')
   })
 
-  it('places the utility row before the ribbon tabs and gives it its own toolbar store', () => {
+  it('places AI tools after the ribbon tabs and gives them their own toolbar store', () => {
     expect(source).toContain('store={utilityToolbarStore}')
-    expect(source.indexOf('store={utilityToolbarStore}')).toBeLessThan(source.indexOf('super-toolbar-tabs'))
+    expect(source.indexOf('store={utilityToolbarStore}')).toBeGreaterThan(source.indexOf('super-toolbar-tabs'))
   })
 
   it('filters Clipboard and History out of the tabbed ribbon groups', () => {

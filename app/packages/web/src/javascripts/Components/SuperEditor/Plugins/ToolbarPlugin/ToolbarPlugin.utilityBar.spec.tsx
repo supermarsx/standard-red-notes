@@ -27,6 +27,10 @@ import { BlocksEditorComposer } from '../../BlocksEditorComposer'
 import ToolbarPlugin from './ToolbarPlugin'
 import ApplicationProvider from '@/Components/ApplicationProvider'
 import AndroidBackHandlerProvider from '@/NativeMobileWeb/useAndroidBackHandler'
+jest.mock('./AssistantChangesToolbar', () => ({
+  __esModule: true,
+  default: () => <button aria-label="AI changes">AI changes</button>,
+}))
 
 // Desktop layout; `alwaysShowToolbar` (below) then docks the full ribbon.
 jest.mock('@/Hooks/useMediaQuery', () => ({
@@ -103,7 +107,7 @@ const mount = async () => {
 }
 
 const utilityBar = () => container.querySelector('[data-super-toolbar-utility-bar]')
-const clipboardTools = () => container.querySelector('[aria-label="Clipboard and history tools"]')
+const clipboardTools = () => container.querySelector('[aria-label="AI change tools"]')
 const tabStrip = () => container.querySelector('[role="tablist"]')
 const tabLabels = () => Array.from(container.querySelectorAll('[role="tab"]')).map((tab) => tab.textContent?.trim())
 const group = (label: string) => container.querySelector(`[role="group"][aria-label="${label}"]`)
@@ -126,7 +130,7 @@ describe('the merged clipboard + formatting-tabs bar', () => {
     expect(container.querySelectorAll('[role="tablist"]')).toHaveLength(1)
   })
 
-  it('keeps history in the utility bar and places compact clipboard actions before Smart Checklist on Home only', async () => {
+  it('places compact history then clipboard actions before Smart Checklist on Home only', async () => {
     await mount()
     const tools = clipboardTools()
     expect(tools).not.toBeNull()
@@ -136,7 +140,7 @@ describe('the merged clipboard + formatting-tabs bar', () => {
     expect(text).not.toContain('cut')
     expect(text).not.toContain('copy')
     expect(text).not.toContain('paste')
-    expect(tools!.querySelectorAll('[role="separator"]')).toHaveLength(1)
+    expect(tools!.querySelectorAll('[role="separator"]')).toHaveLength(0)
     const block = group('Block style')!
     const clipboard = ['cut', 'copy', 'paste'].map((label) =>
       block.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!,
@@ -145,7 +149,12 @@ describe('the merged clipboard + formatting-tabs bar', () => {
     // Each split button keeps its dropdown immediately after its icon action.
     const firstRow = clipboard[0].parentElement!.parentElement!
     const labels = [...firstRow.querySelectorAll('button')].map((button) => button.getAttribute('aria-label'))
-    expect(labels.slice(0, 6)).toEqual([
+    expect(labels.slice(0, 11)).toEqual([
+      'undo',
+      'undoHistory',
+      'redo',
+      'redoHistory',
+      'Print',
       'cut',
       'moreCutOptions',
       'copy',
@@ -153,7 +162,8 @@ describe('the merged clipboard + formatting-tabs bar', () => {
       'paste',
       'morePasteOptions',
     ])
-    expect(firstRow.querySelectorAll('button')[6]?.getAttribute('aria-label')).toBe('smartChecklist')
+    expect(firstRow.querySelectorAll('button')[11]?.getAttribute('aria-label')).toBe('smartChecklist')
+    expect(firstRow.classList.contains('flex-wrap')).toBe(true)
     for (const button of clipboard) {
       expect(button.querySelector('.sr-only')).not.toBeNull()
     }
@@ -161,19 +171,24 @@ describe('the merged clipboard + formatting-tabs bar', () => {
     expect(container.querySelector('button[aria-label="cut"]')).toBeNull()
     expect(container.querySelector('button[aria-label="copy"]')).toBeNull()
     expect(container.querySelector('button[aria-label="paste"]')).toBeNull()
+    expect(container.querySelector('button[aria-label="undo"]')).toBeNull()
+    expect(container.querySelector('button[aria-label="redo"]')).toBeNull()
+    expect(container.querySelector('button[aria-label="Print"]')).toBeNull()
     await clickTab('Home')
     expect(container.querySelectorAll('button[aria-label="cut"]')).toHaveLength(1)
   })
 
-  it('puts the formatting tabs in the same bar, after the actions', async () => {
+  it('places AI changes at the right end of the same bar, after formatting tabs', async () => {
     await mount()
     const strip = tabStrip()
     expect(strip).not.toBeNull()
     expect(utilityBar()!.contains(strip!)).toBe(true)
 
     // One bar, not a separate row: the tabs follow the actions in DOM order.
-    const position = clipboardTools()!.compareDocumentPosition(strip!)
+    const position = strip!.compareDocumentPosition(clipboardTools()!)
     expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(utilityBar()!.lastElementChild).toBe(clipboardTools())
+    expect(clipboardTools()!.querySelector('button[aria-label="AI changes"]')).not.toBeNull()
     // They are no longer pushed over by an auto margin — t111 centres the strip
     // using flexible siblings instead, and an auto margin would eat the free space
     // those siblings need. ToolbarPlugin.tabStripAlignment.spec.tsx owns that

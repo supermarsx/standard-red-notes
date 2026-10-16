@@ -476,12 +476,13 @@ const ToolbarSeparator = () => (
   <div aria-hidden className="bg-border mx-1 my-1 h-6 w-px flex-shrink-0 self-center" role="separator" />
 )
 
-const HOME_CLIPBOARD_BUTTON_IDS = [ToolbarButtonId.Cut, ToolbarButtonId.Copy, ToolbarButtonId.Paste] as const
-const TOOLBAR_UTILITY_BUTTON_IDS = [
+const HOME_PRIMARY_BUTTON_IDS = [
   ToolbarButtonId.Undo,
   ToolbarButtonId.Redo,
-  ToolbarButtonId.Divider,
   ToolbarButtonId.Print,
+  ToolbarButtonId.Cut,
+  ToolbarButtonId.Copy,
+  ToolbarButtonId.Paste,
 ] as const
 
 const TOOLBAR_UTILITY_GROUP_IDS: ReadonlySet<ToolbarGroupId> = new Set([
@@ -2245,6 +2246,7 @@ const ToolbarPlugin = ({
       <div className="flex flex-shrink-0 items-center" key="undo">
         <ToolbarButton
           name={t('undo')}
+          aria-label={t('undo')}
           iconName="undo"
           disabled={!canUndo}
           onSelect={() => editor.dispatchCommand(UNDO_COMMAND, undefined)}
@@ -2284,6 +2286,7 @@ const ToolbarPlugin = ({
       <div className="flex flex-shrink-0 items-center" key="redo">
         <ToolbarButton
           name={t('redo')}
+          aria-label={t('redo')}
           iconName="redo"
           disabled={!canRedo}
           onSelect={() => editor.dispatchCommand(REDO_COMMAND, undefined)}
@@ -2320,7 +2323,12 @@ const ToolbarPlugin = ({
       </div>
     ) : null,
     [ToolbarButtonId.Print]: canShowAllItems ? (
-      <ToolbarButton name="Print" iconName="print" onSelect={() => printActiveNote({ noteUuid: activeNoteUuid })} />
+      <ToolbarButton
+        name="Print"
+        aria-label="Print"
+        iconName="print"
+        onSelect={() => printActiveNote({ noteUuid: activeNoteUuid })}
+      />
     ) : null,
     [ToolbarButtonId.BlockStyle]: (
       <ToolbarButton
@@ -3457,7 +3465,9 @@ const ToolbarPlugin = ({
   // only for the non-ribbon floating selection toolbar, further below.)
   const hasContextualTab = canShowAllItems && !!effectiveContextualWidget && contextualButtons.length > 0
   const ribbonTabs = [
-    ...superGroupTabs.filter(() => isEditable).map((tab) => ({ id: tab.id as string, label: tab.label })),
+    ...superGroupTabs
+      .filter((tab) => isEditable && tab.id !== 'review')
+      .map((tab) => ({ id: tab.id as string, label: tab.label })),
     ...(note && isEditable ? [{ id: 'review', label: 'Review' }] : []),
     ...(hasContextualTab && isEditable ? [{ id: CONTEXTUAL_TAB_ID, label: effectiveContextualWidget!.label }] : []),
   ]
@@ -3465,6 +3475,7 @@ const ToolbarPlugin = ({
     activeTabId && ribbonTabs.some((tab) => tab.id === activeTabId) ? activeTabId : (ribbonTabs[0]?.id ?? null)
   const isContextualActive = effectiveTabId === CONTEXTUAL_TAB_ID
   const isReviewActive = effectiveTabId === 'review'
+  const reviewGroups = superGroupTabs.find((tab) => tab.id === 'review')?.groups ?? []
   const activeGroups =
     isContextualActive || isReviewActive
       ? []
@@ -3476,6 +3487,8 @@ const ToolbarPlugin = ({
       setIsCutMenuOpen(false)
       setIsCopyMenuOpen(false)
       setIsPasteMenuOpen(false)
+      setIsUndoMenuOpen(false)
+      setIsRedoMenuOpen(false)
     }
   }, [effectiveTabId])
 
@@ -3771,103 +3784,32 @@ const ToolbarPlugin = ({
           />
         )}
         <div className="border-border flex w-full flex-shrink-0 flex-col border-t md:border-0">
-          {/* Standard Red Notes: the clipboard/history utility actions and the
-              Office-ribbon tab strip share ONE bar — actions on the left, the
-              formatting tabs centred — instead of stacking two full-width bands
-              above the ribbon. Nothing moved into an overflow: both halves are
-              still always rendered, and if the pane gets too narrow it is the
-              utility half that scrolls, so the tabs (the only way to reach the
-              other formatting groups) can never be pushed out of reach.
-
-              The tab strip is CENTRED rather than right-aligned, because the tabs
-              are a frequent target and the right edge of a wide editor is a long
-              mouse trip from the text. Centring is done with two symmetric
-              flexible siblings — the utility Toolbar (flex-1, basis 0) on the
-              left and an empty spacer (flex-1, basis 0) on the right — so the
-              strip sits on the bar's true centre line, not merely centred in the
-              space the utility actions leave over. Auto margins cannot do this
-              (they consume free space BEFORE flex-grow, which is exactly how the
-              strip used to end up hard right).
-
-              When the bar is narrow there is no room to spend on a centring
-              spacer, so a container query hides it below 56rem and the strip goes
-              back to flush right with the whole bar left for the utility half —
-              i.e. precisely the previous behaviour, which is what a cramped bar
-              wants. Container query, not a measured width: jsdom has no layout
-              engine (every width reads 0) so a JS breakpoint would be
-              unverifiable in jest, and a width-measuring effect in this file is
-              the shape of bug that turns into "Maximum update depth exceeded".
-
-              NOTE for anyone moving the container class on the bar below, or the
-              narrow-bar fallback class on the spacer further down:
-              tailwind.config.js's `content` glob covers .tsx files under
-              src/javascripts ONLY, and Tailwind v4 generates a utility only when
-              it occurs LITERALLY in a scanned file. Moving either into a .ts
-              module, or assembling it by interpolation, silently produces no CSS
-              at all — the spacer then never hides and the strip never
-              right-aligns, with nothing in tsc and nothing in the DOM (the class
-              is still on the element!) to say so. Proven: with the fallback class
-              interpolated, `@container utility-bar (width < 56rem)` disappears
-              from the compiled stylesheet. Those two class names are deliberately
-              not repeated anywhere in this comment, so each className attribute
-              is the single occurrence the stylesheet depends on and the static
-              guard in ToolbarPlugin.tabStripAlignment.spec.tsx is really
-              guarding it. */}
+          {/* Centre the tabs between a leading spacer and the right-aligned AI
+              changes control. On narrow panes the spacer disappears, the tabs
+              scroll within their remaining width, and AI changes stays at the
+              right edge. Keep container-query classes literal for Tailwind. */}
           {canShowAllItems && (
             <div
               className="super-toolbar-utility-bar border-border @container/utility-bar flex w-full flex-nowrap items-center gap-2 border-b px-2 py-1"
               data-super-toolbar-utility-bar=""
             >
-              <Toolbar
-                // min-w-0 so this half is the one that gives way when the pane is
-                // tight. Its scrollbar is deliberately left visible: on a narrow
-                // pane Print or Redo can end up past the edge, and a silent
-                // scroller would make them unfindable — worth ~15px of bar.
-                //
-                // flex-1 (basis 0) makes it the left half of the pair that centres
-                // the tab strip: it and the trailing spacer grow equally, so the
-                // strip lands on the bar's centre line. Its own content stays
-                // left-aligned inside, and when the spacer is hidden on a narrow
-                // bar this simply takes all the slack, pushing the strip right.
-                className="super-toolbar flex min-w-0 flex-1 flex-nowrap items-center gap-0.5 overflow-x-auto"
-                store={utilityToolbarStore}
-                aria-label="Clipboard and history tools"
-                inert={!isEditable}
-                style={!isEditable ? { visibility: 'hidden' } : undefined}
-              >
-                {TOOLBAR_UTILITY_BUTTON_IDS.map((buttonId, index) => {
-                  if (buttonId === ToolbarButtonId.Divider) {
-                    const leftHasVisibleButton = TOOLBAR_UTILITY_BUTTON_IDS.slice(0, index).some(
-                      (id) => id !== ToolbarButtonId.Divider && visibleUtilityButtonIds.has(id),
-                    )
-                    const rightHasVisibleButton = TOOLBAR_UTILITY_BUTTON_IDS.slice(index + 1).some(
-                      (id) => id !== ToolbarButtonId.Divider && visibleUtilityButtonIds.has(id),
-                    )
-                    if (!leftHasVisibleButton || !rightHasVisibleButton) {
-                      return null
-                    }
-                    return <ToolbarSeparator key={`utility-divider-${index}`} />
-                  }
-                  if (!visibleUtilityButtonIds.has(buttonId)) {
-                    return null
-                  }
-                  return <Fragment key={buttonId}>{buttonRenderers[buttonId]}</Fragment>
-                })}
-                <AssistantChangesToolbar noteUuid={noteUuid} editor={activeEditor} />
-              </Toolbar>
               {(ribbonTabs.length > 1 || Boolean(note)) && (
                 <>
                   <div
-                    // flex-shrink-0 so the tabs keep their width and it is the
-                    // clipboard half that scrolls when the pane is tight; max-w-full
-                    // + overflow-x-auto is the last resort for a pane narrower than
-                    // the tab strip itself, so a tab can still never be unreachable.
+                    aria-hidden
+                    data-super-toolbar-tabs-spacer=""
+                    className="super-toolbar-tabs-spacer min-w-0 flex-1 @max-4xl/utility-bar:hidden"
+                  />
+                  <div
+                    // Keep tabs centered between equal flexible siblings on wide
+                    // panes; on narrow panes let tabs shrink and scroll while AI
+                    // actions stay at the right edge.
                     //
                     // Deliberately NO ml-auto: an auto margin consumes all the free
                     // space before flex-grow runs, which would starve the trailing
                     // spacer and pin the strip to the right again. Position is the
                     // two flexible siblings' job.
-                    className="super-toolbar-tabs flex max-w-full flex-shrink-0 items-center gap-1 overflow-x-auto"
+                    className="super-toolbar-tabs flex max-w-full min-w-0 flex-shrink-0 items-center gap-1 overflow-x-auto @max-4xl/utility-bar:shrink"
                     role="tablist"
                     aria-label="Formatting groups"
                   >
@@ -3897,21 +3839,17 @@ const ToolbarPlugin = ({
                       )
                     })}
                   </div>
-                  {/* The right half of the centring pair: an empty, purely
-                    presentational flexible box that mirrors the utility
-                    Toolbar's flex-1 so the tab strip above sits on the bar's
-                    centre line. Hidden below a 56rem bar (container query, see
-                    the bar comment), which hands all the slack back to the
-                    utility half and returns the strip to flush right. It is
-                    rendered inside the same condition as the strip, so a
-                    single-tab toolbar grows no stray box. */}
-                  <div
-                    aria-hidden
-                    data-super-toolbar-tabs-spacer=""
-                    className="super-toolbar-tabs-spacer min-w-0 flex-1 @max-4xl/utility-bar:hidden"
-                  />
                 </>
               )}
+              <Toolbar
+                className="super-toolbar flex min-w-0 flex-1 flex-nowrap items-center justify-end gap-0.5 overflow-x-auto @max-4xl/utility-bar:flex-none"
+                store={utilityToolbarStore}
+                aria-label="AI change tools"
+                inert={!isEditable}
+                style={!isEditable ? { visibility: 'hidden' } : undefined}
+              >
+                <AssistantChangesToolbar noteUuid={noteUuid} editor={activeEditor} />
+              </Toolbar>
             </div>
           )}
           <div
@@ -4023,9 +3961,9 @@ const ToolbarPlugin = ({
                             style={{ maxWidth: `min(100%, ${maximumWidth}px)` }}
                           >
                             <div className="flex flex-col items-stretch justify-center gap-1 md:min-h-[6.25rem]">
-                              {/* Clipboard actions stay in Home, immediately before Smart checklist. */}
-                              <div className="flex items-center gap-1.5">
-                                {HOME_CLIPBOARD_BUTTON_IDS.filter((id) => visibleUtilityButtonIds.has(id)).map((id) => (
+                              {/* History and clipboard actions share Home's compact first row. */}
+                              <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                                {HOME_PRIMARY_BUTTON_IDS.filter((id) => visibleUtilityButtonIds.has(id)).map((id) => (
                                   <Fragment key={id}>{buttonRenderers[id]}</Fragment>
                                 ))}
                                 <ToolbarButton
@@ -4104,7 +4042,16 @@ const ToolbarPlugin = ({
                               name={translateBlockName(entry.name, t)}
                               iconName={entry.iconName}
                               onSelect={() => entry.onSelect(editor, blockCatalogContext)}
-                            />
+                            >
+                              {section.id === 'lists' && (
+                                <>
+                                  <Icon type={entry.iconName} size="custom" className="super-toolbar-icon" />
+                                  <span className="ml-1.5 text-xs whitespace-nowrap">
+                                    {translateBlockName(entry.name, t)}
+                                  </span>
+                                </>
+                              )}
+                            </ToolbarButton>
                           ))
                           if (section.id === 'others') {
                             buttons.push(...actionButtons)
@@ -4253,10 +4200,34 @@ const ToolbarPlugin = ({
               <>
                 {isReviewActive && (
                   <Toolbar
-                    className="super-toolbar flex flex-grow items-center gap-1.5 px-1 pt-1 pb-1"
+                    className="super-toolbar flex flex-grow flex-wrap items-center gap-1.5 gap-y-1 px-1 pt-1 pb-1"
                     store={toolbarStore}
                   >
                     <ReviewTools note={note} />
+                    {reviewGroups.map((group) => (
+                      <div
+                        key={group.id}
+                        role="group"
+                        aria-label={group.label}
+                        className="super-toolbar-group bg-contrast flex flex-shrink-0 flex-col rounded-lg px-1 py-0.5"
+                      >
+                        <div className="flex flex-col items-start justify-center gap-0.5 md:min-h-[6.25rem]">
+                          {splitIntoRows(group.buttons, Math.min(3, Math.max(1, group.rows ?? 3))).map((row, index) => (
+                            <div key={index} className="flex items-center gap-0.5">
+                              {row.map((button) => (
+                                <Fragment key={button.id}>{buttonRenderers[button.id]}</Fragment>
+                              ))}
+                            </div>
+                          ))}
+                        </div>
+                        <span
+                          aria-hidden
+                          className="text-passive-1 mt-px hidden px-1 text-center text-[10px] leading-none font-medium tracking-wide whitespace-nowrap uppercase select-none md:block"
+                        >
+                          {group.caption ?? group.label}
+                        </span>
+                      </div>
+                    ))}
                   </Toolbar>
                 )}
               </>

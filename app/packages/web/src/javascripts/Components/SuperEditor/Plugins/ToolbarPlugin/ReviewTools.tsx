@@ -81,7 +81,7 @@ export function ReviewTools({ note }: { note: SNNote }) {
   return (
     <>
       <div role="group" aria-label="Comment tools" className={group}>
-        <div className="flex flex-col items-start justify-center gap-0.5 md:min-h-[6.25rem]">
+        <div className="grid grid-cols-1 items-start justify-items-start gap-x-1.5 gap-y-0.5 sm:grid-flow-col sm:grid-cols-none sm:grid-rows-3 md:min-h-[6.25rem]">
           <ToolbarButton name="Show comments" aria-label="Show comments" onSelect={() => controls.openComments()}>
             <ReviewActionLabel icon="comment" label="Show comments" />
           </ToolbarButton>
@@ -109,13 +109,6 @@ export function ReviewTools({ note }: { note: SNNote }) {
           >
             <ReviewActionLabel icon={indicators ? 'eye' : 'eye-off'} label="Comment indicators" />
           </ToolbarButton>
-        </div>
-        <span aria-hidden className={caption}>
-          Comments
-        </span>
-      </div>
-      <div role="group" aria-label="Remove comments" className={group}>
-        <div className="flex flex-col items-start justify-center gap-0.5 md:min-h-[6.25rem]">
           <ToolbarButton
             name="Purge my comments"
             aria-label="Purge my comments"
@@ -140,7 +133,7 @@ export function ReviewTools({ note }: { note: SNNote }) {
           )}
         </div>
         <span aria-hidden className={caption}>
-          Manage
+          Comments
         </span>
       </div>
       {error && (
