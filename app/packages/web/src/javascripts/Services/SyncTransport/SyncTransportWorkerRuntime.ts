@@ -50,7 +50,7 @@ import {
   utf8Bytes,
 } from './syncTransportProtocol'
 import {
-  IndexedDbSyncOutbox,
+  ConcurrentIndexedDbSyncOutbox,
   isSyncOutboxUnavailable,
   OWNER_LEASE_TTL_MS,
   SyncOutboxRecord,
@@ -766,7 +766,6 @@ export class SyncTransportWorkerRuntime {
   private protocolErrorCode?: string
 
   constructor(private readonly dependencies: SyncWorkerRuntimeDependencies) {
-    this.outbox = dependencies.outbox ?? new IndexedDbSyncOutbox()
     this.socketFactory =
       dependencies.socketFactory ??
       ((endpoint) => {
@@ -787,6 +786,7 @@ export class SyncTransportWorkerRuntime {
     this.cancelInterval = dependencies.clearInterval ?? globalThis.clearInterval.bind(globalThis)
     this.subtle = dependencies.subtle ?? crypto.subtle
     this.ownerId = this.uuid()
+    this.outbox = dependencies.outbox ?? new ConcurrentIndexedDbSyncOutbox(this.ownerId, this.now)
   }
 
   async handle(message: MainToSyncWorkerMessage): Promise<void> {

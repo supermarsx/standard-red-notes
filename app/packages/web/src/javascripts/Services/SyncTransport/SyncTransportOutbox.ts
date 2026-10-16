@@ -297,7 +297,7 @@ export class IndexedDbSyncOutbox implements SyncOutboxStore {
     this.databasePromise = undefined
   }
 
-  private database(): Promise<IDBDatabase> {
+  protected database(): Promise<IDBDatabase> {
     if (!this.factory) {
       return Promise.reject(new SyncOutboxUnavailableError('IndexedDB is unavailable'))
     }
@@ -356,5 +356,223 @@ export class IndexedDbSyncOutbox implements SyncOutboxStore {
     })
     this.databasePromise = pending
     return pending
+  }
+}
+
+/**
+ * Independent workers may hold independent sockets. Only a pending command,
+ * rather than the account's entire connection, needs an exclusive recovery owner.
+ *
+ * Keep the v2 schema: an upgrade would close an older worker's database. Namespace
+ * new rows instead, so an older build cannot mistake our live command for its own.
+ * Legacy rows stay in place and are recovered only after their owner releases or
+ * expires. Device IDs and exact command bytes never change during recovery.
+ */
+export class ConcurrentIndexedDbSyncOutbox extends IndexedDbSyncOutbox {
+  private readonly claims = new Map<string, string>()
+  private readonly prefix = 'parallel-v1:'
+
+  constructor(
+    private readonly workerId: string,
+    private readonly now: () => number = Date.now,
+    factory: IDBFactory | undefined = globalThis.indexedDB,
+  ) {
+    super(factory)
+  }
+
+  private storageSession(sessionScope: string): string {
+    return `${this.prefix}${sessionScope}`
+  }
+
+  private storageTransport(transportScope: string): string {
+    return transportScope.startsWith(this.prefix) ? transportScope : `${this.prefix}${this.workerId}|${transportScope}`
+  }
+
+  override async oldest(sessionScope: string): Promise<SyncOutboxRecord | undefined> {
+    const database = await this.database()
+    const transaction = database.transaction([COMMAND_STORE, LEASE_STORE], 'readwrite')
+    const commands = transaction.objectStore(COMMAND_STORE)
+    const leases = transaction.objectStore(LEASE_STORE)
+    const index = commands.index(SESSION_SCOPE_INDEX)
+    const [current, legacy, owners] = await Promise.all([
+      requestResult(index.getAll(this.storageSession(sessionScope))) as Promise<SyncOutboxRecord[]>,
+      requestResult(index.getAll(sessionScope)) as Promise<SyncOutboxRecord[]>,
+      requestResult(leases.getAll()) as Promise<OwnerLease[]>,
+    ])
+    const now = this.now()
+    const record = [...current, ...legacy]
+      .filter((candidate) => {
+        const owner = owners.find((lease) => lease.transportScope === candidate.transportScope)
+        return candidate.revoked !== true && (!owner || owner.expiresAt <= now || owner.ownerId === this.workerId)
+      })
+      .sort((a, b) => a.createdAt - b.createdAt || a.sequence - b.sequence)[0]
+    if (record) {
+      leases.put({
+        transportScope: record.transportScope,
+        sessionScope: record.sessionScope,
+        ownerId: this.workerId,
+        expiresAt: now + OWNER_LEASE_TTL_MS,
+      } satisfies OwnerLease)
+    }
+    await transactionDone(transaction)
+    if (record) {
+      this.claims.set(record.transportScope, record.sessionScope)
+      return { ...record, sessionScope }
+    }
+    return undefined
+  }
+
+  override async put(record: SyncOutboxRecord): Promise<void> {
+    const database = await this.database()
+    const transaction = database.transaction([COMMAND_STORE, LEASE_STORE], 'readwrite')
+    const commands = transaction.objectStore(COMMAND_STORE)
+    const leases = transaction.objectStore(LEASE_STORE)
+    const storageSession = this.storageSession(record.sessionScope)
+    const [current, legacy] = await Promise.all([
+      requestResult(commands.get([storageSession, record.commandId])) as Promise<SyncOutboxRecord | undefined>,
+      requestResult(commands.get([record.sessionScope, record.commandId])) as Promise<SyncOutboxRecord | undefined>,
+    ])
+    const existing = current ?? legacy
+    if (existing && (existing.digest !== record.digest || existing.bytes !== record.bytes || existing.revoked)) {
+      await transactionDone(transaction)
+      throw new Error('Pending sync command identity cannot be replaced')
+    }
+    const physical = {
+      ...record,
+      sessionScope: existing?.sessionScope ?? storageSession,
+      transportScope: existing?.transportScope ?? this.storageTransport(record.transportScope),
+    }
+    const owner = (await requestResult(leases.get(physical.transportScope))) as OwnerLease | undefined
+    if (owner && owner.ownerId !== this.workerId && owner.expiresAt > this.now()) {
+      await transactionDone(transaction)
+      throw new Error('Pending sync command belongs to another recovery worker')
+    }
+    leases.put({
+      transportScope: physical.transportScope,
+      sessionScope: physical.sessionScope,
+      ownerId: this.workerId,
+      expiresAt: this.now() + OWNER_LEASE_TTL_MS,
+    } satisfies OwnerLease)
+    commands.put(physical)
+    await transactionDone(transaction)
+    this.claims.set(physical.transportScope, physical.sessionScope)
+  }
+
+  override async delete(sessionScope: string, commandId: string): Promise<void> {
+    const database = await this.database()
+    const transaction = database.transaction([COMMAND_STORE, LEASE_STORE], 'readwrite')
+    const commands = transaction.objectStore(COMMAND_STORE)
+    const leases = transaction.objectStore(LEASE_STORE)
+    const records = await Promise.all([
+      requestResult(commands.get([this.storageSession(sessionScope), commandId])) as Promise<
+        SyncOutboxRecord | undefined
+      >,
+      requestResult(commands.get([sessionScope, commandId])) as Promise<SyncOutboxRecord | undefined>,
+    ])
+    for (const record of records) {
+      if (!record) {
+        continue
+      }
+      const owner = (await requestResult(leases.get(record.transportScope))) as OwnerLease | undefined
+      if (owner && owner.ownerId !== this.workerId && owner.expiresAt > this.now()) {
+        await transactionDone(transaction)
+        throw new Error('Pending sync command belongs to another recovery worker')
+      }
+    }
+    for (const record of records) {
+      if (record) {
+        commands.delete([record.sessionScope, commandId])
+      }
+    }
+    const released: string[] = []
+    for (const record of records) {
+      if (!record || record.transportScope.startsWith(`${this.prefix}${this.workerId}|`)) {
+        continue
+      }
+      const remaining = (await requestResult(
+        commands.index(SESSION_SCOPE_INDEX).getAll(record.sessionScope),
+      )) as SyncOutboxRecord[]
+      if (!remaining.some((candidate) => candidate.transportScope === record.transportScope && !candidate.revoked)) {
+        leases.delete(record.transportScope)
+        released.push(record.transportScope)
+      }
+    }
+    await transactionDone(transaction)
+    for (const scope of released) {
+      this.claims.delete(scope)
+    }
+  }
+
+  override async quarantineSessionScope(sessionScope: string): Promise<void> {
+    await super.quarantineSessionScope(this.storageSession(sessionScope))
+    await super.quarantineSessionScope(sessionScope)
+  }
+
+  override async sessionHeldByAnotherOwner(): Promise<boolean> {
+    // A live sibling owns its journal, not this worker's ability to connect.
+    return false
+  }
+
+  override heldByAnotherOwner(
+    transportScope: string,
+    sessionScope: string,
+    ownerId: string,
+    now: number,
+  ): Promise<boolean> {
+    return super.heldByAnotherOwner(
+      this.storageTransport(transportScope),
+      this.storageSession(sessionScope),
+      ownerId,
+      now,
+    )
+  }
+
+  override async acquireOwner(
+    transportScope: string,
+    sessionScope: string,
+    ownerId: string,
+    now: number,
+    ttlMs: number,
+  ): Promise<boolean> {
+    return super.acquireOwner(
+      this.storageTransport(transportScope),
+      this.storageSession(sessionScope),
+      ownerId,
+      now,
+      ttlMs,
+    )
+  }
+
+  override async renewOwner(
+    transportScope: string,
+    sessionScope: string,
+    ownerId: string,
+    now: number,
+    ttlMs: number,
+  ): Promise<OwnerRenewalOutcome> {
+    let outcome = await super.renewOwner(
+      this.storageTransport(transportScope),
+      this.storageSession(sessionScope),
+      ownerId,
+      now,
+      ttlMs,
+    )
+    for (const [scope, session] of this.claims) {
+      if (scope !== this.storageTransport(transportScope)) {
+        const adopted = await super.renewOwner(scope, session, ownerId, now, ttlMs)
+        if (adopted !== 'renewed') {
+          outcome = adopted
+        }
+      }
+    }
+    return outcome
+  }
+
+  override async releaseOwner(transportScope: string, sessionScope: string, ownerId: string): Promise<void> {
+    await super.releaseOwner(this.storageTransport(transportScope), this.storageSession(sessionScope), ownerId)
+    for (const [scope, session] of this.claims) {
+      await super.releaseOwner(scope, session, ownerId)
+    }
+    this.claims.clear()
   }
 }
