@@ -2,6 +2,12 @@ import { WebApplication } from '@/Application/WebApplication'
 import { getSelectionAIAvailability, runOneShotCompletion } from './selectionActions'
 import { runResearchModeForApplication } from './researchModeRunner'
 import { savePersonaSettings } from './personaSettings'
+import { gatherResearchWebEvidence } from './researchWebEvidence'
+
+jest.mock('./researchWebEvidence', () => ({
+  ...jest.requireActual('./researchWebEvidence'),
+  gatherResearchWebEvidence: jest.fn(),
+}))
 
 jest.mock('./selectionActions', () => ({
   getSelectionAIAvailability: jest.fn(),
@@ -53,6 +59,36 @@ describe('research mode application lifecycle', () => {
   beforeEach(() => {
     localStorage.clear()
     availabilityMock.mockReturnValue({ available: true })
+  })
+
+  it('gathers approved web evidence and supplies it to the report when requested', async () => {
+    const harness = createApplication()
+    jest.mocked(gatherResearchWebEvidence).mockResolvedValue({
+      status: 'retrieved',
+      sources: [{ title: 'Source', url: 'https://example.com/source', text: 'Retrieved facts' }],
+    })
+    completionMock.mockResolvedValue('# Report\n\nFacts [W1]')
+    const run = await runResearchModeForApplication(harness.application, 'topic', { webAccess: true })
+    expect(gatherResearchWebEvidence).toHaveBeenCalledWith(harness.application, 'topic', {
+      signal: undefined,
+      isCurrent: expect.any(Function),
+    })
+    expect(completionMock.mock.calls.at(-1)![2]).toContain('Retrieved facts')
+    expect(run!.result.body).toContain('https://example.com/source')
+  })
+
+  it('does not call the model or create a note after account changes during web evidence gathering', async () => {
+    const harness = createApplication()
+    const callsBefore = completionMock.mock.calls.length
+    jest.mocked(gatherResearchWebEvidence).mockImplementationOnce(async () => {
+      harness.setUserUuid('account-b')
+      return { status: 'retrieved', sources: [] }
+    })
+    await expect(runResearchModeForApplication(harness.application, 'topic', { webAccess: true })).rejects.toThrow(
+      'active account changed',
+    )
+    expect(completionMock.mock.calls).toHaveLength(callsBefore)
+    expect(harness.insertItem).not.toHaveBeenCalled()
   })
 
   it('accepts a refreshed User object for the same stable account', async () => {

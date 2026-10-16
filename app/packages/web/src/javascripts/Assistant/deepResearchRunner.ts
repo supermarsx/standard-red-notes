@@ -7,17 +7,17 @@
 // as the assistant context source), and (4) the pure bounded loop in
 // deepResearch.ts.
 //
-// Honest scope: this researches the user's OWN NOTES only — there is no web-search
-// tool in this client. It is a bounded agentic loop (capped rounds / notes /
-// snippet length), not unlimited research. The mode is always present in the
-// assistant and degrades gracefully when no provider is configured.
+// Optional public-web evidence uses the existing authenticated server tools,
+// with explicit approval before each query/page. Local note excerpts never
+// become search queries. Both corpora are bounded before provider synthesis.
 
-import { ContentType, SNNote, isNote } from '@standardnotes/snjs'
+import { ContentType, SNNote, isNote, isLitePayload } from '@standardnotes/snjs'
 import { WebApplication } from '@/Application/WebApplication'
 import { extractPlaintextFromNoteText } from '@/Utils/NoteStats'
 import { getSelectionAIAvailability, runOneShotCompletion } from './selectionActions'
 import { DeepResearchOptions, DeepResearchReport, ResearchNote, runDeepResearch } from './deepResearch'
 import { assistantSessionPrincipalMatches, captureAssistantSessionPrincipal } from './assistantSessionPrincipal'
+import { gatherResearchWebEvidence, ResearchWebOptions } from './researchWebEvidence'
 
 export interface DeepResearchAvailability {
   /** Whether a deep-research run can start right now. */
@@ -39,10 +39,21 @@ export function getDeepResearchAvailability(application: WebApplication): DeepRe
 }
 
 /** Collect the user's notes (decrypted, plain text) as the research corpus. */
+function readableNote(application: WebApplication, note: SNNote): boolean {
+  if (!isNote(note) || note.trashed || note.locked || isLitePayload(note.payload)) {
+    return false
+  }
+  try {
+    return typeof application.isAuthorizedToRenderItem === 'function' && application.isAuthorizedToRenderItem(note)
+  } catch {
+    return false
+  }
+}
+
 function buildCorpus(application: WebApplication): ResearchNote[] {
   return application.items
     .getItems<SNNote>(ContentType.TYPES.Note)
-    .filter((note) => isNote(note) && !note.trashed)
+    .filter((note) => readableNote(application, note))
     .map((note) => ({
       uuid: note.uuid,
       title: note.title,
@@ -58,7 +69,10 @@ function buildCorpus(application: WebApplication): ResearchNote[] {
 export async function runDeepResearchForApplication(
   application: WebApplication,
   question: string,
-  options: Pick<DeepResearchOptions, 'limits' | 'onProgress' | 'signal'> = {},
+  options: Pick<DeepResearchOptions, 'limits' | 'onProgress' | 'signal'> & {
+    includeWeb?: boolean
+    requestConfirmation?: ResearchWebOptions['requestConfirmation']
+  } = {},
 ): Promise<DeepResearchReport | null> {
   if (!getDeepResearchAvailability(application).available) {
     return null
@@ -73,25 +87,48 @@ export async function runDeepResearchForApplication(
     !options.signal?.aborted &&
     assistantSessionPrincipalMatches(principal, captureAssistantSessionPrincipal(application.sessions))
 
+  let corpus: ResearchNote[] = []
+  const assertCurrentReadAccess = () => {
+    if (!principalIsCurrent()) {
+      throw new Error('Deep research stopped because the active account changed.')
+    }
+    if (corpus.length) {
+      const live = new Map(application.items.getItems<SNNote>(ContentType.TYPES.Note).map((note) => [note.uuid, note]))
+      if (corpus.some((snapshot) => !live.has(snapshot.uuid) || !readableNote(application, live.get(snapshot.uuid)!))) {
+        throw new Error('Deep research stopped because access to its source notes changed.')
+      }
+    }
+  }
   const complete = async (system: string, user: string) => {
-    if (!principalIsCurrent()) {
-      throw new Error('Deep research stopped because the active account changed.')
-    }
+    assertCurrentReadAccess()
     const response = await runOneShotCompletion(application, system, user, { signal: options.signal })
-    if (!principalIsCurrent()) {
-      throw new Error('Deep research stopped because the active account changed.')
-    }
+    assertCurrentReadAccess()
     return response
   }
 
-  const corpus = buildCorpus(application)
+  const webEvidence = options.includeWeb
+    ? await (async () => {
+        options.onProgress?.({ kind: 'searching-web' })
+        return gatherResearchWebEvidence(application, question, {
+          signal: options.signal,
+          isCurrent: principalIsCurrent,
+          requestConfirmation: options.requestConfirmation,
+        })
+      })()
+    : undefined
+  if (!principalIsCurrent()) {
+    return null
+  }
+  corpus = buildCorpus(application)
   const report = await runDeepResearch(question, corpus, complete, {
     limits: options.limits,
     onProgress: options.onProgress,
     signal: options.signal,
+    webEvidence,
   })
   if (!principalIsCurrent()) {
     return null
   }
+  assertCurrentReadAccess()
   return report
 }

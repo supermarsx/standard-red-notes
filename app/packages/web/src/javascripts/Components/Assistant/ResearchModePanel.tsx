@@ -18,9 +18,10 @@ type Props = {
   application: WebApplication
   /** Close the panel and return to the chat. */
   onClose: () => void
+  onTopicChange?: (topic: string) => void
 }
 
-function ResearchModePanelImpl({ application, onClose }: Props) {
+function ResearchModePanelImpl({ application, onClose, onTopicChange }: Props) {
   const { presentPane } = useResponsiveAppPane()
 
   const [topic, setTopic] = useState('')
@@ -80,6 +81,7 @@ function ResearchModePanelImpl({ application, onClose }: Props) {
     if (!trimmed || isRunning || abortRef.current) {
       return
     }
+    onTopicChange?.(trimmed)
     setError(null)
     setResult(null)
     setCreatedNoteUuid(null)
@@ -88,7 +90,10 @@ function ResearchModePanelImpl({ application, onClose }: Props) {
     abortRef.current = controller
     runPrincipalRef.current = captureAssistantSessionPrincipal(application.sessions)
     try {
-      const run = await runResearchModeForApplication(application, trimmed, { signal: controller.signal })
+      const run = await runResearchModeForApplication(application, trimmed, {
+        signal: controller.signal,
+        webAccess: true,
+      })
       if (!mountedRef.current || controller.signal.aborted) {
         return
       }
@@ -111,7 +116,7 @@ function ResearchModePanelImpl({ application, onClose }: Props) {
         }
       }
     }
-  }, [application, topic, isRunning])
+  }, [application, topic, isRunning, onTopicChange])
 
   const stop = useCallback(() => {
     abortRef.current?.abort()
@@ -144,10 +149,10 @@ function ResearchModePanelImpl({ application, onClose }: Props) {
 
       <div className="flex-grow overflow-y-auto px-4 py-3">
         <div className="border-warning bg-warning-faded text-warning rounded border border-solid p-3 text-sm">
-          Research mode writes a structured note on your topic using the AI model&rsquo;s own knowledge.{' '}
-          <strong>There is no live web access here</strong>, so the result can be outdated or wrong and any sources are
-          the model&rsquo;s recollections — they must be independently verified. The note it creates includes this
-          warning at the bottom.
+          Research mode searches through your server&rsquo;s configured web service, then reads up to three pages. Each
+          search query and page URL asks for approval before leaving end-to-end encryption. Retrieved text is sent to
+          your AI provider; your notes are not used as search queries. The report links the pages actually retrieved and
+          states when web access was unavailable or declined. Verify important claims against those sources.
         </div>
 
         {!availability.available && (
@@ -165,7 +170,10 @@ function ResearchModePanelImpl({ application, onClose }: Props) {
           placeholder="e.g. An overview of the CRISPR-Cas9 mechanism"
           value={topic}
           disabled={isRunning || !availability.available}
-          onChange={(event) => setTopic(event.target.value)}
+          onChange={(event) => {
+            setTopic(event.target.value)
+            onTopicChange?.(event.target.value)
+          }}
         />
 
         <div className="mt-2 flex items-center gap-2">

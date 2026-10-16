@@ -1,15 +1,7 @@
 // Application-wired entry point for AI RESEARCH MODE.
 //
-// Ties together: (1) the existing assistant provider availability check +
-// one-shot completion primitive (the SAME
-// provider the rest of the assistant uses — no new provider, no web access), and
-// (3) the pure research pass in researchMode.ts, then creates and opens a note
-// with the resulting structured report.
-//
-// Honest scope: there is NO web-search tool in this client, so the report is
-// written from the model's training data and carries a mandatory "verify this"
-// disclaimer (appended in researchMode.ts, not by the model). getResearchModeAvailability
-// reports why the feature is unavailable so the UI can disable it cleanly.
+// Uses the existing provider, optional approved server-mediated web evidence,
+// and the pure report assembly, then creates a note on the initiating account.
 
 import { ContentType, NoteContent, SNNote } from '@standardnotes/snjs'
 import { WebApplication } from '@/Application/WebApplication'
@@ -17,6 +9,7 @@ import { getSelectionAIAvailability, runOneShotCompletion } from './selectionAct
 import { runResearchMode, ResearchModeOptions, ResearchModeResult } from './researchMode'
 import { assistantSessionPrincipalMatches, captureAssistantSessionPrincipal } from './assistantSessionPrincipal'
 import { getAssistantAccountScope, getPersona } from './personaSettings'
+import { gatherResearchWebEvidence } from './researchWebEvidence'
 
 export interface ResearchModeAvailability {
   /** Whether a research run can start right now. */
@@ -53,7 +46,7 @@ export interface ResearchModeRunResult {
 export async function runResearchModeForApplication(
   application: WebApplication,
   topic: string,
-  options: ResearchModeOptions = {},
+  options: ResearchModeOptions & { webAccess?: boolean } = {},
 ): Promise<ResearchModeRunResult | null> {
   if (!getResearchModeAvailability(application).available) {
     return null
@@ -81,7 +74,10 @@ export async function runResearchModeForApplication(
     return response
   }
 
-  const result = await runResearchMode(topic, complete, { ...options, persona })
+  const webEvidence = options.webAccess
+    ? await gatherResearchWebEvidence(application, topic, { signal: options.signal, isCurrent: principalIsCurrent })
+    : undefined
+  const result = await runResearchMode(topic, complete, { ...options, persona, webEvidence })
   if (!result || !principalIsCurrent()) {
     return null
   }

@@ -19,10 +19,13 @@ type Props = {
   application: WebApplication
   /** Close the panel and return to the chat. */
   onClose: () => void
+  onTopicChange?: (topic: string) => void
 }
 
 const progressLabel = (progress: DeepResearchProgress): string => {
   switch (progress.kind) {
+    case 'searching-web':
+      return 'Searching and reading approved web sources…'
     case 'searching':
       return 'Searching your notes…'
     case 'reading':
@@ -34,11 +37,12 @@ const progressLabel = (progress: DeepResearchProgress): string => {
   }
 }
 
-function DeepResearchPanelImpl({ application, onClose }: Props) {
+function DeepResearchPanelImpl({ application, onClose, onTopicChange }: Props) {
   const { presentPane } = useResponsiveAppPane()
 
   const [question, setQuestion] = useState('')
   const [isRunning, setIsRunning] = useState(false)
+  const [includeWeb, setIncludeWeb] = useState(true)
   const [progress, setProgress] = useState<DeepResearchProgress | null>(null)
   const [report, setReport] = useState<DeepResearchReport | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -103,6 +107,7 @@ function DeepResearchPanelImpl({ application, onClose }: Props) {
     try {
       const result = await runDeepResearchForApplication(application, trimmed, {
         signal: controller.signal,
+        includeWeb,
         onProgress: (phase) => {
           if (mountedRef.current && !controller.signal.aborted) {
             setProgress(phase)
@@ -131,7 +136,7 @@ function DeepResearchPanelImpl({ application, onClose }: Props) {
         }
       }
     }
-  }, [application, question, isRunning])
+  }, [application, question, isRunning, includeWeb])
 
   const stop = useCallback(() => {
     abortRef.current?.abort()
@@ -166,8 +171,9 @@ function DeepResearchPanelImpl({ application, onClose }: Props) {
         <div className="border-warning bg-warning-faded text-warning rounded border border-solid p-3 text-sm">
           Deep research reads several of your notes and sends those excerpts to your AI provider across multiple steps —
           more exposure than a single question. It is a bounded loop (≤ {DEFAULT_DEEP_RESEARCH_LIMITS.maxRounds} rounds,
-          ≤ {DEFAULT_DEEP_RESEARCH_LIMITS.maxNotes} notes, truncated snippets) over your OWN notes only — there is no
-          web search here.
+          ≤ {DEFAULT_DEEP_RESEARCH_LIMITS.maxNotes} notes, truncated snippets). Optional web research asks for approval
+          before sending your question to the server’s search service or reading each page. Retrieved text also goes to
+          your AI provider.
         </div>
 
         {!availability.available && (
@@ -185,9 +191,21 @@ function DeepResearchPanelImpl({ application, onClose }: Props) {
           placeholder="e.g. What have I noted about our pricing strategy?"
           value={question}
           disabled={isRunning || !availability.available}
-          onChange={(event) => setQuestion(event.target.value)}
+          onChange={(event) => {
+            setQuestion(event.target.value)
+            onTopicChange?.(event.target.value)
+          }}
         />
 
+        <label className="mt-2 flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={includeWeb}
+            disabled={isRunning}
+            onChange={(event) => setIncludeWeb(event.target.checked)}
+          />
+          Include approved web sources
+        </label>
         <div className="mt-2 flex items-center gap-2">
           {isRunning ? (
             <Button label="Stop" onClick={stop} />
@@ -235,6 +253,26 @@ function DeepResearchPanelImpl({ application, onClose }: Props) {
                 </ol>
               </div>
             )}
+
+            {report.webEvidence?.sources.length ? (
+              <div className="mt-3">
+                <div className="text-passive-1 mb-1 text-xs font-semibold">Retrieved web sources</div>
+                <ul className="flex flex-col gap-1 text-sm">
+                  {report.webEvidence.sources.map((source, index) => (
+                    <li key={source.url}>
+                      <a
+                        href={source.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-info hover:underline"
+                      >
+                        [W{index + 1}] {source.title || source.url}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
 
             <div
               className={classNames(
