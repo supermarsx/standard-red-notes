@@ -1,9 +1,12 @@
+import { IncomingMessage } from 'node:http'
+import { Socket } from 'node:net'
 import {
   ClientIpResolvable,
   DEFAULT_CLIENT_IP_HEADER,
   ORIGIN_IP_HEADER,
   parseClientIpHeaderName,
   resolveClientIp,
+  resolveWebSocketClientIp,
   stampResolvedClientIp,
 } from './ClientIp'
 
@@ -131,4 +134,35 @@ describe('stampResolvedClientIp', () => {
     expect(stampResolvedClientIp(request)).toBe('203.0.113.9')
     expect(request.headers[ORIGIN_IP_HEADER]).toBe('203.0.113.9')
   })
+})
+
+it('resolves websocket telemetry with the same trusted proxy chain and ignores forged forwarding on direct peers', () => {
+  const app = { get: () => (ip: string) => ip === '127.0.0.1' }
+  expect(
+    resolveWebSocketClientIp(
+      { socket: { remoteAddress: '127.0.0.1' }, headers: { 'x-forwarded-for': '198.51.100.5' } },
+      app,
+    ),
+  ).toBe('198.51.100.5')
+  expect(
+    resolveWebSocketClientIp(
+      { socket: { remoteAddress: '203.0.113.5' }, headers: { 'x-forwarded-for': '198.51.100.5' } },
+      app,
+    ),
+  ).toBe('203.0.113.5')
+  expect(
+    resolveWebSocketClientIp({
+      socket: { remoteAddress: '127.0.0.1' },
+      headers: { 'x-forwarded-for': '198.51.100.5' },
+    }),
+  ).toBe('127.0.0.1')
+})
+
+it('reads the inherited headers accessor of a real Node websocket upgrade request', () => {
+  const socket = new Socket()
+  const request = new IncomingMessage(socket)
+  request.headers = { 'x-real-ip': '198.51.100.9' }
+  expect(Object.hasOwn(request, 'headers')).toBe(false)
+  expect(resolveWebSocketClientIp(request, undefined, 'x-real-ip')).toBe('198.51.100.9')
+  socket.destroy()
 })

@@ -1,3 +1,9 @@
+import {
+  SYNC_PROTOCOL_VERSION,
+  SYNC_TRAFFIC_BOUNDS,
+  validSyncTrafficValue,
+  type SyncTrafficLimits,
+} from '@standard-red-notes/websocket-gateway'
 import { Request, Response } from 'express'
 import { inject, optional } from 'inversify'
 import { BaseHttpController, controller, httpDelete, httpGet, httpPost, httpPut } from 'inversify-express-utils'
@@ -49,7 +55,6 @@ import {
   TokenWindowUsage,
   WEEKLY_WINDOW_MS,
 } from '../../Service/Assistant/tokenMetering'
-import { SYNC_PROTOCOL_VERSION } from '@standard-red-notes/websocket-gateway'
 import { syncWebSocketAccessService } from '../../Service/Sync/SyncWebSocketAccessService'
 import { webSocketGatewayAccessService } from '../../Service/Sync/SyncWebSocketRuntime'
 import { SYNC_SERVER_OPERATIONS, syncGateDiagnostics } from '../../Service/Sync/SyncGateDiagnostics'
@@ -2097,6 +2102,28 @@ export class AdminController extends BaseHttpController {
         }
       }
 
+      if (security.websocketTraffic !== undefined) {
+        const values = security.websocketTraffic
+        if (!values || typeof values !== 'object' || Array.isArray(values)) {
+          return { error: 'security.websocketTraffic must be an object.' }
+        }
+        const entries = values as Record<string, unknown>
+        if (Object.keys(entries).some((key) => !Object.hasOwn(SYNC_TRAFFIC_BOUNDS, key))) {
+          return { error: 'Unknown websocket traffic setting.' }
+        }
+        patch.security = patch.security ?? {}
+        patch.security.websocketTraffic = {}
+        const target = patch.security.websocketTraffic as Record<string, number | null>
+        for (const key of Object.keys(entries) as Array<keyof SyncTrafficLimits>) {
+          const value = entries[key]
+          if (value !== null && !validSyncTrafficValue(key, value)) {
+            return { error: `security.websocketTraffic.${key} must be a bounded positive integer, or null to reset.` }
+          }
+          target[key] = value as number | null
+          changedSettings.push(`security.websocketTraffic.${key}`)
+        }
+      }
+
       // Standard Red Notes: RATE-LIMIT tier knobs. Enforced by the gateway itself
       // (RateLimitMiddleware reads the resolved config per request). enabled /
       // adaptiveEscalation are booleans; window/max knobs are bounded integers so
@@ -2615,6 +2642,13 @@ export class AdminController extends BaseHttpController {
       }
     }
 
+    let websocketTraffic = null
+    try {
+      websocketTraffic = (await this.serverSettingsResolver?.resolveWebSocketTrafficConfig()) ?? null
+    } catch {
+      /* Preserve the last runtime policy if overlay cannot be read. */
+    }
+
     let allow: string[] = []
     let block: string[] = []
     if (this.ipAccessListStore) {
@@ -2635,6 +2669,7 @@ export class AdminController extends BaseHttpController {
     response.json({
       available: this.ipAccessListStore !== undefined,
       config,
+      websocketTraffic,
       ipLists: { allow, block },
       metrics,
     })

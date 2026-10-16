@@ -1,3 +1,8 @@
+import {
+  resolveSyncTrafficLimits,
+  SYNC_TRAFFIC_ENV,
+  type SyncTrafficLimits,
+} from '@standard-red-notes/websocket-gateway'
 import { AssistantProviderConfig } from '../Assistant/providers/factory'
 import {
   EMAIL_DELIVERY_TLS_MODES,
@@ -541,7 +546,11 @@ export interface ServerSettingsView {
     }
     updateCheck: { url: string | null }
     nextcloudBackups: { enabled: boolean }
-    security: { proofOfWork: ResolvedProofOfWorkConfig; rateLimit: ResolvedRateLimitConfig }
+    security: {
+      proofOfWork: ResolvedProofOfWorkConfig
+      rateLimit: ResolvedRateLimitConfig
+      websocketTraffic: SyncTrafficLimits
+    }
     registration: ResolvedRegistrationConfig & {
       assignableRoles: string[]
       gatingModes: EmailConfirmationGatingMode[]
@@ -868,6 +877,11 @@ export class ServerSettingsResolver {
    * admin changes take effect without a restart. Integer knobs are clamped to
    * sane bounds so a bad value can never disable protection unexpectedly.
    */
+  async resolveWebSocketTrafficConfig(): Promise<SyncTrafficLimits> {
+    const overlay = (await this.safeRead()).security?.websocketTraffic ?? {}
+    return resolveSyncTrafficLimits(process.env, overlay)
+  }
+
   async resolveRateLimitConfig(): Promise<ResolvedRateLimitConfig> {
     const rl = (await this.safeRead()).security?.rateLimit ?? {}
     const env = this.envBaseline
@@ -1164,6 +1178,7 @@ export class ServerSettingsResolver {
     const proofOfWork = await this.resolveProofOfWorkConfig()
     const rl = persisted.security?.rateLimit ?? {}
     const rateLimit = await this.resolveRateLimitConfig()
+    const websocketTraffic = await this.resolveWebSocketTrafficConfig()
     const registration = persisted.registration ?? {}
     const registrationConfig = await this.resolveRegistrationConfig()
     const logging = persisted.logging ?? {}
@@ -1181,7 +1196,14 @@ export class ServerSettingsResolver {
     const plugins = persisted.plugins ?? {}
     const pluginsRepoUrl = await this.resolvePluginsRepoUrl()
     const pluginsSameOriginRendering = await this.resolvePluginsSameOriginRendering()
+    const websocketSources = Object.fromEntries(
+      (Object.keys(SYNC_TRAFFIC_ENV) as Array<keyof SyncTrafficLimits>).map((key) => [
+        `security.websocketTraffic.${key}`,
+        this.source(persisted.security?.websocketTraffic?.[key], process.env[SYNC_TRAFFIC_ENV[key]]),
+      ]),
+    )
     const sources: Record<string, ServerSettingSource> = {
+      ...websocketSources,
       'ai.anthropicApiKey': this.source(ai.anthropicApiKey, env.assistant.anthropicApiKey),
       'ai.openaiApiKey': this.source(ai.openaiApiKey, env.assistant.openaiApiKey),
       'ai.openaiBaseUrl': this.source(ai.openaiBaseUrl, env.assistant.openaiBaseURL),
@@ -1297,7 +1319,7 @@ export class ServerSettingsResolver {
         },
         updateCheck: { url: (await this.resolveUpdateCheckUrl()) ?? null },
         nextcloudBackups: { enabled: await this.resolveNextcloudBackupsEnabled() },
-        security: { proofOfWork, rateLimit },
+        security: { proofOfWork, rateLimit, websocketTraffic },
         registration: {
           ...registrationConfig,
           assignableRoles: REGISTRATION_ASSIGNABLE_ROLES,

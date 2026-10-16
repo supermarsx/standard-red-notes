@@ -35,6 +35,10 @@ export interface RecentThrottleEvent {
   ip: string
   method: string
   path: string
+  transport?: 'websocket'
+  reason?: 'rate-limited' | 'backpressure'
+  plane?: 'json' | 'files'
+  direction?: 'ingress' | 'egress'
 }
 
 export interface RateLimitMetricsView {
@@ -61,6 +65,9 @@ export class RateLimitMetricsStore {
         ip: event.ip,
         method: event.method,
         path: event.path,
+        ...(event.transport === 'websocket'
+          ? { transport: 'websocket', reason: event.reason, plane: event.plane, direction: event.direction }
+          : {}),
       })
       await this.redis.lpush(RL_METRICS_RECENT_KEY, line)
       await this.redis.ltrim(RL_METRICS_RECENT_KEY, 0, RL_METRICS_RECENT_MAX - 1)

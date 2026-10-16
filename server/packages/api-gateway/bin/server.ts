@@ -551,6 +551,18 @@ void container
     const gatewayLogger = createGatewayLoggerBridge(logger)
 
     const webSocketRuntime = new SyncWebSocketRuntime()
+    if (container.isBound(TYPES.ApiGateway_ServerSettingsResolver)) {
+      const trafficResolver = container.get<{
+        resolveWebSocketTrafficConfig(): Promise<import('@standard-red-notes/websocket-gateway').SyncTrafficLimits>
+      }>(TYPES.ApiGateway_ServerSettingsResolver)
+      const trafficMetrics = container.isBound(TYPES.ApiGateway_RateLimitMetricsStore)
+        ? container.get<RateLimitMetricsStore>(TYPES.ApiGateway_RateLimitMetricsStore)
+        : undefined
+      await webSocketRuntime.configureTrafficPolicy(
+        () => trafficResolver.resolveWebSocketTrafficConfig(),
+        trafficMetrics,
+      )
+    }
     let stopWebSocketGateway: (() => Promise<void>) | undefined
     let inviteEventAvailability: RedisInviteEventAvailabilityBus | undefined
     let inviteAvailabilityRedis:

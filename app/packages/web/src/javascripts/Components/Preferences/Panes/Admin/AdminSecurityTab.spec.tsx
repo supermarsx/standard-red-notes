@@ -27,6 +27,15 @@ jest.mock('@standardnotes/ui-services', () => ({
 import AdminSecurityTab from './AdminSecurityTab'
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
+const websocketTraffic = {
+  frameCapacity: 1024,
+  frameRefillPerSecond: 256,
+  byteCapacity: 33_554_432,
+  byteRefillPerSecond: 8_388_608,
+  maxQueuedFrames: 64,
+  maxQueuedBytes: 16_777_216,
+}
+
 const makeApplication = () => ({
   legacyApi: {
     adminGetRegistrationFlag: jest
@@ -48,10 +57,12 @@ const makeApplication = () => ({
           adaptiveEscalation: false,
         },
         ipLists: { allow: [], block: [] },
+        websocketTraffic,
         metrics: { tierHits: {}, blockHits: 0, recent: [] },
       },
     }),
     adminGetLockedAccounts: jest.fn().mockResolvedValue({ data: { available: true, accounts: [] } }),
+    adminSetServerSettings: jest.fn().mockResolvedValue({ data: { settings: { security: { websocketTraffic } } } }),
   },
 })
 
@@ -107,6 +118,108 @@ const clickSubtab = async (label: string) => {
     await Promise.resolve()
   })
 }
+
+const wsInput = (label: string) => container.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!
+const setNumber = async (input: HTMLInputElement, value: string) => {
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value)
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+}
+const clickButton = async (label: string) => {
+  const button = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === label)!
+  await act(async () => button.click())
+}
+
+describe('WebSocket traffic controls and throttle attribution', () => {
+  it('loads all reported rate, burst and queue limits and saves only their security patch', async () => {
+    const application = makeApplication()
+    await renderTab(application)
+    await clickSubtab('Anti-abuse & rate limits')
+    expect(wsInput('Frame rate (frames/sec)').value).toBe('256')
+    expect(wsInput('Frame burst capacity').value).toBe('1024')
+    expect(wsInput('Byte rate (bytes/sec)').value).toBe('8388608')
+    expect(wsInput('Byte burst capacity').value).toBe('33554432')
+    expect(wsInput('Maximum queued frames').value).toBe('64')
+    expect(wsInput('Maximum queued bytes').value).toBe('16777216')
+    await setNumber(wsInput('Frame burst capacity'), '2048')
+    await clickButton('Save WebSocket limits')
+    expect(application.legacyApi.adminSetServerSettings).toHaveBeenCalledWith({
+      security: { websocketTraffic: { ...websocketTraffic, frameCapacity: 2048 } },
+    })
+    expect(container.querySelector('[role="status"]')?.textContent).toContain('within five seconds')
+  })
+  it.each(['', '0', '1.5', '65537'])('refuses invalid burst capacity %s before sending settings', async (value) => {
+    const application = makeApplication()
+    await renderTab(application)
+    await clickSubtab('Anti-abuse & rate limits')
+    await setNumber(wsInput('Frame burst capacity'), value)
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('whole numbers')
+    await clickButton('Save WebSocket limits')
+    expect(application.legacyApi.adminSetServerSettings).not.toHaveBeenCalled()
+  })
+  it('resets only WebSocket overrides and applies effective values from the server', async () => {
+    const application = makeApplication()
+    await renderTab(application)
+    await clickSubtab('Anti-abuse & rate limits')
+    await clickButton('Reset WebSocket overrides')
+    expect(application.legacyApi.adminSetServerSettings).toHaveBeenCalledWith({
+      security: { websocketTraffic: Object.fromEntries(Object.keys(websocketTraffic).map((key) => [key, null])) },
+    })
+    expect(wsInput('Maximum queued frames').value).toBe('64')
+  })
+  it('does not fabricate limits on an older server or claim a rejected write succeeded', async () => {
+    const application = makeApplication()
+    const reply = await application.legacyApi.adminGetAntiAbuse()
+    application.legacyApi.adminGetAntiAbuse.mockResolvedValue({
+      ...reply,
+      data: { ...reply.data, websocketTraffic: undefined },
+    })
+    await renderTab(application)
+    await clickSubtab('Anti-abuse & rate limits')
+    expect(container.textContent).toContain('WebSocket traffic settings were not reported')
+    expect(wsInput('Frame burst capacity')).toBeNull()
+    application.legacyApi.adminGetAntiAbuse.mockResolvedValue(reply)
+    await clickButton('Refresh abuse activity')
+    application.legacyApi.adminSetServerSettings.mockResolvedValue({ error: { message: 'Forbidden' }, status: 403 })
+    await clickButton('Save WebSocket limits')
+    expect(container.textContent).toContain('Could not save the WebSocket traffic limits')
+    expect(container.querySelector('[role="status"]')).toBeNull()
+  })
+  it('labels socket rate and queue events THROTTLED separately from actual IP block counts', async () => {
+    const application = makeApplication()
+    const reply = await application.legacyApi.adminGetAntiAbuse()
+    application.legacyApi.adminGetAntiAbuse.mockResolvedValue({
+      ...reply,
+      data: {
+        ...reply.data,
+        metrics: {
+          blockHits: 3,
+          tierHits: { 'websocket-json-ingress': 5, login: 2 },
+          recent: [
+            {
+              at: 1000,
+              bucket: 'websocket-json-ingress',
+              ip: '198.51.100.2',
+              method: 'WS',
+              path: '/sockets/sync',
+              transport: 'websocket',
+              plane: 'json',
+              direction: 'ingress',
+              reason: 'rate-limited',
+            },
+          ],
+        },
+      },
+    })
+    await renderTab(application)
+    await clickSubtab('Anti-abuse & rate limits')
+    expect(container.textContent).toContain('WebSocket THROTTLED · websocket-json-ingress: 5')
+    expect(container.textContent).toContain('WebSocket THROTTLED · rate-limited · json · ingress')
+    expect(container.textContent).toContain('IP blocks: 3')
+    expect(container.textContent).not.toContain('BANNED')
+  })
+})
 
 describe('AdminSecurityTab — 4 subtabs mount with content (vanish guard)', () => {
   it('renders every subtab label', async () => {

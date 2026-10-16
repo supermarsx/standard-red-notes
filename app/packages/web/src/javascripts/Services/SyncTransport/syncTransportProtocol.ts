@@ -793,7 +793,7 @@ export const SYNC_FALLBACK_REASON_EXPLANATIONS: Record<SyncFallbackReason, strin
   'ack-timeout': 'The gateway did not acknowledge in time.',
   'server-kill': 'The gateway closed the socket deliberately.',
   'reconnect-gap': 'The socket was gone long enough that the session could not be resumed in place.',
-  backpressure: 'The client was sending faster than the socket could drain.',
+  backpressure: 'A socket send buffer or gateway queue reached its limit.',
   'outbox-unavailable': 'The local outbox database could not be opened, so no command can be journaled.',
   'multi-tab-not-owner': 'Another tab of this account holds the socket. Expected, and not a fault.',
   'worker-error': 'The sync worker itself failed.',

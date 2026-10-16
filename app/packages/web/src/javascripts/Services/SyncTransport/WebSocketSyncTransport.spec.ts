@@ -1,3 +1,4 @@
+import { ReadableStream as NodeReadableStream } from 'node:stream/web'
 import type { AccountSyncTransportRequest } from '@standardnotes/services'
 import type { HttpResponse, RawSyncResponse } from '@standardnotes/snjs'
 import { safeErrorLogMetadata } from '@standardnotes/utils'
@@ -1628,6 +1629,117 @@ describe('WebSocketSyncTransport', () => {
       body: { enabled: true },
       transport: 'websocket',
     })
+  })
+
+  it.each(['complete', 'cancel', 'owner-abort'] as const)(
+    'coalesces a sustained fast stream into bounded consumed-credit frames and cleans up on %s',
+    async (ending) => {
+      const originalStream = globalThis.ReadableStream
+      Object.defineProperty(globalThis, 'ReadableStream', {
+        configurable: true,
+        writable: true,
+        value: NodeReadableStream,
+      })
+      jest.useFakeTimers({ doNotFake: ['queueMicrotask', 'nextTick'] })
+      try {
+        const controller = new AbortController()
+        const transport = createTransport()
+        const result = transport.openAuthenticatedRpcStream({
+          method: 'POST',
+          path: '/v1/assistant/stream',
+          stream: true,
+          idempotencyKey: 'stream-credit',
+          signal: controller.signal,
+        })
+        await flush()
+        const open = worker.posts.find((message) => message.type === 'OPEN_RPC') as Extract<
+          MainToSyncWorkerMessage,
+          { type: 'OPEN_RPC' }
+        >
+        worker.emit({
+          type: 'RPC_RESPONSE',
+          clientRequestId: open.clientRequestId,
+          status: 200,
+          headers: {},
+          stream: true,
+        })
+        const reader = (await result).stream!.getReader()
+        for (let index = 0; index < 120; index++) {
+          worker.emit({ type: 'RPC_CHUNK', clientRequestId: open.clientRequestId, bytes: 'YQ==', byteLength: 1 })
+          expect((await reader.read()).value).toEqual(new Uint8Array([97]))
+          await jest.advanceTimersByTimeAsync(25)
+        }
+        const credits = () =>
+          worker.posts.filter(
+            (message): message is Extract<MainToSyncWorkerMessage, { type: 'RPC_CREDIT' }> =>
+              message.type === 'RPC_CREDIT',
+          )
+        expect(credits().length).toBeLessThanOrEqual(12)
+        expect(credits().length).toBeGreaterThan(0)
+        expect(credits().reduce((sum, message) => sum + message.creditBytes, 0)).toBeLessThanOrEqual(120)
+        if (ending === 'owner-abort') controller.abort()
+        else if (ending === 'cancel') await reader.cancel()
+        else worker.emit({ type: 'RPC_END', clientRequestId: open.clientRequestId })
+        const count = credits().length
+        await jest.advanceTimersByTimeAsync(1000)
+        expect(credits()).toHaveLength(count)
+        expect(jest.getTimerCount()).toBe(0)
+      } finally {
+        jest.useRealTimers()
+        Object.defineProperty(globalThis, 'ReadableStream', {
+          configurable: true,
+          writable: true,
+          value: originalStream,
+        })
+      }
+    },
+  )
+
+  it('returns a tiny consumed credit window immediately but never credits unread queued bytes', async () => {
+    const originalStream = globalThis.ReadableStream
+    Object.defineProperty(globalThis, 'ReadableStream', {
+      configurable: true,
+      writable: true,
+      value: NodeReadableStream,
+    })
+    jest.useFakeTimers({ doNotFake: ['queueMicrotask', 'nextTick'] })
+    try {
+      const transport = createTransport()
+      const result = transport.openAuthenticatedRpcStream({
+        method: 'POST',
+        path: '/v1/assistant/stream',
+        stream: true,
+        idempotencyKey: 'tiny-credit',
+        initialCreditBytes: 4,
+      })
+      await flush()
+      const open = worker.posts.find((message) => message.type === 'OPEN_RPC') as Extract<
+        MainToSyncWorkerMessage,
+        { type: 'OPEN_RPC' }
+      >
+      worker.emit({
+        type: 'RPC_RESPONSE',
+        clientRequestId: open.clientRequestId,
+        status: 200,
+        headers: {},
+        stream: true,
+      })
+      const stream = (await result).stream!
+      worker.emit({ type: 'RPC_CHUNK', clientRequestId: open.clientRequestId, bytes: 'YWJjZA==', byteLength: 4 })
+      await jest.advanceTimersByTimeAsync(1000)
+      expect(worker.posts.filter((message) => message.type === 'RPC_CREDIT')).toHaveLength(0)
+      const reader = stream.getReader()
+      await reader.read()
+      await flush()
+      expect(worker.posts.filter((message) => message.type === 'RPC_CREDIT')).toEqual([
+        { type: 'RPC_CREDIT', clientRequestId: open.clientRequestId, creditBytes: 4 },
+      ])
+      await reader.cancel()
+      expect(jest.getTimerCount()).toBe(0)
+    } finally {
+      jest.useRealTimers()
+      Object.defineProperty(globalThis, 'ReadableStream', { configurable: true, writable: true, value: originalStream })
+    }
   })
 
   it('acknowledges an invite batch only after authoritative application and checkpoint completion', async () => {

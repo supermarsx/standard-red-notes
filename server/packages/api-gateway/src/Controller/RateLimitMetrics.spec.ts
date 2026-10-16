@@ -39,6 +39,25 @@ const buildRedis = (): {
 }
 
 describe('RateLimitMetricsStore', () => {
+  it('records websocket pressure as throttle telemetry, never as blocked or banned', async () => {
+    const { redis } = buildRedis()
+    const store = new RateLimitMetricsStore(redis)
+    await store.recordThrottle({
+      bucket: 'websocket-json-ingress',
+      method: 'WS',
+      path: '/sockets/sync',
+      ip: '127.0.0.1',
+      transport: 'websocket',
+      reason: 'rate-limited',
+      plane: 'json',
+      direction: 'ingress',
+      at: 123,
+    })
+    const view = await store.view()
+    expect(view.tierHits).toEqual({ 'websocket-json-ingress': 1 })
+    expect(view.blockHits).toBe(0)
+    expect(view.recent).toEqual([expect.objectContaining({ transport: 'websocket', reason: 'rate-limited', at: 123 })])
+  })
   it('records a throttle into the tier hash + recent ring', async () => {
     const { redis, hashes, lists } = buildRedis()
     const store = new RateLimitMetricsStore(redis)

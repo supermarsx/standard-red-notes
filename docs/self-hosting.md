@@ -225,6 +225,43 @@ request caps), and the optional MCP bridge (`STANDARD_RED_NOTES_*`). See
 `.env.example` for the full list and [Operations hardening](operations-hardening.md)
 for the database, Redis, operation-limit, and image-pinning model.
 
+**WebSocket traffic and Admin Abuse.** Admin → Abuse exposes six persisted
+WebSocket traffic settings. A saved override applies to existing and new sync
+sockets within five seconds; resetting a field restores its environment baseline.
+The high-flow defaults are recommended for ordinary self-hosted use:
+
+| Environment baseline | Default | Meaning, per sync socket |
+| --- | ---: | --- |
+| `WEBSOCKET_SYNC_INGRESS_FRAME_BURST` | 1024 | JSON frames in one burst |
+| `WEBSOCKET_SYNC_INGRESS_FRAMES_PER_SECOND` | 256 | Sustained JSON frames/second |
+| `WEBSOCKET_SYNC_INGRESS_BYTE_BURST` | 33554432 | 32 MiB raw JSON burst |
+| `WEBSOCKET_SYNC_INGRESS_BYTES_PER_SECOND` | 8388608 | 8 MiB/second sustained JSON |
+| `WEBSOCKET_SYNC_QUEUE_FRAMES` | 64 | Unprocessed frames retained per socket |
+| `WEBSOCKET_SYNC_QUEUE_BYTES` | 16777216 | 16 MiB unprocessed raw JSON retained |
+
+All JSON lanes share that socket budget: note commands, API calls, assistant
+stream credit/control frames, invitations and keepalives. They are not six
+separate allowances and are not account-wide bans. Other devices have their own
+socket budgets. Assistant response credits are coalesced over 250 ms, or at a
+64 KiB/half-window threshold, so each small response chunk does not create a
+separate upstream frame. Slow consumers still receive only bounded byte credit.
+
+The 512 KiB individual JSON-frame cap and authenticated operation/session checks
+remain. FILES_V1 binary uploads retain their separate 64 MiB burst, 16 MiB/second
+and eight-frame queue allowance; authentication HTTP limits and per-account
+socket counts are unchanged. Queue settings bound raw retained ingress bytes,
+not total process RAM: parsed objects, active responses and other sockets add
+memory. Reduce queue bytes on memory-constrained hosts rather than disabling
+limits. Bounds remain enforced even for admin-set values.
+
+Admin Abuse records actual WebSocket rate-limit and backpressure refusals in its
+throttle counters and recent-event ring, separately from blocked IPs or banned
+accounts. Each closed socket contributes at most one pressure event. The ring
+holds at most 200 newest events, and counters/ring expire after 24 hours without
+throttling. Client diagnostics retain page-lifetime incident history but raise
+repeated-fallback findings only for events within the last five minutes; old
+recovered incidents do not mean that the lane is still failing.
+
 **Assistant chat run coordination.** Signed-in chat clients coordinate active
 runs through account-scoped Redis leases: a 30-second lease renewed every
 10 seconds. Redis failure refuses a coordinated run instead of silently

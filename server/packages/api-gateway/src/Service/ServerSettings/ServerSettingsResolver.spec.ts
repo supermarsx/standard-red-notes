@@ -59,6 +59,28 @@ describe('ServerSettingsStore + ServerSettingsResolver', () => {
       ...envBaseline,
     })
 
+  it('persists all websocket traffic controls, publishes their sources, and clears back to env/defaults', async () => {
+    const store = new ServerSettingsStore(filePath)
+    const resolver = makeResolver()
+    expect(await resolver.resolveWebSocketTrafficConfig()).toMatchObject({ frameCapacity: 1024, maxQueuedFrames: 64 })
+    const settings = {
+      frameCapacity: 2048,
+      frameRefillPerSecond: 512,
+      byteCapacity: 67108864,
+      byteRefillPerSecond: 16777216,
+      maxQueuedFrames: 128,
+      maxQueuedBytes: 33554432,
+    }
+    await store.update({ security: { websocketTraffic: settings } })
+    expect(await resolver.resolveWebSocketTrafficConfig()).toEqual(settings)
+    expect((await resolver.view()).settings.security.websocketTraffic).toEqual(settings)
+    expect((await resolver.view()).sources['security.websocketTraffic.frameCapacity']).toBe('persisted')
+    await store.update({ security: { websocketTraffic: { frameCapacity: null } } })
+    expect((await resolver.resolveWebSocketTrafficConfig()).frameCapacity).toBe(1024)
+    expect((await resolver.resolveWebSocketTrafficConfig()).maxQueuedFrames).toBe(128)
+    await expect(store.update({ security: { websocketTraffic: { maxQueuedBytes: 0 } } })).rejects.toThrow()
+  })
+
   describe('store', () => {
     it('keeps revision env defaults, persists overrides, and clears individual account fields', async () => {
       const user = '00000000-0000-4000-8000-000000000001'

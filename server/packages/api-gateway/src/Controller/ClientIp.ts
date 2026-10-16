@@ -1,4 +1,4 @@
-import { Request } from 'express'
+import { Request, request as expressRequest } from 'express'
 
 import { normalizeIp } from './IpAccessList'
 
@@ -134,4 +134,23 @@ export const stampResolvedClientIp = (request: ClientIpResolvable, clientIpHeade
   request.headers[ORIGIN_IP_HEADER] = resolved
 
   return resolved
+}
+
+/** Upgrade requests bypass Express routing, so borrow its exact configured trust-chain getter. */
+export function resolveWebSocketClientIp(
+  request: ClientIpResolvable,
+  app?: { get?(name: string): unknown },
+  clientIpHeader?: string,
+): string {
+  let ip: string | undefined
+  if (app?.get) {
+    try {
+      const getter = Object.getOwnPropertyDescriptor(expressRequest, 'ip')?.get
+      ip = getter?.call({ app, headers: request.headers, socket: request.socket, connection: request.socket }) as
+        string | undefined
+    } catch {
+      /* An unavailable Express trust configuration never trusts forwarded headers. */
+    }
+  }
+  return resolveClientIp({ headers: request.headers, socket: request.socket, ip }, clientIpHeader)
 }

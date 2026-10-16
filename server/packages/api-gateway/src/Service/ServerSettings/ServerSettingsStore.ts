@@ -1,4 +1,9 @@
 import {
+  SYNC_TRAFFIC_BOUNDS,
+  validSyncTrafficValue,
+  type SyncTrafficLimits,
+} from '@standard-red-notes/websocket-gateway'
+import {
   hasOnlyKeys,
   isBoundedString,
   isJsonObject,
@@ -141,6 +146,7 @@ export interface PersistedRateLimitSettings {
 export interface PersistedSecuritySettings {
   proofOfWork?: PersistedProofOfWorkSettings
   rateLimit?: PersistedRateLimitSettings
+  websocketTraffic?: Partial<SyncTrafficLimits>
 }
 
 /**
@@ -739,6 +745,16 @@ function isPersistedServerSettings(value: unknown): value is PersistedServerSett
         matchesFields(candidate, {
           proofOfWork,
           rateLimit,
+          websocketTraffic: (candidate) =>
+            matchesFields(
+              candidate,
+              Object.fromEntries(
+                Object.keys(SYNC_TRAFFIC_BOUNDS).map((key) => [
+                  key,
+                  (entry: unknown) => validSyncTrafficValue(key as keyof SyncTrafficLimits, entry),
+                ]),
+              ),
+            ),
         }),
       registration: (candidate) =>
         matchesFields(candidate, {
@@ -906,6 +922,7 @@ export interface ServerSettingsPatch {
   updateCheck?: { url?: string | null }
   nextcloudBackups?: { enabled?: boolean | null }
   security?: {
+    websocketTraffic?: { [K in keyof SyncTrafficLimits]?: number | null }
     proofOfWork?: {
       registerEnabled?: boolean | null
       registerDifficulty?: number | null
@@ -1103,6 +1120,19 @@ export class ServerSettingsStore {
         this.applyKey(data.security.proofOfWork, 'signInAdaptiveThreshold', pow.signInAdaptiveThreshold)
         if (Object.keys(data.security.proofOfWork).length === 0) {
           delete data.security.proofOfWork
+        }
+        if (Object.keys(data.security).length === 0) {
+          delete data.security
+        }
+      }
+      if (patch.security?.websocketTraffic) {
+        data.security = data.security ?? {}
+        data.security.websocketTraffic = data.security.websocketTraffic ?? {}
+        for (const key of Object.keys(SYNC_TRAFFIC_BOUNDS) as Array<keyof SyncTrafficLimits>) {
+          this.applyKey(data.security.websocketTraffic, key, patch.security.websocketTraffic[key])
+        }
+        if (Object.keys(data.security.websocketTraffic).length === 0) {
+          delete data.security.websocketTraffic
         }
         if (Object.keys(data.security).length === 0) {
           delete data.security

@@ -1976,6 +1976,25 @@ describe('the lane-degradation ledger', () => {
    * transport row nor "Where the lane ended up" can ever be red for one, so the
    * finding has to come from counting the history.
    */
+  it('keeps old recovered throttle incidents as history after a long healthy interval', () => {
+    const model = build({
+      transport: transport(),
+      ledger: recorded((instance, advance) => {
+        for (const reason of ['backpressure', 'rate-limited', 'rate-limited'] as const) {
+          instance.recordTransition('DEGRADED', reason, false)
+          advance(1000)
+          instance.recordTransition('READY', undefined, false)
+          advance(1000)
+        }
+        advance(24 * 60_000)
+      }),
+    })
+    expect(codesOf(model)).not.toContain('SOCKET_LANE_FLAPPING')
+    expect(String(rowOf(model, 'Degradations recorded').value)).toBe('3')
+    expect(rowOf(model, 'Degradations recorded').verdict).toBe('informational')
+    expect(String(rowOf(model, 'Where the lane ended up').value)).toBe('recovered')
+  })
+
   it('raises a flapping lane that every single live reading calls healthy', () => {
     const flapping = build({
       transport: transport(),

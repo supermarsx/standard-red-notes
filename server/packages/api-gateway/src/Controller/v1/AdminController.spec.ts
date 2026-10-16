@@ -138,6 +138,33 @@ describe('AdminController server-status', () => {
     }
   })
 
+  it('admin-gates and validates websocket traffic patches without accepting unknown or disabling values', async () => {
+    const resolver = {
+      applyPatch: jest.fn(async () => undefined),
+      view: jest.fn(async () => ({ settings: { security: { websocketTraffic: { frameCapacity: 2048 } } } })),
+    }
+    const controller = makeController({ serverSettingsResolver: resolver as unknown as ServerSettingsResolver })
+    const request = {
+      body: { security: { websocketTraffic: { frameCapacity: 2048, maxQueuedBytes: null } } },
+    } as Request
+    await controller.setServerSettings(request, responseWith([{ name: RoleName.NAMES.CoreUser }]))
+    expect(statusMock).toHaveBeenCalledWith(403)
+    expect(resolver.applyPatch).not.toHaveBeenCalled()
+    await controller.setServerSettings(request, responseWith([{ name: RoleName.NAMES.AdminUser }]))
+    expect(resolver.applyPatch).toHaveBeenCalledWith({
+      security: { websocketTraffic: { frameCapacity: 2048, maxQueuedBytes: null } },
+    })
+    for (const patch of [{ frameCapacity: 0 }, { maxQueuedFrames: 257 }, { byteCapacity: 1.5 }, { arbitrary: 1 }]) {
+      resolver.applyPatch.mockClear()
+      await controller.setServerSettings(
+        { body: { security: { websocketTraffic: patch } } } as Request,
+        responseWith([{ name: RoleName.NAMES.AdminUser }]),
+      )
+      expect(statusMock).toHaveBeenCalledWith(400)
+      expect(resolver.applyPatch).not.toHaveBeenCalled()
+    }
+  })
+
   it('rejects a non-admin requestor with 403 — NOT 401, which clients treat as an invalid session', async () => {
     const response = responseWith([{ name: RoleName.NAMES.CoreUser }])
 

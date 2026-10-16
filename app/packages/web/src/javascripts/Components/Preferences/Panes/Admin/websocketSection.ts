@@ -987,17 +987,18 @@ function remedyForFlappingLane(): Remedy {
   return {
     code: 'SOCKET_LANE_FLAPPING',
     summary:
-      'The lane has left the socket and come back several times over one page. Every individual reading is healthy, so the cost is paid in the gaps rather than in any row — and the per-cause counters above are what narrows it.',
+      'The lane fell back at least three times and recovered at least twice in the last five minutes. Read the causes before changing any proxy or server setting.',
     steps: [
       'Read the per-cause counters above this finding. They say whether the socket was closed from the far end, timed out, or stood down for a cause the lane classifies as deferred — and a deferred cause, such as another tab of this account holding the lane, is expected and is not this.',
-      'Check whatever terminates TLS in front of the gateway for an idle or read timeout shorter than the socket’s own keepalive. A proxy closing an idle websocket is the commonest cause of a lane that recovers every time and never stays up.',
+      'For rate-limited or backpressure causes, inspect the gateway traffic and queue limits in Admin Abuse. These are flow-control refusals, not evidence of an IP ban or a broken proxy.',
+      'For repeated socket closures or timeouts, check the TLS proxy’s idle/read timeout against the socket keepalive.',
       'Check whether the gateway process itself is restarting. The uptime row in Environment & setup is the one that answers it: a process whose uptime keeps resetting takes every socket with it on each restart.',
       'Expect no user-visible error. Saves become one HTTP request each while the lane is off, collaboration rooms are rebuilt and the invite stream re-subscribes from its checkpoint.',
     ],
     effort: 'peer-service',
     basis: 'verified',
     because: [
-      'This client recorded at least three degradations and two recoveries on one page, which no ordinary session reaches: a reconnect after a sleep or a network change is one pair.',
+      'Only transitions in the last five minutes contribute to this finding. Older incidents stay visible in the history and counters, but do not keep a recovered session degraded indefinitely.',
       'Nothing else in this pane can report it. Each reading is taken at an instant and the lane is healthy at almost every instant.',
     ],
   }
@@ -3084,13 +3085,32 @@ function buildLedgerBlock(ledger: LaneLedgerSectionView | undefined): Diagnostic
     )
   }
 
-  if (degradations >= 3 && recoveries >= 2) {
+  const recent =
+    ledger.recordingForMs === undefined
+      ? []
+      : transitions.filter((transition) => ledger.recordingForMs! - transition.msSinceLedgerStart <= 5 * 60_000)
+  let recentDegradations = 0
+  let recentRecoveries = 0
+  let recentlyAway = false
+  for (const transition of recent) {
+    if (
+      carrierOf(transition.state) === 'http' &&
+      !socketFallbackIsDeferred(transition.reason as SyncFallbackReason | undefined)
+    ) {
+      recentDegradations++
+      recentlyAway = true
+    } else if (carrierOf(transition.state) === 'socket' && recentlyAway) {
+      recentRecoveries++
+      recentlyAway = false
+    }
+  }
+  if (recentDegradations >= 3 && recentRecoveries >= 2) {
     findings.push(
       diagnosticFinding({
         code: safeConstant('SOCKET_LANE_FLAPPING'),
-        title: 'The socket lane has been falling back and recovering repeatedly',
+        title: 'The socket lane has repeatedly fallen back in the last five minutes',
         detail:
-          'This client has watched the lane leave the socket and come back several times over one page. Every individual reading is healthy — it recovers each time — so nothing else in this pane can report it, and the cost is paid in the gaps: while the lane is off the socket every save is one HTTP request, collaboration rooms are rebuilt and the invite stream re-subscribes from its checkpoint. The causes are the per-cause counters above; a deferred cause such as another tab holding the lane is expected and not this.',
+          'Several recent fallback/recovery cycles were observed. This is a finding about the last five minutes, not the lifetime incident count. Read the per-cause counters and transition ages: rate limiting and queue pressure call for different checks from socket closures or timeouts. Expected deferred transitions are excluded.',
         verdict: 'degraded',
         evidence: EVIDENCE_DIRECT,
         remedy: remedyForFlappingLane(),

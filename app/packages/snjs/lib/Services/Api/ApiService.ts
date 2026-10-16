@@ -1482,6 +1482,14 @@ export class LegacyApiService
     // Standard Red Notes: security knobs — proof-of-work anti-bot + the rate-limit
     // tiers. Enforced server-side; the admin panel persists them here.
     security?: {
+      websocketTraffic?: {
+        frameCapacity?: number | null
+        frameRefillPerSecond?: number | null
+        byteCapacity?: number | null
+        byteRefillPerSecond?: number | null
+        maxQueuedFrames?: number | null
+        maxQueuedBytes?: number | null
+      }
       rateLimit?: {
         enabled?: boolean | null
         windowSeconds?: number | null

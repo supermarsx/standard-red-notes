@@ -88,8 +88,8 @@ import {
   digestSyncCommandBody,
   MAX_SYNC_FRAME_BYTES,
   MAX_SYNC_QUEUED_BINARY_BYTES,
+  MAX_SYNC_QUEUED_BINARY_FRAMES,
   MAX_SYNC_QUEUED_BYTES,
-  MAX_SYNC_QUEUED_FRAMES,
 } from '../src/syncProtocol.js'
 import { InMemorySyncCommandLeaseRegistry, InMemorySyncSocketBudget } from '../src/registry.js'
 import { COLLABORATION_PROTOCOL_VERSION, type RoomJoinAuthorization } from '../src/rooms.js'
@@ -2901,7 +2901,7 @@ describe('authenticated /sockets/sync command plane', () => {
       payload[index] = (index * 31) % 251
     }
     // The point of the size: it is past what the COMMAND plane would ever allow.
-    expect(payload.byteLength).toBeGreaterThan(DEFAULT_SYNC_WEBSOCKET_INGRESS_LIMITS.byteCapacity)
+    expect(payload.byteLength).toBeGreaterThan(2 * 1024 * 1024)
     expect(payload.byteLength).toBe(2_359_297)
 
     port = await listen()
@@ -3101,8 +3101,10 @@ describe('authenticated /sockets/sync command plane', () => {
     // `MAX_SYNC_QUEUED_BYTES`, because that one has since been widened the same
     // way (it was one frame on the JSON plane too).
     expect(MAX_SYNC_FRAME_BYTES).toBeLessThan(2 * MAX_FILE_BINARY_FRAME_BYTES)
-    expect(MAX_SYNC_QUEUED_BINARY_BYTES).toBeGreaterThanOrEqual(MAX_SYNC_QUEUED_FRAMES * MAX_FILE_BINARY_FRAME_BYTES)
-    expect(MAX_SYNC_QUEUED_BYTES).toBeGreaterThanOrEqual(MAX_SYNC_QUEUED_FRAMES * MAX_SYNC_FRAME_BYTES)
+    expect(MAX_SYNC_QUEUED_BINARY_BYTES).toBeGreaterThanOrEqual(
+      MAX_SYNC_QUEUED_BINARY_FRAMES * MAX_FILE_BINARY_FRAME_BYTES,
+    )
+    expect(MAX_SYNC_QUEUED_BYTES).toBeGreaterThanOrEqual(2 * MAX_SYNC_FRAME_BYTES)
 
     const stored = new Map<string, Uint8Array>()
     const payload = new Uint8Array(MAX_FILE_CHUNK_BYTES * 6)
@@ -3336,6 +3338,7 @@ describe('authenticated /sockets/sync command plane', () => {
    */
   it('keeps metering JSON command frames against the command plane', async () => {
     const metrics = { increment: vi.fn() }
+    const onTrafficRefusal = vi.fn()
     port = await listen()
     attached = attachWebSocketGateway({
       httpServer,
@@ -3345,6 +3348,7 @@ describe('authenticated /sockets/sync command plane', () => {
         ...syncOptions(),
         filesUnsupported: true,
         metrics,
+        onTrafficRefusal,
         ingressLimits: {
           frameCapacity: 100,
           frameRefillPerSecond: 100,
@@ -3379,6 +3383,10 @@ describe('authenticated /sockets/sync command plane', () => {
     expect(await closed).toEqual({ code: 1013, reason: 'sync rate limit exceeded' })
     expect(metrics.increment).toHaveBeenCalledWith('rate_limit', 'ingress')
     expect(metrics.increment).not.toHaveBeenCalledWith('rate_limit', 'file_ingress')
+    expect(onTrafficRefusal).toHaveBeenCalledTimes(1)
+    expect(onTrafficRefusal).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'rate-limited', plane: 'json', direction: 'ingress' }),
+    )
   })
 
   /**
@@ -3388,8 +3396,8 @@ describe('authenticated /sockets/sync command plane', () => {
    */
   it('budgets the file plane for a real attachment rather than for command frames', () => {
     // The command plane keeps the numbers it was designed with.
-    expect(DEFAULT_SYNC_WEBSOCKET_INGRESS_LIMITS.byteCapacity).toBe(2 * 1024 * 1024)
-    expect(DEFAULT_SYNC_WEBSOCKET_INGRESS_LIMITS.byteRefillPerSecond).toBe(512 * 1024)
+    expect(DEFAULT_SYNC_WEBSOCKET_INGRESS_LIMITS.byteCapacity).toBe(32 * 1024 * 1024)
+    expect(DEFAULT_SYNC_WEBSOCKET_INGRESS_LIMITS.byteRefillPerSecond).toBe(8 * 1024 * 1024)
 
     // The web client hands over files up to 50 MB (ClassicFileReader
     // .maximumFileSize, app/packages/filepicker). A burst smaller than that is a

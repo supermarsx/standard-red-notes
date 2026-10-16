@@ -12,6 +12,7 @@ import {
   MAX_SYNC_EGRESS_BUFFERED_BYTES,
   MAX_SYNC_FRAME_BYTES,
   MAX_SYNC_QUEUED_BINARY_BYTES,
+  MAX_SYNC_QUEUED_BINARY_FRAMES,
   MAX_SYNC_QUEUED_BYTES,
   MAX_SYNC_QUEUED_FRAMES,
   MAX_SYNC_SEQUENCE,
@@ -600,6 +601,7 @@ export interface SyncCommandHandlerOptions {
   sessionRevalidationIntervalMs?: number
   /** Overrides {@link SYNC_SOCKET_MAX_LIFETIME_MS}, the no-revalidator fallback bound. */
   socketMaxLifetimeMs?: number
+  trafficLimits?: () => { maxQueuedFrames: number; maxQueuedBytes: number }
   maxQueuedFrames?: number
   maxQueuedBytes?: number
   /**
@@ -738,6 +740,7 @@ export class SyncCommandHandler {
   private queuedBytes = 0
   /** FILES_V1 binary-plane bytes awaiting `processBinary`. Charged only by {@link enqueueBinary}. */
   private queuedBinaryBytes = 0
+  private queuedBinaryFrames = 0
   /**
    * ADMISSION order, and only admission. Every frame passes through this chain
    * in arrival order so that parsing, the AUTH handshake and the client
@@ -918,8 +921,8 @@ export class SyncCommandHandler {
     if (
       !Number.isSafeInteger(rawBytes) ||
       rawBytes < 0 ||
-      this.queuedFrames >= this.maxQueuedFrames ||
-      this.queuedBytes + rawBytes > this.maxQueuedBytes
+      this.queuedFrames >= (this.options.trafficLimits?.().maxQueuedFrames ?? this.maxQueuedFrames) ||
+      this.queuedBytes + rawBytes > (this.options.trafficLimits?.().maxQueuedBytes ?? this.maxQueuedBytes)
     ) {
       this.options.metrics?.increment('backpressure', 'ingress')
       this.failAndClose('BACKPRESSURE', 'Sync command queue is full.', 1013)
@@ -949,7 +952,8 @@ export class SyncCommandHandler {
       rawBytes < 0 ||
       rawBytes !== raw.byteLength ||
       rawBytes > MAX_FILE_BINARY_FRAME_BYTES ||
-      this.queuedFrames >= this.maxQueuedFrames ||
+      this.queuedBinaryFrames >= MAX_SYNC_QUEUED_BINARY_FRAMES ||
+      this.queuedFrames >= (this.options.trafficLimits?.().maxQueuedFrames ?? this.maxQueuedFrames) ||
       // The BINARY plane's own allowance. Never the JSON plane's: one 512 KiB
       // figure shared by both made two 266,248-byte frames overrun it, so the
       // queue's 8-frame depth was really one frame and the second one closed the
@@ -963,12 +967,14 @@ export class SyncCommandHandler {
       return
     }
     this.queuedFrames += 1
+    this.queuedBinaryFrames += 1
     this.queuedBinaryBytes += rawBytes
     this.schedule(
       (release) => this.processBinary(raw, release),
       () => {
         raw.fill(0)
         this.queuedFrames = Math.max(0, this.queuedFrames - 1)
+        this.queuedBinaryFrames = Math.max(0, this.queuedBinaryFrames - 1)
         this.queuedBinaryBytes = Math.max(0, this.queuedBinaryBytes - rawBytes)
       },
       () => {

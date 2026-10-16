@@ -279,6 +279,10 @@ type PendingRpc = {
   response?: AuthenticatedRpcResponse
   streamController?: ReadableStreamDefaultController<Uint8Array>
   creditToReturn: number
+  consumedCreditBytes: number
+  creditWindowBytes: number
+  creditTimer?: ReturnType<typeof setTimeout>
+  creditCancelled?: boolean
   abortCleanup?: () => void
 }
 
@@ -1048,13 +1052,21 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
         resolve,
         reject,
         creditToReturn: 0,
+        consumedCreditBytes: 0,
+        creditWindowBytes: normalized.initialCreditBytes ?? DEFAULT_RPC_CREDIT_BYTES,
       }
       if (request.signal?.aborted) {
         reject(new AuthenticatedRpcError('CANCELLED', false, true))
         return
       }
       if (request.signal) {
-        const abort = () => worker.postMessage({ type: 'CANCEL_RPC', clientRequestId })
+        const abort = () => {
+          clearTimeout(pending.creditTimer)
+          pending.creditTimer = undefined
+          pending.creditCancelled = true
+          pending.consumedCreditBytes = 0
+          worker.postMessage({ type: 'CANCEL_RPC', clientRequestId })
+        }
         request.signal.addEventListener('abort', abort, { once: true })
         pending.abortCleanup = () => request.signal?.removeEventListener('abort', abort)
       }
@@ -2516,14 +2528,16 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
                 pending.streamController = controller
               },
               pull: () => {
-                const creditBytes = pending.creditToReturn
-                if (creditBytes > 0) {
-                  pending.creditToReturn = 0
-                  this.worker?.postMessage({ type: 'RPC_CREDIT', clientRequestId, creditBytes })
-                }
+                pending.consumedCreditBytes = Math.min(
+                  MAX_RPC_CREDIT_BYTES,
+                  pending.consumedCreditBytes + pending.creditToReturn,
+                )
+                pending.creditToReturn = 0
+                this.scheduleRpcCredit(clientRequestId, pending)
               },
               cancel: () => {
                 this.worker?.postMessage({ type: 'CANCEL_RPC', clientRequestId })
+                this.cleanupRpc(clientRequestId, pending)
               },
             },
             { highWaterMark: 1, size: () => 1 },
@@ -2748,7 +2762,34 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     this.cleanupRpc(clientRequestId, pending)
   }
 
+  private scheduleRpcCredit(clientRequestId: string, pending: PendingRpc): void {
+    if (pending.creditCancelled) {
+      return
+    }
+    const flush = () => {
+      clearTimeout(pending.creditTimer)
+      pending.creditTimer = undefined
+      if (this.pendingRpcs.get(clientRequestId) !== pending || pending.consumedCreditBytes === 0) {
+        return
+      }
+      const creditBytes = pending.consumedCreditBytes
+      pending.consumedCreditBytes = 0
+      this.worker?.postMessage({ type: 'RPC_CREDIT', clientRequestId, creditBytes })
+    }
+    // Return only consumed bytes. Small SSE chunks share one credit frame per
+    // quarter second; a half-window refill prevents large streams stalling.
+    if (pending.consumedCreditBytes >= Math.max(1, Math.min(64 * 1024, pending.creditWindowBytes / 2))) {
+      flush()
+    } else if (pending.consumedCreditBytes > 0 && !pending.creditTimer) {
+      pending.creditTimer = setTimeout(flush, 250)
+    }
+  }
+
   private cleanupRpc(clientRequestId: string, pending: PendingRpc): void {
+    clearTimeout(pending.creditTimer)
+    pending.creditTimer = undefined
+    pending.creditToReturn = 0
+    pending.consumedCreditBytes = 0
     if (this.pendingRpcs.get(clientRequestId) === pending) {
       this.pendingRpcs.delete(clientRequestId)
     }

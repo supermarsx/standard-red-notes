@@ -77,7 +77,47 @@ type AntiAbuseConfig = {
 type AntiAbuseMetrics = {
   tierHits: Record<string, number>
   blockHits: number
-  recent: Array<{ at: number; bucket: string; ip: string; method: string; path: string }>
+  recent: Array<{
+    at: number
+    bucket: string
+    ip: string
+    method: string
+    path: string
+    transport?: 'websocket'
+    reason?: 'rate-limited' | 'backpressure'
+    plane?: 'json' | 'files'
+    direction?: 'ingress' | 'egress'
+  }>
+}
+
+type WebSocketTrafficConfig = {
+  frameCapacity: number
+  frameRefillPerSecond: number
+  byteCapacity: number
+  byteRefillPerSecond: number
+  maxQueuedFrames: number
+  maxQueuedBytes: number
+}
+const WEBSOCKET_FIELDS: Array<{ key: keyof WebSocketTrafficConfig; label: string; min: number; max: number }> = [
+  { key: 'frameRefillPerSecond', label: 'Frame rate (frames/sec)', min: 1, max: 16_384 },
+  { key: 'frameCapacity', label: 'Frame burst capacity', min: 1, max: 65_536 },
+  { key: 'byteRefillPerSecond', label: 'Byte rate (bytes/sec)', min: 1, max: 67_108_864 },
+  { key: 'byteCapacity', label: 'Byte burst capacity', min: 524_288, max: 268_435_456 },
+  { key: 'maxQueuedFrames', label: 'Maximum queued frames', min: 1, max: 256 },
+  { key: 'maxQueuedBytes', label: 'Maximum queued bytes', min: 524_288, max: 67_108_864 },
+]
+type WebSocketDraft = Record<keyof WebSocketTrafficConfig, string>
+function webSocketDraft(config: WebSocketTrafficConfig): WebSocketDraft {
+  return Object.fromEntries(WEBSOCKET_FIELDS.map(({ key }) => [key, String(config[key])])) as WebSocketDraft
+}
+function validWebSocketDraft(draft: WebSocketDraft): boolean {
+  return WEBSOCKET_FIELDS.every(
+    ({ key, min, max }) =>
+      draft[key].trim() !== '' &&
+      Number.isSafeInteger(Number(draft[key])) &&
+      Number(draft[key]) >= min &&
+      Number(draft[key]) <= max,
+  )
 }
 
 type AntiAbuseView = {
@@ -85,6 +125,7 @@ type AntiAbuseView = {
   config: AntiAbuseConfig | null
   ipLists: { allow: string[]; block: string[] }
   metrics: AntiAbuseMetrics
+  websocketTraffic?: WebSocketTrafficConfig
 }
 
 type LockedAccount = {
@@ -181,6 +222,9 @@ const AdminSecurityTab: FunctionComponent<Props> = ({ application, noteIfForbidd
   const [ipBusy, setIpBusy] = useState(false)
   const [configDraft, setConfigDraft] = useState<AntiAbuseConfig | null>(null)
   const [configSaving, setConfigSaving] = useState(false)
+  const [webSocketConfigDraft, setWebSocketConfigDraft] = useState<WebSocketDraft | null>(null)
+  const [webSocketSaving, setWebSocketSaving] = useState(false)
+  const [webSocketNotice, setWebSocketNotice] = useState('')
 
   const [lockedAccounts, setLockedAccounts] = useState<LockedAccountsView | null>(null)
   const [lockedLoading, setLockedLoading] = useState(false)
@@ -283,6 +327,7 @@ const AdminSecurityTab: FunctionComponent<Props> = ({ application, noteIfForbidd
       }
       const data = (response as { data?: AntiAbuseView }).data ?? null
       setAntiAbuse(data)
+      setWebSocketConfigDraft(data?.websocketTraffic ? webSocketDraft(data.websocketTraffic) : null)
       if (data?.config) {
         setConfigDraft(data.config)
       }
@@ -423,6 +468,43 @@ const AdminSecurityTab: FunctionComponent<Props> = ({ application, noteIfForbidd
       setConfigSaving(false)
     }
   }, [application, configDraft, noteIfForbidden, loadAntiAbuse])
+
+  const saveWebSocketConfig = useCallback(
+    async (reset = false) => {
+      if (!webSocketConfigDraft || (!reset && !validWebSocketDraft(webSocketConfigDraft))) {
+        return
+      }
+      setWebSocketSaving(true)
+      setWebSocketNotice('')
+      setAntiAbuseError(null)
+      try {
+        const patch = Object.fromEntries(
+          WEBSOCKET_FIELDS.map(({ key }) => [key, reset ? null : Number(webSocketConfigDraft[key])]),
+        )
+        const response = await application.legacyApi.adminSetServerSettings({ security: { websocketTraffic: patch } })
+        if (isErrorResponse(response)) {
+          noteIfForbidden(response)
+          setAntiAbuseError('Could not save the WebSocket traffic limits.')
+          return
+        }
+        const config = (
+          response as { data?: { settings?: { security?: { websocketTraffic?: WebSocketTrafficConfig } } } }
+        ).data?.settings?.security?.websocketTraffic
+        if (config) {
+          setWebSocketConfigDraft(webSocketDraft(config))
+          setAntiAbuse((previous) => (previous ? { ...previous, websocketTraffic: config } : previous))
+        } else {
+          await loadAntiAbuse()
+        }
+        setWebSocketNotice('Saved. Live socket limits update within five seconds; no restart is needed.')
+      } catch {
+        setAntiAbuseError('Could not save the WebSocket traffic limits.')
+      } finally {
+        setWebSocketSaving(false)
+      }
+    },
+    [application, webSocketConfigDraft, noteIfForbidden, loadAntiAbuse],
+  )
 
   const signupsOpen = registration ? registrationIsOpen(registration.persistedDisabled, registration.envDisabled) : null
   const blockSource = registration
@@ -699,15 +781,21 @@ const AdminSecurityTab: FunctionComponent<Props> = ({ application, noteIfForbidd
       <TabPanel state={subTab} id="antiabuse">
         {/* --- Anti-abuse & rate limiting ----------------------------------- */}
         <PreferencesSegment>
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <Subtitle>Anti-abuse &amp; rate limiting</Subtitle>
+            <Button
+              label="Refresh abuse activity"
+              onClick={() => void loadAntiAbuse()}
+              disabled={antiAbuseLoading || webSocketSaving}
+              small
+            />
             {antiAbuseLoading ? (
               <Spinner className="h-4 w-4" />
             ) : (
               <PostureChip
                 state={antiAbuse?.config ? antiAbuse.config.enabled : null}
-                on="Rate limiting on"
-                off="Rate limiting off"
+                on="HTTP rate limiting on"
+                off="HTTP rate limiting off"
                 unknown="Unavailable"
               />
             )}
@@ -782,6 +870,79 @@ const AdminSecurityTab: FunctionComponent<Props> = ({ application, noteIfForbidd
               </div>
             </div>
           ) : null}
+
+          <div className="mt-5">
+            <Subtitle>WebSocket traffic limits</Subtitle>
+            <Text className="text-passive-1 mt-1 text-xs">
+              Per-socket JSON message rates, burst capacity and waiting queue limits. Normal traffic continues
+              immediately; excess traffic is recorded as THROTTLED, separately from blocked IPs. Binary file-transfer
+              limits are separate.
+            </Text>
+            {webSocketConfigDraft ? (
+              <>
+                <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
+                  {WEBSOCKET_FIELDS.map(({ key, label, min, max }) => (
+                    <label key={key} className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+                      <Text>
+                        {label}
+                        <span className="text-passive-1 block text-xs">
+                          {min.toLocaleString()}–{max.toLocaleString()}
+                        </span>
+                      </Text>
+                      <input
+                        aria-label={label}
+                        type="number"
+                        min={min}
+                        max={max}
+                        step={1}
+                        value={webSocketConfigDraft[key]}
+                        disabled={webSocketSaving}
+                        className="border-border bg-default w-36 rounded border px-2 py-1 text-right text-sm"
+                        onChange={(event) =>
+                          setWebSocketConfigDraft({ ...webSocketConfigDraft, [key]: event.target.value })
+                        }
+                      />
+                    </label>
+                  ))}
+                </div>
+                {!validWebSocketDraft(webSocketConfigDraft) && (
+                  <p className="text-danger mt-2 text-xs" role="alert">
+                    Enter whole numbers within each field’s minimum and maximum. Limits cannot be zero.
+                  </p>
+                )}
+                <Text className="text-passive-1 mt-2 text-xs">
+                  1 MiB = 1,048,576 bytes. Burst capacity allows short peaks; sustained rates refill it over time. Queue
+                  limits bound pending messages, not saved notes.
+                </Text>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Button
+                    label={webSocketSaving ? 'Saving…' : 'Save WebSocket limits'}
+                    onClick={() => void saveWebSocketConfig()}
+                    disabled={webSocketSaving || !validWebSocketDraft(webSocketConfigDraft)}
+                    primary
+                    small
+                  />
+                  <Button
+                    label="Reset WebSocket overrides"
+                    onClick={() => void saveWebSocketConfig(true)}
+                    disabled={webSocketSaving}
+                    small
+                  />
+                </div>
+                {webSocketNotice && (
+                  <p className="mt-2 text-xs" role="status">
+                    {webSocketNotice}
+                  </p>
+                )}
+              </>
+            ) : (
+              !antiAbuseLoading && (
+                <Text className="text-passive-1 mt-2 text-xs">
+                  WebSocket traffic settings were not reported by this server. Refresh after updating the server.
+                </Text>
+              )
+            )}
+          </div>
 
           {/* IP block/allow lists */}
           {antiAbuse?.available ? (
@@ -886,7 +1047,8 @@ const AdminSecurityTab: FunctionComponent<Props> = ({ application, noteIfForbidd
                 ) : (
                   Object.entries(antiAbuse.metrics.tierHits).map(([bucket, count]) => (
                     <span key={bucket} className="border-border rounded border px-2 py-0.5 text-xs">
-                      {bucket}: <strong>{count}</strong>
+                      {bucket.startsWith('websocket-') ? `WebSocket THROTTLED · ${bucket}` : bucket}:{' '}
+                      <strong>{count}</strong>
                     </span>
                   ))
                 )}
@@ -895,8 +1057,11 @@ const AdminSecurityTab: FunctionComponent<Props> = ({ application, noteIfForbidd
                 <div className="mt-3 flex flex-col gap-1">
                   {antiAbuse.metrics.recent.slice(0, SECURITY_EVENTS_PREVIEW).map((event, index) => (
                     <Text key={`${event.at}-${index}`} className="text-passive-1 text-xs">
-                      {formatTimestamp(new Date(event.at).toISOString())} &middot; {event.bucket} &middot; {event.ip}{' '}
-                      &middot; {event.method} {event.path}
+                      {formatTimestamp(new Date(event.at).toISOString())} &middot;{' '}
+                      {event.transport === 'websocket' || event.bucket.startsWith('websocket-')
+                        ? `WebSocket THROTTLED · ${event.reason ?? event.bucket}${event.plane ? ` · ${event.plane}` : ''}${event.direction ? ` · ${event.direction}` : ''}`
+                        : event.bucket}{' '}
+                      &middot; {event.ip} &middot; {event.method} {event.path}
                     </Text>
                   ))}
                 </div>

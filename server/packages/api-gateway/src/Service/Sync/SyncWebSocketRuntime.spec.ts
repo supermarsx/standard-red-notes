@@ -57,6 +57,39 @@ describe('SyncWebSocketRuntime', () => {
     syncGateDiagnostics.clear()
   })
 
+  it('refreshes the live admin traffic policy and records pressure as throttle, with timer cleanup', async () => {
+    jest.useFakeTimers()
+    try {
+      const limits = {
+        frameCapacity: 1024,
+        frameRefillPerSecond: 256,
+        byteCapacity: 33554432,
+        byteRefillPerSecond: 8388608,
+        maxQueuedFrames: 64,
+        maxQueuedBytes: 16777216,
+      }
+      const resolve = jest.fn().mockResolvedValue(limits)
+      const recordThrottle = jest.fn(async () => undefined)
+      const attach = jest.fn(() => ({ sync: provider(), stop: async () => undefined }) as unknown as AttachedGateway)
+      const runtime = new SyncWebSocketRuntime(new SyncWebSocketAccessService(), attach)
+      await runtime.configureTrafficPolicy(resolve, { recordThrottle } as never)
+      runtime.attach({ sync: laneWhose(() => true) } as AttachOptions)
+      const configured = (attach.mock.calls as unknown as Array<[AttachOptions]>)[0][0].sync!
+      expect(configured.trafficLimits!().frameCapacity).toBe(1024)
+      resolve.mockResolvedValue({ ...limits, frameCapacity: 2048 })
+      await jest.advanceTimersByTimeAsync(5000)
+      expect(configured.trafficLimits!().frameCapacity).toBe(2048)
+      configured.onTrafficRefusal!({ reason: 'backpressure', plane: 'json', direction: 'ingress' })
+      expect(recordThrottle).toHaveBeenCalledWith(
+        expect.objectContaining({ reason: 'backpressure', transport: 'websocket', bucket: 'websocket-json-ingress' }),
+      )
+      await runtime.stop()
+      expect(jest.getTimerCount()).toBe(0)
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
   it('publishes the provider only after attach succeeds', () => {
     const access = new SyncWebSocketAccessService()
     const expected = provider()

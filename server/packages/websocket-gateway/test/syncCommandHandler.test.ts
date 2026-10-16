@@ -32,6 +32,7 @@ import {
   MAX_SYNC_BUFFERED_BYTES,
   MAX_SYNC_EGRESS_BUFFERED_BYTES,
   MAX_SYNC_QUEUED_BINARY_BYTES,
+  MAX_SYNC_QUEUED_BINARY_FRAMES,
   MAX_SYNC_QUEUED_BYTES,
   MAX_SYNC_QUEUED_FRAMES,
   MAX_SYNC_FRAME_BYTES,
@@ -304,6 +305,7 @@ async function authenticatedHandler(
     resumeSequence?: number
     backendTimeoutMs?: number
     maxBufferedBytes?: number
+    trafficLimits?: SyncCommandHandlerOptions['trafficLimits']
     isEnabled?: () => boolean
     socketBudget?: SyncSocketBudget
     ownerId?: string
@@ -341,6 +343,7 @@ async function authenticatedHandler(
     isEnabled: options.isEnabled ?? (() => true),
     backendTimeoutMs: options.backendTimeoutMs,
     maxBufferedBytes: options.maxBufferedBytes,
+    trafficLimits: options.trafficLimits,
     leaseRenewIntervalMs: options.leaseRenewIntervalMs,
     socketBudgetRenewIntervalMs: options.socketBudgetRenewIntervalMs,
     socketBudgetRenewRetryDelayMs: options.socketBudgetRenewRetryDelayMs,
@@ -1037,6 +1040,31 @@ describe('SyncCommandHandler', () => {
     handler.enqueue('{}', 2)
     handler.disconnect()
     expect(socket.frames).toHaveLength(frameCount)
+  })
+
+  it('applies live queue-frame changes without relaxing the retained byte bound', async () => {
+    const limits = { maxQueuedFrames: 2, maxQueuedBytes: 512 * 1024 }
+    const { handler, socket } = await authenticatedHandler({ trafficLimits: () => limits })
+    const ping = (sequence: number) =>
+      JSON.stringify({
+        version: 1,
+        channel: 'sync',
+        type: 'PING',
+        requestId: `live-queue-${sequence}`,
+        commandId: `live-queue-${sequence}`,
+        sequence,
+        payloadLength: 2,
+        payload: {},
+      })
+    handler.enqueue(ping(1), 1024)
+    handler.enqueue(ping(2), 1024)
+    limits.maxQueuedFrames = 4
+    handler.enqueue(ping(3), 1024)
+    handler.enqueue(ping(4), 1024)
+    expect(socket.closes).toEqual([])
+    handler.enqueue(ping(5), 1024)
+    expect(socket.closes).toEqual([{ code: 1013, reason: 'Sync command queue is full.' }])
+    handler.disconnect()
   })
 
   it('authenticates once and emits the frozen ACCEPTED then COMMITTED payloads', async () => {
@@ -4016,7 +4044,7 @@ describe('sync files ingress queue', () => {
     await vi.waitFor(() => expect(socket.frames.map((frame) => frame.type)).toContain('FILES_ACCEPTED'))
 
     // Every one of the frames the queue says it holds, with nothing draining.
-    for (let index = 0; index < MAX_SYNC_QUEUED_FRAMES; index++) {
+    for (let index = 0; index < MAX_SYNC_QUEUED_BINARY_FRAMES; index++) {
       const frame = uploadFrame(index)
       handler.enqueueBinary(frame, frame.byteLength)
     }
@@ -4024,7 +4052,7 @@ describe('sync files ingress queue', () => {
     expect(metrics.increment).not.toHaveBeenCalledWith('backpressure', 'files_ingress')
 
     // The limit is still a limit, and the refusal still names THIS plane.
-    const overrun = uploadFrame(MAX_SYNC_QUEUED_FRAMES)
+    const overrun = uploadFrame(MAX_SYNC_QUEUED_BINARY_FRAMES)
     handler.enqueueBinary(overrun, overrun.byteLength)
     expect(metrics.increment).toHaveBeenCalledWith('backpressure', 'files_ingress')
     expect(socket.closes).toEqual([{ code: 1013, reason: 'File transfer queue is full.' }])
@@ -4066,7 +4094,7 @@ describe('sync files ingress queue', () => {
       payloadLength: syncPayloadLength({}),
       payload: {},
     })
-    const binaryFrameCount = MAX_SYNC_QUEUED_FRAMES - 1
+    const binaryFrameCount = MAX_SYNC_QUEUED_BINARY_FRAMES - 1
     const binaryFrameBytes = uploadFrame(0).byteLength
     // The arithmetic a shared counter would refuse: the binary frames alone fit
     // this plane's allowance, and the command frame's bytes on top of them do not.
@@ -4096,7 +4124,7 @@ describe('sync files ingress queue', () => {
 /**
  * The ingress queue again, on the JSON COMMAND plane.
  *
- * `MAX_SYNC_QUEUED_FRAMES` is 8 here too, and `MAX_SYNC_QUEUED_BYTES` used to be
+ * `MAX_SYNC_QUEUED_BINARY_FRAMES` is 8 here too, and `MAX_SYNC_QUEUED_BYTES` used to be
  * `MAX_SYNC_FRAME_BYTES` -- ONE frame. So the advertised depth was really one on
  * this plane as well, and the arithmetic is the same shape as the binary plane's:
  * a ceiling equal to one frame means one frame of concurrency, and overrunning it
@@ -4135,7 +4163,7 @@ describe('sync command ingress queue', () => {
   it('admits two ordinary command frames whose combined size exceeds one frame', async () => {
     // The relationship: the queue's byte allowance now covers the frame depth it
     // advertises, so the FRAME count is what binds.
-    expect(MAX_SYNC_QUEUED_BYTES).toBeGreaterThanOrEqual(MAX_SYNC_QUEUED_FRAMES * MAX_SYNC_FRAME_BYTES)
+    expect(MAX_SYNC_QUEUED_BYTES).toBeGreaterThanOrEqual(2 * MAX_SYNC_FRAME_BYTES)
 
     const { handler, socket } = await authenticatedHandler()
     const first = commandFrame('command-inflight', 1, {
@@ -4195,13 +4223,13 @@ describe('sync command ingress queue', () => {
       })
 
     for (let index = 0; index < MAX_SYNC_QUEUED_FRAMES; index++) {
-      handler.enqueue(pingAt(index + 1), MAX_SYNC_FRAME_BYTES)
+      handler.enqueue(pingAt(index + 1), Buffer.byteLength(pingAt(index + 1)))
     }
     expect(socket.closes).toEqual([])
     expect(metrics.increment).not.toHaveBeenCalledWith('backpressure', 'ingress')
 
     // The limit is still a limit, and the refusal still names THIS plane.
-    handler.enqueue(pingAt(MAX_SYNC_QUEUED_FRAMES + 1), MAX_SYNC_FRAME_BYTES)
+    handler.enqueue(pingAt(MAX_SYNC_QUEUED_FRAMES + 1), Buffer.byteLength(pingAt(MAX_SYNC_QUEUED_FRAMES + 1)))
     expect(metrics.increment).toHaveBeenCalledWith('backpressure', 'ingress')
     expect(socket.closes).toEqual([{ code: 1013, reason: 'Sync command queue is full.' }])
     handler.disconnect()

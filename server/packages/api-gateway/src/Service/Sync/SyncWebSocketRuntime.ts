@@ -1,5 +1,9 @@
+import { resolveWebSocketClientIp } from '../../Controller/ClientIp'
+import type { RateLimitMetricsStore } from '../../Controller/RateLimitMetrics'
 import {
   attachWebSocketGateway,
+  resolveSyncTrafficLimits,
+  type SyncTrafficLimits,
   type AdmissionProbe,
   type AttachedGateway,
   type AttachOptions,
@@ -130,6 +134,37 @@ export const webSocketGatewayAccessService = new WebSocketGatewayAccessService()
 export class SyncWebSocketRuntime {
   private gateway: AttachedGateway | undefined
   private stopPromise: Promise<void> | undefined
+  private trafficTimer?: ReturnType<typeof setInterval>
+  private trafficRefresh?: Promise<void>
+  private trafficResolver?: () => Promise<SyncTrafficLimits>
+  private trafficMetrics?: RateLimitMetricsStore
+  private trafficLimits = resolveSyncTrafficLimits(process.env)
+
+  async configureTrafficPolicy(
+    resolve: () => Promise<SyncTrafficLimits>,
+    metrics?: RateLimitMetricsStore,
+  ): Promise<void> {
+    this.trafficResolver = resolve
+    this.trafficMetrics = metrics
+    await this.refreshTrafficPolicy()
+  }
+
+  private async refreshTrafficPolicy(): Promise<void> {
+    if (!this.trafficResolver || this.trafficRefresh) {
+      return this.trafficRefresh
+    }
+    this.trafficRefresh = this.trafficResolver()
+      .then((limits) => {
+        this.trafficLimits = resolveSyncTrafficLimits({}, limits)
+      })
+      .catch(() => {
+        /* Keep the last validated policy if settings temporarily cannot be read. */
+      })
+      .finally(() => {
+        this.trafficRefresh = undefined
+      })
+    return this.trafficRefresh
+  }
 
   constructor(
     private readonly accessService: SyncWebSocketAccessService = syncWebSocketAccessService,
@@ -148,7 +183,37 @@ export class SyncWebSocketRuntime {
       throw new Error('WebSocket gateway runtime is already active or stopping.')
     }
 
+    if (options.sync && this.trafficResolver) {
+      const original = options.sync.onTrafficRefusal
+      options = {
+        ...options,
+        sync: {
+          ...options.sync,
+          resolveClientIp: (request) => resolveWebSocketClientIp(request, options.app, process.env.CLIENT_IP_HEADER),
+          trafficLimits: () => this.trafficLimits,
+          onTrafficRefusal: (event) => {
+            original?.(event)
+            void this.trafficMetrics?.recordThrottle({
+              bucket: `websocket-${event.plane}-${event.direction}`,
+              ip: event.ip ?? '',
+              method: 'WS',
+              path: '/sockets/sync',
+              transport: 'websocket',
+              reason: event.reason,
+              plane: event.plane,
+              direction: event.direction,
+            })
+          },
+        },
+      }
+    }
     const gateway = this.attachGateway(options)
+    if (this.trafficResolver) {
+      this.trafficTimer = setInterval(() => {
+        void this.refreshTrafficPolicy()
+      }, 5_000)
+      this.trafficTimer.unref?.()
+    }
     // The admin gate's SYNC_ITEMS verdict, read from the handshake's OWN
     // predicate (`sync.backend.ready()`, the whole of what syncCommandHandler
     // consults at AUTHENTICATED) on the very lane just handed to the gateway.
@@ -190,6 +255,8 @@ export class SyncWebSocketRuntime {
   }
 
   async stop(): Promise<void> {
+    clearInterval(this.trafficTimer)
+    this.trafficTimer = undefined
     if (this.stopPromise) {
       return this.stopPromise
     }

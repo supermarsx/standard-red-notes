@@ -1218,6 +1218,18 @@ export class HomeServer implements HomeServerInterface {
         error: bridgeGatewayLog('error'),
       }
       const webSocketRuntime = new SyncWebSocketRuntime()
+      if (container.isBound(ApiGatewayTypes.ApiGateway_ServerSettingsResolver)) {
+        const trafficResolver = container.get<{
+          resolveWebSocketTrafficConfig(): Promise<import('@standard-red-notes/websocket-gateway').SyncTrafficLimits>
+        }>(ApiGatewayTypes.ApiGateway_ServerSettingsResolver)
+        const trafficMetrics = container.isBound(ApiGatewayTypes.ApiGateway_RateLimitMetricsStore)
+          ? container.get<RateLimitMetricsStore>(ApiGatewayTypes.ApiGateway_RateLimitMetricsStore)
+          : undefined
+        await webSocketRuntime.configureTrafficPolicy(
+          () => trafficResolver.resolveWebSocketTrafficConfig(),
+          trafficMetrics,
+        )
+      }
       let syncStateRedis: Redis | undefined
       let inviteAvailabilityRedis: Redis | undefined
       let inviteEventAvailability: RedisInviteEventAvailabilityBus | undefined

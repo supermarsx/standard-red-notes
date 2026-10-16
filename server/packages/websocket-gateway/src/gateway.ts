@@ -1,3 +1,5 @@
+import { resolveSyncTrafficLimits, SYNC_TRAFFIC_DEFAULTS, type SyncTrafficLimits } from './trafficLimits.js'
+export * from './trafficLimits.js'
 import { type IncomingMessage, type Server as HttpServer, type ServerResponse } from 'node:http'
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import { WebSocketServer, type RawData, type WebSocket } from 'ws'
@@ -115,10 +117,10 @@ export const DEFAULT_WEBSOCKET_INGRESS_LIMITS: Readonly<WebSocketIngressLimits> 
 })
 
 export const DEFAULT_SYNC_WEBSOCKET_INGRESS_LIMITS: Readonly<WebSocketIngressLimits> = Object.freeze({
-  frameCapacity: 32,
-  frameRefillPerSecond: 16,
-  byteCapacity: 2 * 1024 * 1024,
-  byteRefillPerSecond: 512 * 1024,
+  frameCapacity: SYNC_TRAFFIC_DEFAULTS.frameCapacity,
+  frameRefillPerSecond: SYNC_TRAFFIC_DEFAULTS.frameRefillPerSecond,
+  byteCapacity: SYNC_TRAFFIC_DEFAULTS.byteCapacity,
+  byteRefillPerSecond: SYNC_TRAFFIC_DEFAULTS.byteRefillPerSecond,
 })
 
 /**
@@ -286,6 +288,15 @@ export interface SyncGatewayOptions {
   maxSocketsPerUser?: number
   metrics?: SyncCommandMetrics
   ingressLimits?: Partial<WebSocketIngressLimits>
+  /** Live admin overlay; validated values are read for every incoming frame. */
+  trafficLimits?: () => SyncTrafficLimits
+  resolveClientIp?: (request: IncomingMessage) => string
+  onTrafficRefusal?: (event: {
+    reason: 'rate-limited' | 'backpressure'
+    plane: 'json' | 'files'
+    direction: 'ingress' | 'egress'
+    ip?: string
+  }) => void
   /**
    * Optional override for the FILES_V1 binary plane's own ingress budget
    * ({@link DEFAULT_SYNC_WEBSOCKET_FILE_INGRESS_LIMITS}). Separate from
@@ -881,7 +892,7 @@ export class WebSocketIngressLimiter {
   private lastRefill: number
 
   constructor(
-    private readonly limits: WebSocketIngressLimits,
+    private limits: WebSocketIngressLimits,
     private readonly now: () => number = Date.now,
   ) {
     this.frameTokens = limits.frameCapacity
@@ -889,7 +900,14 @@ export class WebSocketIngressLimiter {
     this.lastRefill = now()
   }
 
-  tryConsume(bytes: number): boolean {
+  reconfigure(limits: WebSocketIngressLimits): void {
+    this.refill()
+    this.limits = limits
+    this.frameTokens = Math.min(this.frameTokens, limits.frameCapacity)
+    this.byteTokens = Math.min(this.byteTokens, limits.byteCapacity)
+  }
+
+  private refill(): void {
     const currentTime = this.now()
     const elapsedSeconds = Math.max(0, currentTime - this.lastRefill) / 1_000
     this.lastRefill = currentTime
@@ -901,7 +919,10 @@ export class WebSocketIngressLimiter {
       this.limits.byteCapacity,
       this.byteTokens + elapsedSeconds * this.limits.byteRefillPerSecond,
     )
+  }
 
+  tryConsume(bytes: number): boolean {
+    this.refill()
     if (!Number.isFinite(bytes) || bytes < 0 || this.frameTokens < 1 || this.byteTokens < bytes) {
       return false
     }
@@ -993,6 +1014,7 @@ export interface GatewayConfig {
  * which Express's `Request`/`Response` subtypes accept.
  */
 export interface RouteRegistrar {
+  get?(name: string): unknown
   post(path: string, handler: (...args: any[]) => void): unknown
 }
 
@@ -1553,8 +1575,16 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
   if (syncOptions?.requireSharedState && !syncOptions.files && !syncOptions.filesUnsupported) {
     throw new Error('WebSocket sync requires a FILES_V1 storage adapter, or an explicit filesUnsupported declaration.')
   }
+  const trafficBaseline = resolveSyncTrafficLimits(process.env)
+  const currentTrafficLimits = (): SyncTrafficLimits => {
+    try {
+      return resolveSyncTrafficLimits({}, { ...trafficBaseline, ...syncOptions?.trafficLimits?.() })
+    } catch {
+      return trafficBaseline
+    }
+  }
   const syncIngressLimits: WebSocketIngressLimits = {
-    ...DEFAULT_SYNC_WEBSOCKET_INGRESS_LIMITS,
+    ...trafficBaseline,
     ...syncOptions?.ingressLimits,
   }
   assertValidIngressLimits(syncIngressLimits)
@@ -1798,8 +1828,29 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
       }
 
       alive.set(socket, true)
-      const ingressLimiter = new WebSocketIngressLimiter(syncIngressLimits)
+      const ingressLimiter = new WebSocketIngressLimiter({ ...currentTrafficLimits(), ...syncOptions?.ingressLimits })
       const fileIngressLimiter = new WebSocketIngressLimiter(syncFileIngressLimits)
+      let trafficRefusalRecorded = false
+      const recordTrafficRefusal = (
+        reason: 'rate-limited' | 'backpressure',
+        plane: 'json' | 'files',
+        direction: 'ingress' | 'egress',
+      ) => {
+        if (trafficRefusalRecorded) {
+          return
+        }
+        trafficRefusalRecorded = true
+        try {
+          syncOptions!.onTrafficRefusal?.({
+            reason,
+            plane,
+            direction,
+            ip: syncOptions!.resolveClientIp?.(req) ?? req.socket.remoteAddress,
+          })
+        } catch {
+          /* Best-effort telemetry. */
+        }
+      }
       const handlerOptions = {
         socket,
         ownerId: randomUUID(),
@@ -1844,7 +1895,20 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
         files: syncOptions!.files,
         requireSharedState: syncOptions!.requireSharedState,
         isEnabled: syncOptions!.isEnabled,
-        metrics: syncOptions!.metrics,
+        metrics: {
+          increment: (event: string, code?: string) => {
+            syncOptions!.metrics?.increment(event, code)
+            if (event === 'backpressure') {
+              recordTrafficRefusal(
+                'backpressure',
+                code?.startsWith('files_') ? 'files' : 'json',
+                code?.endsWith('egress') ? 'egress' : 'ingress',
+              )
+            }
+          },
+          observe: (event: string, code: string, value: number) => syncOptions!.metrics?.observe?.(event, code, value),
+        },
+        trafficLimits: currentTrafficLimits,
         authDeadlineMs: syncOptions!.authDeadlineMs,
         backendTimeoutMs: syncOptions!.backendTimeoutMs,
         sessionRevalidationIntervalMs: syncOptions!.sessionRevalidationIntervalMs,
@@ -1889,9 +1953,13 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
         // close reason and the metric code name WHICH plane overran, so an
         // operator reading the panel is not left guessing between a chatty client
         // and a file transfer.
+        if (!isBinary) {
+          ingressLimiter.reconfigure({ ...currentTrafficLimits(), ...syncOptions?.ingressLimits })
+        }
         const planeLimiter = isBinary ? fileIngressLimiter : ingressLimiter
         if (!planeLimiter.tryConsume(rawBytes)) {
           syncOptions!.metrics?.increment('rate_limit', isBinary ? 'file_ingress' : 'ingress')
+          recordTrafficRefusal('rate-limited', isBinary ? 'files' : 'json', 'ingress')
           stopHandler()
           // 1013, NOT 1008. A spent token bucket refills; the refusal is
           // TRANSIENT and the right client response is to back off and come
