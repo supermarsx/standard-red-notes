@@ -666,6 +666,12 @@ export class SyncTransportWorkerRuntime {
   private socketGeneration = 0
   private connectionAttemptGeneration = 0
   private connectionAcquisition?: Promise<void>
+  private commandJournalWrite?: Promise<void>
+  private commandPreparation?: {
+    active: ActiveRequest
+    socketGeneration: number
+    promise: Promise<void>
+  }
   private active?: ActiveRequest
   private authorization?: SyncTicket
   private sessionScope?: string
@@ -3929,12 +3935,65 @@ export class SyncTransportWorkerRuntime {
     }
   }
 
+  private persistCommandRecord(record: SyncOutboxRecord): Promise<void> {
+    const writing = this.outbox.put(record)
+    this.commandJournalWrite = writing
+    const clear = () => {
+      if (this.commandJournalWrite === writing) {
+        this.commandJournalWrite = undefined
+      }
+    }
+    void writing.then(clear, clear)
+    return writing
+  }
+
   private async prepareActiveCommand(): Promise<void> {
     const active = this.active
+    const generation = this.socketGeneration
+    const socket = this.socket
+    if (!active || !socket || this.shuttingDown || this.state !== 'READY') {
+      return
+    }
+    const pending = this.commandPreparation
+    if (pending) {
+      await pending.promise
+      if (
+        (pending.socketGeneration !== generation || pending.active !== active) &&
+        this.active === active &&
+        this.socket === socket &&
+        this.socketGeneration === generation &&
+        !this.shuttingDown
+      ) {
+        await this.prepareActiveCommand()
+      }
+      return
+    }
+    const preparation = { active, socketGeneration: generation, promise: Promise.resolve() }
+    this.commandPreparation = preparation
+    preparation.promise = this.prepareCommandOnSocket(active, socket, generation).finally(() => {
+      if (this.commandPreparation === preparation) {
+        this.commandPreparation = undefined
+      }
+    })
+    await preparation.promise
+  }
+
+  private async prepareCommandOnSocket(
+    active: ActiveRequest,
+    socket: SyncSocketLike,
+    generation: number,
+  ): Promise<void> {
+    const current = () =>
+      !this.shuttingDown &&
+      this.active === active &&
+      this.socket === socket &&
+      this.socketGeneration === generation &&
+      this.state === 'READY'
+    const transportScope = this.transportScope
     if (
       !active ||
       (active.mode !== 'execute' && active.mode !== 'recover') ||
-      !this.transportScope ||
+      !transportScope ||
       !this.sessionScope ||
       this.state !== 'READY'
     ) {
@@ -3990,6 +4049,9 @@ export class SyncTransportWorkerRuntime {
       }
 
       const stale = await this.outbox.oldest(active.sessionScope)
+      if (!current()) {
+        return
+      }
       if (stale) {
         this.dependencies.postMessage({ type: 'RECOVERY_REQUIRED', clientRequestId: active.clientRequestId })
         this.active = undefined
@@ -3998,6 +4060,9 @@ export class SyncTransportWorkerRuntime {
       }
 
       const digest = await digestSyncBody(active.body, this.subtle)
+      if (!current()) {
+        return
+      }
       const payload = { command: 'SYNC_ITEMS' as const, body: active.body }
       const operationId = validOperationId(active.context?.operationId) ? active.context.operationId : undefined
       const operationIndex = validOperationIndex(active.context?.operationIndex) ? active.context.operationIndex : 0
@@ -4024,7 +4089,7 @@ export class SyncTransportWorkerRuntime {
       const record: SyncOutboxRecord = {
         ...(active.context?.socketOnly ? { socketOnly: true } : {}),
         sessionScope: active.sessionScope,
-        transportScope: this.transportScope,
+        transportScope,
         commandId: frame.commandId,
         digest,
         sequence: frame.sequence,
@@ -4032,8 +4097,15 @@ export class SyncTransportWorkerRuntime {
         createdAt: this.now(),
         ...(operationId ? { operationId } : {}),
       }
-      await this.outbox.put(record)
-      this.outboxRecord = record
+      await this.persistCommandRecord(record)
+      // A committed journal write survives its socket. Keep its exact identity
+      // for the replacement's STATUS query; never mint a second command for it.
+      if (!this.shuttingDown && this.active === active) {
+        this.outboxRecord = record
+      }
+      if (!current()) {
+        return
+      }
       this.dependencies.postMessage({
         type: 'COMMAND_PERSISTED',
         clientRequestId: active.clientRequestId,
@@ -4049,13 +4121,23 @@ export class SyncTransportWorkerRuntime {
       // A crash after this write but before the call is conservatively recovered
       // through STATUS; it can never create a duplicate HTTP owner.
       const dispatchingRecord: SyncOutboxRecord = { ...record, dispatchedAt: this.now() }
-      await this.outbox.put(dispatchingRecord)
-      this.outboxRecord = dispatchingRecord
+      await this.persistCommandRecord(dispatchingRecord)
+      if (!this.shuttingDown && this.active === active) {
+        this.outboxRecord = dispatchingRecord
+      }
+      if (!current()) {
+        return
+      }
       this.commandSent = true
       this.commandFrameRequestId = frame.requestId
       await this.sendWithBackpressure(dispatchingRecord.bytes)
-      this.startAckDeadline(COMMAND_ACK_TIMEOUT_MS)
+      if (current()) {
+        this.startAckDeadline(COMMAND_ACK_TIMEOUT_MS)
+      }
     } catch (error) {
+      if (!current()) {
+        return
+      }
       // Two different faults used to arrive here as one. An outbox write that fails
       // is `outbox-unavailable`; a send buffer that will not drain is the client
       // outrunning its socket, which is what `'backpressure'` is for and what
@@ -5166,6 +5248,12 @@ export class SyncTransportWorkerRuntime {
     this.brokerSaveFences.clear()
     this.brokerRpcOwners.clear()
     this.shuttingDown = true
+    // No new journal writes can begin after the generation guards observe this
+    // flag. Let an already-started write settle before scanning for quarantine.
+    // Otherwise a delayed transaction can append an unrevoked record after ACK.
+    if (this.commandJournalWrite) {
+      await this.commandJournalWrite.catch(() => undefined)
+    }
     let quarantined = false
     try {
       if (validSessionScope(sessionScope)) {
@@ -5222,6 +5310,9 @@ export class SyncTransportWorkerRuntime {
       this.handshakeLoopHoldTimer = undefined
     }
     this.outboxRecord = undefined
+    if (this.commandJournalWrite) {
+      await this.commandJournalWrite.catch(() => undefined)
+    }
     this.outbox.close()
     this.transition('HTTP_ONLY')
     // The owner lease is released by now. Saying so lets the main thread stop

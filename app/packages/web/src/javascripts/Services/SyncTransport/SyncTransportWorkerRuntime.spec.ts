@@ -333,6 +333,206 @@ describe('SyncTransportWorkerRuntime', () => {
     return { runtime, messages, sockets, outbox: sharedOutbox }
   }
 
+  it('does not mint two command identities when reconnect overlaps a pending digest', async () => {
+    let resume!: (value: ArrayBuffer) => void
+    const digest = jest
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<ArrayBuffer>((resolve) => {
+            resume = resolve
+          }),
+      )
+      .mockResolvedValue(Uint8Array.from({ length: 32 }, () => 0xab).buffer)
+    const harness = setup(undefined, { digest } as unknown as SubtleCrypto)
+    const original = await authorize(harness)
+    expect(digest).toHaveBeenCalledTimes(1)
+    original.abort()
+    jest.advanceTimersByTime(1_000)
+    await flush()
+    await harness.runtime.handle({
+      type: 'CONNECT',
+      clientRequestId: 'client-1',
+      sessionScope: SESSION_A,
+      authorization: {
+        endpoint: 'wss://sync.example.test/sockets/sync',
+        ticket: 'r'.repeat(40),
+        expiresAt: Date.now() + 30_000,
+        deviceId: 'device-1',
+      },
+    })
+    const replacement = harness.sockets.at(-1)!
+    replacement.open()
+    const auth = JSON.parse(replacement.sent[0])
+    replacement.receive(
+      serverFrame('AUTHENTICATED', auth.commandId, {
+        capability: 'ws-sync',
+        protocolVersion: 1,
+        operations: ['SYNC_ITEMS'],
+        nextClientSequence: 1,
+      }),
+    )
+    await flush()
+    await flush()
+    resume(Uint8Array.from({ length: 32 }, () => 0xab).buffer)
+    for (let i = 0; i < 8; i++) {
+      await flush()
+    }
+    const commands = harness.sockets
+      .flatMap((socket) => socket.sent.map((entry) => JSON.parse(entry)))
+      .filter((frame) => frame.type === 'COMMAND')
+    expect(harness.outbox.records.size).toBe(1)
+    expect(commands).toHaveLength(1)
+    expect(commands[0].sequence).toBe(1)
+  })
+
+  it('recovers a journal identity through STATUS when reconnect overlaps its dispatch checkpoint', async () => {
+    const harness = setup()
+    let resume!: () => void
+    const gate = new Promise<void>((resolve) => {
+      resume = resolve
+    })
+    const put = harness.outbox.put.bind(harness.outbox)
+    let writes = 0
+    jest.spyOn(harness.outbox, 'put').mockImplementation(async (record) => {
+      await put(record)
+      if (++writes === 2) {
+        await gate
+      }
+    })
+    const original = await authorize(harness)
+    expect(writes).toBe(2)
+    const record = [...harness.outbox.records.values()][0]
+    expect(record.dispatchedAt).toBeDefined()
+    original.abort()
+    jest.advanceTimersByTime(1_000)
+    await flush()
+    await harness.runtime.handle({
+      type: 'CONNECT',
+      clientRequestId: 'client-1',
+      sessionScope: SESSION_A,
+      authorization: {
+        endpoint: 'wss://sync.example.test/sockets/sync',
+        ticket: 'r'.repeat(40),
+        expiresAt: Date.now() + 30_000,
+        deviceId: 'device-1',
+      },
+    })
+    const replacement = harness.sockets.at(-1)!
+    replacement.open()
+    const auth = JSON.parse(replacement.sent[0])
+    replacement.receive(
+      serverFrame('AUTHENTICATED', auth.commandId, {
+        capability: 'ws-sync',
+        protocolVersion: 1,
+        operations: ['SYNC_ITEMS'],
+        nextClientSequence: 1,
+      }),
+    )
+    await flush()
+    resume()
+    for (let i = 0; i < 8; i++) {
+      await flush()
+    }
+    const frames = replacement.sent.map((entry) => JSON.parse(entry))
+    expect(frames.filter((frame) => frame.type === 'COMMAND')).toEqual([])
+    expect(frames.filter((frame) => frame.type === 'STATUS')).toEqual([
+      expect.objectContaining({ commandId: record.commandId, digest: record.digest, sequence: 1 }),
+    ])
+    expect(harness.outbox.records.size).toBe(1)
+    replacement.receive(
+      serverFrame('STATUS', record.commandId, { status: 'COMMITTED', result: { saved_items: [] } }, record.digest),
+    )
+    await flush()
+    await flush()
+    expect(harness.messages).toContainEqual(
+      expect.objectContaining({ type: 'RESULT', clientRequestId: 'client-1', commandId: record.commandId }),
+    )
+    await harness.runtime.handle({
+      type: 'CHECKPOINT_DURABLE',
+      requestId: 'checkpoint',
+      sessionScope: SESSION_A,
+      commandId: record.commandId,
+    })
+    expect(harness.outbox.records.size).toBe(0)
+  })
+
+  it.each(['SHUTDOWN', 'SESSION_REVOKED'] as const)(
+    'settles an in-flight first journal write safely before acknowledging %s',
+    async (type) => {
+      const harness = setup()
+      let resume!: () => void
+      const gate = new Promise<void>((resolve) => {
+        resume = resolve
+      })
+      const put = harness.outbox.put.bind(harness.outbox)
+      jest.spyOn(harness.outbox, 'put').mockImplementationOnce(async (record) => {
+        await gate
+        await put(record)
+      })
+      await authorize(harness)
+      expect(harness.outbox.put).toHaveBeenCalledTimes(1)
+      const revoking = harness.runtime.handle(
+        type === 'SHUTDOWN' ? { type } : { type, requestId: 'revoke-pending-write', sessionScope: SESSION_A },
+      )
+      await flush()
+      expect(
+        harness.messages.filter(
+          (message) => message.type === 'SHUTDOWN_COMPLETE' || message.type === 'SESSION_REVOKED_ACK',
+        ),
+      ).toEqual([])
+      resume()
+      await revoking
+      for (let i = 0; i < 5; i++) {
+        await flush()
+      }
+      expect([...harness.outbox.records.values()]).toEqual([
+        expect.objectContaining({ sessionScope: SESSION_A, ...(type === 'SESSION_REVOKED' ? { revoked: true } : {}) }),
+      ])
+      if (type === 'SESSION_REVOKED') {
+        expect(harness.messages).toContainEqual({
+          type: 'SESSION_REVOKED_ACK',
+          requestId: 'revoke-pending-write',
+          sessionScope: SESSION_A,
+        })
+      } else {
+        expect([...harness.outbox.records.values()][0].revoked).not.toBe(true)
+        expect(harness.messages).toContainEqual({ type: 'SHUTDOWN_COMPLETE' })
+      }
+      expect(harness.messages.filter((message) => message.type === 'COMMAND_PERSISTED')).toEqual([])
+      expect(
+        harness.sockets
+          .flatMap((socket) => socket.sent.map((entry) => JSON.parse(entry)))
+          .filter((frame) => frame.type === 'COMMAND'),
+      ).toEqual([])
+    },
+  )
+
+  it.each(['SHUTDOWN', 'SESSION_REVOKED'] as const)(
+    'does not append a command after %s during its digest',
+    async (type) => {
+      let resume!: (value: ArrayBuffer) => void
+      const digest = jest.fn(
+        () =>
+          new Promise<ArrayBuffer>((resolve) => {
+            resume = resolve
+          }),
+      )
+      const harness = setup(undefined, { digest } as unknown as SubtleCrypto)
+      await authorize(harness)
+      await harness.runtime.handle(
+        type === 'SHUTDOWN' ? { type } : { type, requestId: 'revoke', sessionScope: SESSION_A },
+      )
+      const afterTeardown = harness.messages.length
+      resume(Uint8Array.from({ length: 32 }, () => 0xab).buffer)
+      for (let i = 0; i < 6; i++) {
+        await flush()
+      }
+      expect(harness.outbox.records.size).toBe(0)
+      expect(harness.messages.slice(afterTeardown)).toEqual([])
+    },
+  )
+
   it('keeps an assistant stream alive beyond two minutes without replacing its socket', async () => {
     const harness = setup()
     const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS', 'API_RPC'])
