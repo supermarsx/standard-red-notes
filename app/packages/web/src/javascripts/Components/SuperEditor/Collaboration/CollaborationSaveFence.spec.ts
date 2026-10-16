@@ -25,9 +25,19 @@ it.each([
   { status: 200, body: { ...lease(), room: 'another-note' } },
   { status: 200, body: { ...lease(), token: 'not-a-server-token' } },
   { status: 200, body: { ...lease(), expiresAt: 1 } },
+  { status: 200, body: { ...lease(), serverUpdatedAtTimestamp: -1 } },
+  { status: 200, body: { ...lease(), serverUpdatedAtTimestamp: '123' } },
 ])('fails closed on a refused, mismatched or invalid lease', async (response) => {
   const rpc = jest.fn().mockResolvedValue(response)
   const application = { collaborationSaveFenceRequest: rpc } as unknown as WebApplication
   await expect(claimCollaborationSaveFence(application, identity)).rejects.toThrow()
   expect(rpc).toHaveBeenCalledTimes(1)
+})
+
+it('preserves the authoritative revision receipt on a claim', async () => {
+  const body = { ...lease(), serverUpdatedAtTimestamp: 123 }
+  const application = {
+    collaborationSaveFenceRequest: jest.fn().mockResolvedValue({ status: 200, body }),
+  } as unknown as WebApplication
+  expect(await claimCollaborationSaveFence(application, identity)).toEqual(body)
 })

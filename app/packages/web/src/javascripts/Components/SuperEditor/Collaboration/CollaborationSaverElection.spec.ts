@@ -278,6 +278,71 @@ describe('collaboration saver election', () => {
       expect(CollaborationSaverRegistry.get('room')).toMatchObject({ isSaver: false, paused: true })
       expect(awareness.getLocalState()?.saver.saving).toBe(false)
     })
+    it('starts from the server-fenced clean revision despite unrelated account sync work or errors', async () => {
+      jest
+        .spyOn(application.sync, 'getSyncStatus')
+        .mockReturnValue({ error: { message: 'Unrelated account operation failed' } } as never)
+      jest.mocked(claimCollaborationSaveFence).mockResolvedValue({
+        room: 'room',
+        token: 'token',
+        expiresAt: Date.now() + 30_000,
+        serverUpdatedAtTimestamp: 123,
+      })
+      jest
+        .spyOn(application.items, 'findItem')
+        .mockImplementation(() => ({ dirty: false, content, serverUpdatedAtTimestamp: 123 }) as never)
+      ;(application.sync.sync as jest.Mock).mockImplementation(() => new Promise(() => undefined))
+      await jest.advanceTimersByTimeAsync(2_000)
+      expect(CollaborationSaverRegistry.get('room')).toMatchObject({ isSaver: true, paused: false })
+      expect(application.sync.sync).not.toHaveBeenCalled()
+    })
+    it.each([undefined, 122])(
+      'still pulls the server base when the claim revision is absent or different (%s)',
+      async (revision) => {
+        jest.mocked(claimCollaborationSaveFence).mockResolvedValue({
+          room: 'room',
+          token: 'token',
+          expiresAt: Date.now() + 30_000,
+          ...(revision ? { serverUpdatedAtTimestamp: revision } : {}),
+        })
+        jest
+          .spyOn(application.items, 'findItem')
+          .mockImplementation(() => ({ dirty: false, content, serverUpdatedAtTimestamp: 123 }) as never)
+        await jest.advanceTimersByTimeAsync(2_000)
+        expect(application.sync.sync).toHaveBeenCalledWith(expect.objectContaining({ downloadOnly: true }))
+        expect(CollaborationSaverRegistry.get('room')).toMatchObject({ isSaver: true, paused: false })
+      },
+    )
+    it('recovers using a fresh server receipt while a superseded startup pull remains unresolved', async () => {
+      let complete!: (value: unknown) => void
+      ;(application.sync.sync as jest.Mock).mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            complete = resolve
+          }),
+      )
+      jest
+        .spyOn(application.items, 'findItem')
+        .mockImplementation(() => ({ dirty: false, content, serverUpdatedAtTimestamp: 123 }) as never)
+      await jest.advanceTimersByTimeAsync(1_000)
+      expect(CollaborationSaverRegistry.get('room')?.paused).toBe(true)
+      jest.mocked(claimCollaborationSaveFence).mockResolvedValue({
+        room: 'room',
+        token: 'new-proof',
+        expiresAt: Date.now() + 60_000,
+        serverUpdatedAtTimestamp: 123,
+      })
+      await jest.advanceTimersByTimeAsync(SAVER_INITIALIZATION_TIMEOUT_MS + 2_000)
+      expect(CollaborationSaverRegistry.get('room')).toMatchObject({
+        isSaver: true,
+        paused: false,
+        saveFence: { token: 'new-proof' },
+      })
+      expect(application.sync.sync).toHaveBeenCalledTimes(1)
+      complete({ downloadOnly: true, successful: true })
+      for (let i = 0; i < 10; i++) await Promise.resolve()
+      expect(CollaborationSaverRegistry.get('room')).toMatchObject({ isSaver: true, saveFence: { token: 'new-proof' } })
+    })
     it('renews its claim while a long pull-only catchup is still preparing', async () => {
       jest.mocked(claimCollaborationSaveFence).mockResolvedValueOnce({
         room: 'room',
@@ -328,7 +393,6 @@ describe('collaboration saver election', () => {
       ;(application.sync.sync as jest.Mock).mockImplementationOnce(() => new Promise((resolve) => (complete = resolve)))
       await jest.advanceTimersByTimeAsync(2_000 + SAVER_INITIALIZATION_TIMEOUT_MS)
       expect(CollaborationSaverRegistry.get('room')).toMatchObject({ isSaver: false, paused: true })
-      expect(awareness.getLocalState()?.saver.canSaveOverSocket).toBe(false)
       expect(releaseCollaborationSaveFence).toHaveBeenCalled()
       awareness.getStates().set(999, { saver: { ...participant('b', 'peer'), saving: true } })
       awareness.emit('change', [])
@@ -375,7 +439,7 @@ describe('collaboration saver election', () => {
       )
       expect(CollaborationSaverRegistry.get('room')).toMatchObject({ leaseId: 'replacement', isSaver: true })
     })
-    it('keeps a timed-out queued pull withdrawn across retry windows until that exact coroutine settles', async () => {
+    it('reuses a timed-out queued pull and follows a healthy saver while the old coroutine is pending', async () => {
       let complete: (value: unknown) => void = () => undefined
       ;(application.sync.sync as jest.Mock).mockImplementationOnce(() => new Promise((resolve) => (complete = resolve)))
       await jest.advanceTimersByTimeAsync(2_000 + SAVER_INITIALIZATION_TIMEOUT_MS)
@@ -384,7 +448,7 @@ describe('collaboration saver election', () => {
       awareness.getStates().set(999, { saver: { ...participant('b', 'peer'), saving: true } })
       awareness.emit('change', [])
       await jest.advanceTimersByTimeAsync(60_000)
-      expect(awareness.getLocalState()?.saver.canSaveOverSocket).toBe(false)
+      expect(awareness.getLocalState()?.saver.canSaveOverSocket).toBe(true)
       expect(CollaborationSaverRegistry.get('room')?.saverLeaseId).toBe('peer')
       expect(claimCollaborationSaveFence).toHaveBeenCalledTimes(claims)
       expect(application.sync.sync).toHaveBeenCalledTimes(pulls)

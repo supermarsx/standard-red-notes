@@ -288,6 +288,14 @@ produces an error instead of discarding existing comments. Concurrent edits from
 different devices use ordinary preference synchronization, rather than the live
 collaborative comment stream.
 
+A saver claim includes the server's committed note revision, read under the
+same SQL lock that protects writes. If the local note is clean and matches that
+revision, startup does not queue another account-wide sync. A different or
+missing revision still requires a read-only catchup. Older servers remain
+compatible through that catchup path. A timed-out initialization releases its
+proof and retries; late completion cannot replace a newer saver. Retries reuse
+an unfinished catchup instead of adding more requests to the account queue.
+
 The **Checklist** ribbon tab appears when the note contains a checklist and
 provides completion controls, recurrence settings, pins and high, normal or low priority flags.
 Place the cursor in an item to configure it using the compact **Item settings**

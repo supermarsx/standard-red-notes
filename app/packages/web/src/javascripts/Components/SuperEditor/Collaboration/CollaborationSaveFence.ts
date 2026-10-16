@@ -1,7 +1,13 @@
 import type { WebApplication } from '@/Application/WebApplication'
 
 export type CollaborationSaveFenceIdentity = { room: string; roomEpoch: string; leaseId: string }
-export type CollaborationSaveFence = { room: string; token: string; expiresAt: number }
+export type CollaborationSaveFence = {
+  room: string
+  token: string
+  expiresAt: number
+  /** Current note revision read while granting the authoritative SQL fence. */
+  serverUpdatedAtTimestamp?: number
+}
 
 async function request(
   application: WebApplication,
@@ -28,7 +34,9 @@ async function request(
     !/^[a-f0-9]{64}$/.test(body.token) ||
     typeof body.expiresAt !== 'number' ||
     !Number.isSafeInteger(body.expiresAt) ||
-    body.expiresAt <= Date.now()
+    body.expiresAt <= Date.now() ||
+    (body.serverUpdatedAtTimestamp !== undefined &&
+      (!Number.isSafeInteger(body.serverUpdatedAtTimestamp) || body.serverUpdatedAtTimestamp <= 0))
   ) {
     throw new Error('The collaboration saver received an invalid server lease.')
   }

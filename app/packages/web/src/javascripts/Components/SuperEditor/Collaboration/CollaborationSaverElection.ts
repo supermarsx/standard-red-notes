@@ -182,7 +182,7 @@ export function installCollaborationSaver(
   let activeIdentityValid = false
   let generation = 0
   let initializationTimer: ReturnType<typeof setTimeout> | undefined
-  let blockedInitialization: number | undefined
+  let pendingBasePull: Promise<unknown> | undefined
   let lastSaveLaneUsable = application.syncSaveLane.usable
   let fenceIdentity = identity
   const pendingFenceReleases = pendingFenceReleasesByApplication.get(application) ?? new Map<string, Promise<void>>()
@@ -334,7 +334,6 @@ export function installCollaborationSaver(
           if (!isCurrent()) {
             return
           }
-          blockedInitialization = attemptGeneration
           generation += 1
           renewing = false
           initializationTimer = undefined
@@ -359,19 +358,46 @@ export function installCollaborationSaver(
             }
             saveFence = claimed
             fenceIdentity = attemptIdentity
-            // Pull the server's current base before a replacement starts saving.
-            // A local propagation callback is not a remote acknowledgement.
+            // Confirm the server base under this proof before saving. A local
+            // propagation callback is not a remote acknowledgement.
             await provider.flush()
             if (!isCurrent()) {
               return
             }
-            const synchronized = await application.sync.sync({
-              downloadOnly: true,
-              awaitAll: false,
-              queueStrategy: SyncQueueStrategy.ForceSpawnNew,
-              isUserInitiated: true,
-              sourceDescription: 'Collaboration saver takeover',
-            })
+            const local = application.items.findItem<SNNote>(room)
+            const alreadyCurrent =
+              claimed.serverUpdatedAtTimestamp !== undefined &&
+              local?.dirty === false &&
+              local.serverUpdatedAtTimestamp === claimed.serverUpdatedAtTimestamp
+            let baseConfirmed = alreadyCurrent
+            if (!alreadyCurrent) {
+              // Reuse an unfinished read across retries. A timed-out attempt
+              // cannot grant editability later, or enqueue unlimited catchups.
+              if (!pendingBasePull) {
+                const pull = application.sync.sync({
+                  downloadOnly: true,
+                  awaitAll: false,
+                  queueStrategy: SyncQueueStrategy.ForceSpawnNew,
+                  isUserInitiated: true,
+                  sourceDescription: 'Collaboration saver takeover',
+                })
+                pendingBasePull = pull
+                void pull
+                  .finally(() => {
+                    if (pendingBasePull === pull) {
+                      pendingBasePull = undefined
+                    }
+                  })
+                  .catch(() => undefined)
+              }
+              const synchronized = await pendingBasePull
+              baseConfirmed = Boolean(
+                synchronized &&
+                typeof synchronized === 'object' &&
+                (synchronized as { downloadOnly?: boolean }).downloadOnly === true &&
+                (synchronized as { successful?: boolean }).successful === true,
+              )
+            }
             if (!isCurrent()) {
               return
             }
@@ -380,11 +406,9 @@ export function installCollaborationSaver(
             const dirtyCovered =
               currentStamp?.epoch === roomEpoch && CollaborativeDocumentRegistry.covers(room, currentStamp)
             if (
-              !synchronized ||
-              typeof synchronized !== 'object' ||
-              (synchronized as { downloadOnly?: boolean; successful?: boolean }).downloadOnly !== true ||
-              (synchronized as { successful?: boolean }).successful !== true ||
-              application.sync.getSyncStatus().error ||
+              !baseConfirmed ||
+              (!alreadyCurrent && application.sync.getSyncStatus().error) ||
+              (alreadyCurrent && current?.serverUpdatedAtTimestamp !== claimed.serverUpdatedAtTimestamp) ||
               !current ||
               current.key_system_identifier !== initialNote?.key_system_identifier ||
               current.shared_vault_uuid !== initialNote?.shared_vault_uuid ||
@@ -409,24 +433,17 @@ export function installCollaborationSaver(
           settledLease = next === leaseId || chosen?.saving === true ? next : undefined
           saveRequest += 1
           publishRegistry()
-        })()
-          .catch(() => {
-            if (!isCurrent()) {
-              return
-            }
-            clearTimeout(initializationTimer)
-            initializationTimer = undefined
-            releaseFence()
-            quarantineUntil = Date.now() + retryDelay
-            retryDelay = Math.min(SAVER_RETRY_MAX_MS, retryDelay * 2)
-            advertise()
-          })
-          .finally(() => {
-            if (blockedInitialization === attemptGeneration) {
-              blockedInitialization = undefined
-              advertise()
-            }
-          })
+        })().catch(() => {
+          if (!isCurrent()) {
+            return
+          }
+          clearTimeout(initializationTimer)
+          initializationTimer = undefined
+          releaseFence()
+          quarantineUntil = Date.now() + retryDelay
+          retryDelay = Math.min(SAVER_RETRY_MAX_MS, retryDelay * 2)
+          advertise()
+        })
       }, SAVER_HANDOFF_SETTLE_MS)
     }
   }
@@ -474,11 +491,7 @@ export function installCollaborationSaver(
       userUuid: userUuid ?? '',
       leaseId,
       canSaveOverSocket:
-        activeIdentityValid &&
-        blockedInitialization === undefined &&
-        constraintPersisted &&
-        application.syncSaveLane.usable &&
-        Date.now() >= quarantineUntil,
+        activeIdentityValid && constraintPersisted && application.syncSaveLane.usable && Date.now() >= quarantineUntil,
       canonicalReady: activeIdentityValid && provider.isCanonicalReady() && provider.isRoomJoined(),
       saving: settledLease === leaseId && !stalled && saveFence !== undefined && saveFence.expiresAt > Date.now(),
     } satisfies SaverParticipant)
@@ -491,7 +504,6 @@ export function installCollaborationSaver(
       return
     }
     generation += 1
-    blockedInitialization = undefined
     clearTimeout(initializationTimer)
     initializationTimer = undefined
     clearTimeout(settleTimer)
@@ -515,10 +527,10 @@ export function installCollaborationSaver(
   awareness.on('change', elect)
   const stopLane = application.subscribeSyncSaveLane(() => {
     const usable = application.syncSaveLane.usable
-    if (usable && !lastSaveLaneUsable && blockedInitialization === undefined) {
+    if (usable && !lastSaveLaneUsable) {
       // A newly recovered lane is stronger evidence than the retry timer. Run
       // the normal fenced takeover now; never bypass its flush or server-base
-      // check, and never overlap an unabortable initialization still in flight.
+      // check. Generation guards reject late completion of an abandoned attempt.
       quarantineUntil = 0
       stalled = false
     }
