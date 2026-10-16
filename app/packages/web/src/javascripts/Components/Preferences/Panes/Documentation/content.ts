@@ -1319,6 +1319,14 @@ export const DOC_CATEGORIES: DocCategory[] = [
           },
           {
             type: 'paragraph',
+            text: 'AI changes in the editor ribbon reads the history stored inside the note’s encrypted app data. Assistant title and body edits, full Super replacements, structural checklist/block patches and nonempty note creation register there with their tool/run source and reversible snapshots. Content and history are committed together. Unchanged content does not add an entry. The ledger retains up to 12 changes for 90 days, subject to its encrypted size budget; it cannot reconstruct older unrecorded actions. Accept and Dismiss keep the content; Undo refuses to overwrite later edits. Comment, tag and reminder actions have separate storage and are not content changes in this panel.',
+          },
+          {
+            type: 'paragraph',
+            text: 'A denied action stops the current assistant run and shows the reason in the conversation. This includes declined approvals, read-only or locked notes, out-of-context requests and server internet-policy refusals. Later tools and queued prompts do not start automatically after a permission refusal. Correct the access or approval choice before starting another request.',
+          },
+          {
+            type: 'paragraph',
             text: 'Agent, Research and Deep Research can search the internet and read pages through the server when a search provider is configured. Settings → Assistant → Search has an encrypted account preference to disable internet access across chats. Admin → AI → Internet access is the server-wide master switch, enabled by default; turning it off rejects web search and page retrieval before any outbound request. An account preference cannot override the server policy. Research asks before sending each query or page URL; Agent follows its selected tool approval policy. Note search remains available with internet access off.',
           },
           {
