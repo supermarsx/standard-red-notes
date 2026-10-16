@@ -387,6 +387,66 @@ describe('AssistantTools reminder reconciliation', () => {
     expect(state.reminders).toEqual([original])
   })
 
+  it('preserves reminders added or edited while failed email deletion is pending', async () => {
+    const failed = reminder('failed', 'email-failed')
+    const edited = { ...failed, message: 'Edited while clearing' }
+    const added = reminder('new')
+    const { application, state } = makeReminderApplication([failed])
+    deleteEmailReminderMock.mockImplementation(async () => {
+      state.reminders = [added, edited]
+      return false
+    })
+    const tools = new AssistantTools(application, makeContext({ selectedNoteUuids: new Set(['note-1']) }))
+    await expect(tools.call('reminders.clear', { uuid: 'note-1' })).rejects.toThrow('state was restored')
+    expect(state.reminders).toEqual([added, edited])
+  })
+
+  it('restores absent failed reminders without discarding concurrently added reminders', async () => {
+    const failed = reminder('failed', 'email-failed')
+    const added = reminder('new')
+    const { application, state } = makeReminderApplication([failed])
+    deleteEmailReminderMock.mockImplementation(async () => {
+      state.reminders = [added]
+      return false
+    })
+    const tools = new AssistantTools(application, makeContext({ selectedNoteUuids: new Set(['note-1']) }))
+    await expect(tools.call('reminders.clear', { uuid: 'note-1' })).rejects.toThrow('state was restored')
+    expect(state.reminders).toEqual([added, failed])
+  })
+
+  it.each(['removed', 'locked', 'trashed', 'read-only', 'account', 'key'] as const)(
+    'does not restore reminder snapshots after a %s boundary during email deletion',
+    async (boundary) => {
+      const { application, record, note, mutator, state } = makeReminderApplication([
+        reminder('failed', 'email-failed'),
+      ])
+      let account = 'original-account'
+      let sessionCurrent = true
+      Object.assign(record, {
+        sessions: {
+          isSignedIn: () => true,
+          getUser: () => ({ uuid: account }),
+          isCurrentSessionReadOnly: () => boundary === 'read-only' && !sessionCurrent,
+        },
+      })
+      deleteEmailReminderMock.mockImplementation(async () => {
+        if (boundary === 'removed') record.items.findItem = () => undefined
+        if (boundary === 'locked') Object.assign(note, { locked: true })
+        if (boundary === 'trashed') note.trashed = true
+        if (boundary === 'account') account = 'replacement-account'
+        sessionCurrent = boundary !== 'key' && boundary !== 'read-only'
+        return false
+      })
+      const tools = new AssistantTools(
+        application,
+        makeContext({ selectedNoteUuids: new Set(['note-1']), isSessionCurrent: () => sessionCurrent }),
+      )
+      await expect(tools.call('reminders.clear', { uuid: 'note-1' })).rejects.toThrow('Could not restore reminders')
+      expect(mutator.changeItem).not.toHaveBeenCalled()
+      expect(state.reminders).toEqual([])
+    },
+  )
+
   it('restores exactly the reminders whose external deletion failed', async () => {
     const failed = reminder('failed', 'email-failed')
     const { application, mutator, state } = makeReminderApplication([

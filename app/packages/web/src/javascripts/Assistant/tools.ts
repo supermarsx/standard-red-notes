@@ -23,6 +23,7 @@ import { GetAllThemesUseCase } from '@standardnotes/ui-services'
 import { AppPaneId } from '@/Components/Panes/AppPaneMetadata'
 import { ToolDefinition, ToolSession } from './types'
 import { AssistantActionNotAllowedError } from './AssistantActionNotAllowedError'
+import { captureAssistantSessionPrincipal, assistantSessionPrincipalMatches } from './assistantSessionPrincipal'
 import { retrieve } from './retrieval'
 import { HeadlessSuperConverter } from '@/Components/SuperEditor/Tools/HeadlessSuperConverter'
 import {
@@ -1884,14 +1885,36 @@ export class AssistantTools implements ToolSession {
     const mutator = this.application.mutator
     const emailApplication = this.emailApplicationSnapshot()
 
+    const principal = this.application.sessions
+      ? captureAssistantSessionPrincipal(this.application.sessions)
+      : undefined
+    const samePrincipal = () =>
+      (!principal ||
+        assistantSessionPrincipalMatches(principal, captureAssistantSessionPrincipal(this.application.sessions))) &&
+      (!this.context.isSessionCurrent || this.context.isSessionCurrent())
+    let restoreAllowed = samePrincipal()
+    const restoreTarget = () => {
+      if (!restoreAllowed || !samePrincipal()) {
+        throw new Error('The account or key changed before reminder recovery.')
+      }
+      const latest = this.requireReadableNote(note.uuid)
+      this.assertNoteMutationAuthorized(latest, false)
+      if (latest.trashed) {
+        throw new Error('The note was trashed before reminder recovery.')
+      }
+      return latest
+    }
+
     // Clear locally before touching the external service. If this write fails,
     // every server id remains referenced and no compensation is necessary.
     await notesController.clearNoteReminders(note)
+    restoreAllowed = restoreAllowed && samePrincipal()
 
     const failedExternalDeletes: Reminder[] = []
     for (const reminder of existing) {
       if (reminder.emailReminderId) {
         const removed = await deleteEmailReminder(emailApplication, reminder.emailReminderId)
+        restoreAllowed = restoreAllowed && samePrincipal()
         if (!removed) {
           failedExternalDeletes.push(reminder)
         }
@@ -1900,10 +1923,17 @@ export class AssistantTools implements ToolSession {
 
     if (failedExternalDeletes.length > 0) {
       try {
-        this.assertNoteMutationAuthorized(note)
-        await mutator.changeItem<NoteMutator, SNNote>(note, (noteMutator) => {
-          noteMutator.setAppDataItem(NoteRemindersKey, failedExternalDeletes)
+        const latest = restoreTarget()
+        await mutator.changeItem<NoteMutator, SNNote>(latest, (noteMutator) => {
+          const currentReminders = getNoteReminders(restoreTarget())
+          const currentIds = new Set(currentReminders.map((reminder) => reminder.id))
+          // Recovery restores external provenance, never overwrites newer local edits.
+          noteMutator.setAppDataItem(NoteRemindersKey, [
+            ...currentReminders,
+            ...failedExternalDeletes.filter((reminder) => !currentIds.has(reminder.id)),
+          ])
         })
+        restoreAllowed = restoreAllowed && samePrincipal()
       } catch (error) {
         throw new Error('Could not restore reminders whose external email records were not deleted.', { cause: error })
       }
