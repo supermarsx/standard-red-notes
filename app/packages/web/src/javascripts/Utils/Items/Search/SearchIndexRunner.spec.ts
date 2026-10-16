@@ -36,6 +36,161 @@ const makeApplication = () => {
 }
 
 describe('SearchIndexRunner', () => {
+  describe('idle scheduler lifecycle', () => {
+    const cadence = 5 * 60 * 1000
+    let callbacks: Map<number, () => void>
+    let nextHandle: number
+    let originalRequest: PropertyDescriptor | undefined
+    let originalCancel: PropertyDescriptor | undefined
+    let runner: SearchIndexRunner
+
+    beforeEach(() => {
+      jest.useFakeTimers()
+      callbacks = new Map()
+      nextHandle = 0
+      originalRequest = Object.getOwnPropertyDescriptor(globalThis, 'requestIdleCallback')
+      originalCancel = Object.getOwnPropertyDescriptor(globalThis, 'cancelIdleCallback')
+      Object.defineProperty(globalThis, 'requestIdleCallback', {
+        configurable: true,
+        value: (callback: () => void) => {
+          callbacks.set(++nextHandle, callback)
+          return nextHandle
+        },
+      })
+      Object.defineProperty(globalThis, 'cancelIdleCallback', {
+        configurable: true,
+        value: (handle: number) => callbacks.delete(handle),
+      })
+    })
+
+    afterEach(() => {
+      runner?.deinit()
+      for (const [name, descriptor] of [
+        ['requestIdleCallback', originalRequest],
+        ['cancelIdleCallback', originalCancel],
+      ] as const) {
+        if (descriptor) {
+          Object.defineProperty(globalThis, name, descriptor)
+        } else {
+          Reflect.deleteProperty(globalThis, name)
+        }
+      }
+      jest.useRealTimers()
+    })
+
+    const settle = async () => {
+      for (let i = 0; i < 5; i++) {
+        await Promise.resolve()
+      }
+    }
+    const grantIdleTime = () => {
+      const ready = [...callbacks.values()]
+      callbacks.clear()
+      ready.forEach((callback) => callback())
+    }
+
+    it('enforces a cooldown even when the browser grants idle time immediately', async () => {
+      const { application, itemListController } = makeApplication()
+      runner = new SearchIndexRunner(application as never)
+      await settle()
+      runner.setSchedulerMode('idle')
+
+      for (let i = 0; i < 10; i++) {
+        grantIdleTime()
+        await settle()
+      }
+      expect(itemListController.rebuildSearchIndex).toHaveBeenCalledTimes(1)
+      jest.advanceTimersByTime(cadence)
+      grantIdleTime()
+      await settle()
+      expect(itemListController.rebuildSearchIndex).toHaveBeenCalledTimes(2)
+      grantIdleTime()
+      await settle()
+      expect(itemListController.rebuildSearchIndex).toHaveBeenCalledTimes(2)
+    })
+
+    it('cannot re-arm after disposal while an idle rebuild is in flight', async () => {
+      const { application, itemListController } = makeApplication()
+      runner = new SearchIndexRunner(application as never)
+      await settle()
+      let finish!: () => void
+      itemListController.rebuildSearchIndex.mockImplementationOnce(
+        () => new Promise<void>((resolve) => (finish = resolve)),
+      )
+      runner.setSchedulerMode('idle')
+      jest.advanceTimersByTime(cadence)
+      grantIdleTime()
+      runner.deinit()
+      finish()
+      await settle()
+      jest.advanceTimersByTime(cadence)
+      grantIdleTime()
+      await settle()
+      expect(itemListController.rebuildSearchIndex).toHaveBeenCalledTimes(2)
+      expect(callbacks.size).toBe(0)
+      expect(jest.getTimerCount()).toBe(0)
+      expect(runner.isRunning).toBe(false)
+    })
+
+    it('does not let an old completion duplicate a newly armed idle scheduler', async () => {
+      const { application, itemListController } = makeApplication()
+      runner = new SearchIndexRunner(application as never)
+      await settle()
+      let finish!: () => void
+      itemListController.rebuildSearchIndex.mockImplementationOnce(
+        () => new Promise<void>((resolve) => (finish = resolve)),
+      )
+      runner.setSchedulerMode('idle')
+      jest.advanceTimersByTime(cadence)
+      grantIdleTime()
+      runner.setSchedulerMode('manual')
+      runner.setSchedulerMode('idle')
+      finish()
+      await settle()
+      jest.advanceTimersByTime(cadence)
+      expect(callbacks.size).toBe(1)
+      grantIdleTime()
+      await settle()
+      expect(itemListController.rebuildSearchIndex).toHaveBeenCalledTimes(3)
+      expect(jest.getTimerCount()).toBe(1)
+    })
+
+    it('rejects an already queued idle callback after stop and restart', async () => {
+      const { application, itemListController } = makeApplication()
+      runner = new SearchIndexRunner(application as never)
+      await settle()
+      runner.setSchedulerMode('idle')
+      jest.advanceTimersByTime(cadence)
+      const staleCallback = [...callbacks.values()][0]
+      expect(staleCallback).toBeDefined()
+      runner.stop()
+      runner.start()
+      await settle()
+      staleCallback()
+      await settle()
+      expect(itemListController.rebuildSearchIndex).toHaveBeenCalledTimes(2)
+      expect(jest.getTimerCount()).toBe(1)
+      expect(callbacks.size).toBe(0)
+    })
+
+    it('uses the same cadence without requestIdleCallback and cancels the pending timer', async () => {
+      Reflect.deleteProperty(globalThis, 'requestIdleCallback')
+      const { application, itemListController } = makeApplication()
+      runner = new SearchIndexRunner(application as never)
+      await settle()
+      runner.setSchedulerMode('idle')
+      jest.advanceTimersByTime(cadence - 1)
+      expect(itemListController.rebuildSearchIndex).toHaveBeenCalledTimes(1)
+      jest.advanceTimersByTime(1)
+      await settle()
+      expect(itemListController.rebuildSearchIndex).toHaveBeenCalledTimes(2)
+      runner.stop()
+      jest.advanceTimersByTime(cadence * 2)
+      expect(itemListController.rebuildSearchIndex).toHaveBeenCalledTimes(2)
+      expect(jest.getTimerCount()).toBe(0)
+    })
+  })
+
   it('pushes the persisted scope into the controller on construction', () => {
     const { application, itemListController } = makeApplication()
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

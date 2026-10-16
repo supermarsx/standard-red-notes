@@ -12,9 +12,6 @@ import {
   SearchIndexSettingsKey,
 } from './searchIndexSettings'
 
-/** Polyfill-ish handles so we work whether or not requestIdleCallback exists. */
-type IdleHandle = number | ReturnType<typeof setTimeout>
-
 /**
  * Standard Red Notes: imperative runner for the background search indexer.
  *
@@ -57,8 +54,11 @@ export class SearchIndexRunner {
   currentJob: { processed: number; total: number } | null = null
 
   private intervalHandle: ReturnType<typeof setInterval> | null = null
-  private idleHandle: IdleHandle | null = null
-  /** Re-arm cadence for the idle scheduler's timer fallback / re-scheduling. */
+  private idleHandle: number | null = null
+  private idleCooldownHandle: ReturnType<typeof setTimeout> | null = null
+  private schedulerGeneration = 0
+  private disposed = false
+  /** Minimum delay between scheduled idle rebuilds, independent of browser idle time. */
   private static readonly IDLE_RESCHEDULE_MS = 5 * 60 * 1000
 
   constructor(private application: WebApplication) {
@@ -231,7 +231,7 @@ export class SearchIndexRunner {
    * scheduler if configured. No-op when disabled or already running.
    */
   start(): void {
-    if (!this.settings.enabled || this.isRunning) {
+    if (this.disposed || !this.settings.enabled || this.isRunning) {
       return
     }
     this.setIsRunning(true)
@@ -252,7 +252,7 @@ export class SearchIndexRunner {
    * Drives the indexing status and never overlaps two builds.
    */
   async rebuildNow(): Promise<void> {
-    if (this.isIndexing) {
+    if (this.disposed || this.isIndexing) {
       return
     }
     this.setIsIndexing(true)
@@ -321,16 +321,22 @@ export class SearchIndexRunner {
 
   private armScheduler(): void {
     this.clearScheduler()
+    if (this.disposed || !this.isRunning) {
+      return
+    }
+    const generation = this.schedulerGeneration
     switch (this.settings.schedulerMode) {
       case 'interval': {
         const periodMs = this.settings.intervalMinutes * 60 * 1000
         this.intervalHandle = setInterval(() => {
-          void this.rebuildNow()
+          if (generation === this.schedulerGeneration) {
+            void this.rebuildNow()
+          }
         }, periodMs)
         break
       }
       case 'idle':
-        this.scheduleIdleRebuild()
+        this.scheduleIdleRebuild(generation)
         break
       // 'on-change' relies on the controller's incremental collectIndexUpdates path
       // (kept live by the initial rebuild in start()); 'manual'/'off' arm nothing.
@@ -342,39 +348,56 @@ export class SearchIndexRunner {
   }
 
   /**
-   * Schedule a one-shot idle rebuild. Uses requestIdleCallback when available so
-   * the full rebuild runs while the app is otherwise idle; falls back to a timer
-   * elsewhere (jsdom/older browsers). Re-arms itself so the index keeps refreshing.
+   * Wait for the cadence first, then request idle time. requestIdleCallback's
+   * timeout is a deadline, so using it alone can continuously rebuild on idle PCs.
+   * Fence both queued callbacks and async completions against scheduler changes.
    */
-  private scheduleIdleRebuild(): void {
-    const ric = (globalThis as { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number })
-      .requestIdleCallback
-    const run = () => {
-      void this.rebuildNow().finally(() => {
-        // Only re-arm while still running in idle mode.
-        if (this.isRunning && this.settings.schedulerMode === 'idle') {
-          this.scheduleIdleRebuild()
+  private scheduleIdleRebuild(generation: number): void {
+    const isCurrent = () =>
+      !this.disposed &&
+      generation === this.schedulerGeneration &&
+      this.isRunning &&
+      this.settings.schedulerMode === 'idle'
+    this.idleCooldownHandle = setTimeout(() => {
+      if (!isCurrent()) {
+        return
+      }
+      this.idleCooldownHandle = null
+      const run = () => {
+        if (!isCurrent()) {
+          return
         }
-      })
-    }
-    if (typeof ric === 'function') {
-      this.idleHandle = ric(run, { timeout: SearchIndexRunner.IDLE_RESCHEDULE_MS })
-    } else {
-      this.idleHandle = setTimeout(run, SearchIndexRunner.IDLE_RESCHEDULE_MS)
-    }
+        this.idleHandle = null
+        void this.rebuildNow().finally(() => {
+          if (isCurrent()) {
+            this.scheduleIdleRebuild(generation)
+          }
+        })
+      }
+      const ric = (globalThis as { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number })
+        .requestIdleCallback
+      if (typeof ric === 'function') {
+        this.idleHandle = ric(run, { timeout: SearchIndexRunner.IDLE_RESCHEDULE_MS })
+      } else {
+        run()
+      }
+    }, SearchIndexRunner.IDLE_RESCHEDULE_MS)
   }
 
   private clearScheduler(): void {
+    this.schedulerGeneration++
     if (this.intervalHandle !== null) {
       clearInterval(this.intervalHandle)
       this.intervalHandle = null
     }
+    if (this.idleCooldownHandle !== null) {
+      clearTimeout(this.idleCooldownHandle)
+      this.idleCooldownHandle = null
+    }
     if (this.idleHandle !== null) {
       const cic = (globalThis as { cancelIdleCallback?: (handle: number) => void }).cancelIdleCallback
-      if (typeof cic === 'function' && typeof this.idleHandle === 'number') {
+      if (typeof cic === 'function') {
         cic(this.idleHandle)
-      } else {
-        clearTimeout(this.idleHandle as ReturnType<typeof setTimeout>)
       }
       this.idleHandle = null
     }
@@ -382,6 +405,8 @@ export class SearchIndexRunner {
 
   /** Release timers + the progress subscription; call on application teardown. */
   deinit(): void {
+    this.disposed = true
+    this.setIsRunning(false)
     this.clearScheduler()
     try {
       this.application.itemListController.setSearchIndexProgressListener(null)
