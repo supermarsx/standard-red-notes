@@ -1,4 +1,9 @@
-import { IndexedDbSyncOutbox, SyncOutboxUnavailableError, type SyncOutboxRecord } from './SyncTransportOutbox'
+import {
+  ConcurrentIndexedDbSyncOutbox,
+  IndexedDbSyncOutbox,
+  SyncOutboxUnavailableError,
+  type SyncOutboxRecord,
+} from './SyncTransportOutbox'
 
 type Lease = { transportScope: string; sessionScope: string; ownerId: string; expiresAt: number }
 
@@ -11,6 +16,10 @@ class FakeIdbRequest<T> {
 
 class FakeStore {
   constructor(private readonly rows: Map<string, Lease>) {}
+
+  put(lease: Lease): void {
+    this.rows.set(lease.transportScope, { ...lease })
+  }
 
   get(key: string): FakeIdbRequest<Lease | undefined> {
     const request = new FakeIdbRequest<Lease | undefined>()
@@ -33,6 +42,15 @@ class FakeStore {
 
 class FakeCommandStore {
   constructor(private readonly rows: Map<string, SyncOutboxRecord>) {}
+
+  get(key: [string, string]): FakeIdbRequest<SyncOutboxRecord | undefined> {
+    const request = new FakeIdbRequest<SyncOutboxRecord | undefined>()
+    queueMicrotask(() => {
+      request.result = this.rows.get(`${key[0]}|${key[1]}`)
+      request.onsuccess?.()
+    })
+    return request
+  }
 
   index(name: string): { getAll: (sessionScope: string) => FakeIdbRequest<SyncOutboxRecord[]> } {
     if (name !== 'sessionScope') {
@@ -65,6 +83,7 @@ class FakeTransaction {
   oncomplete: (() => void) | null = null
   onerror: (() => void) | null = null
   onabort: (() => void) | null = null
+  error: Error | null = null
 
   constructor(
     private readonly rows: Map<string, Lease>,
@@ -73,7 +92,7 @@ class FakeTransaction {
     // A real transaction completes after its last request settles; a macrotask
     // is the closest ordering available here and leaves the awaits in `database()`
     // time to attach their handlers.
-    setTimeout(() => this.oncomplete?.(), 0)
+    setTimeout(() => (this.error ? this.onabort?.() : this.oncomplete?.()), 0)
   }
 
   objectStore(name: string): FakeStore | FakeCommandStore {
@@ -84,6 +103,10 @@ class FakeTransaction {
 class FakeDatabase {
   closed = false
   onversionchange: (() => void) | null = null
+  onclose: (() => void) | null = null
+  failNextTransaction?: Error
+  abortNextTransaction?: Error
+  transactions = 0
   objectStoreNames = { contains: () => true }
 
   constructor(
@@ -92,10 +115,19 @@ class FakeDatabase {
   ) {}
 
   transaction(): FakeTransaction {
-    if (this.closed) {
-      throw new Error('InvalidStateError')
+    if (this.failNextTransaction) {
+      const error = this.failNextTransaction
+      this.failNextTransaction = undefined
+      throw error
     }
-    return new FakeTransaction(this.rows, this.commands)
+    if (this.closed) {
+      throw new DOMException('The database connection is closing', 'InvalidStateError')
+    }
+    this.transactions++
+    const transaction = new FakeTransaction(this.rows, this.commands)
+    transaction.error = this.abortNextTransaction ?? null
+    this.abortNextTransaction = undefined
+    return transaction
   }
 
   createObjectStore(): { createIndex: () => void } {
@@ -111,9 +143,13 @@ class FakeFactory {
   opens = 0
   failNextOpen = false
   blockNextOpen = false
+  closeOnOpen = false
   rows = new Map<string, Lease>()
   commands = new Map<string, SyncOutboxRecord>()
   databases: FakeDatabase[] = []
+  requests: Array<
+    FakeIdbRequest<FakeDatabase> & { onblocked: (() => void) | null; onupgradeneeded: (() => void) | null }
+  > = []
 
   open(): FakeIdbRequest<FakeDatabase> & { onblocked: (() => void) | null; onupgradeneeded: (() => void) | null } {
     this.opens += 1
@@ -127,6 +163,7 @@ class FakeFactory {
     }
     request.onblocked = null
     request.onupgradeneeded = null
+    this.requests.push(request)
     queueMicrotask(() => {
       if (blocking) {
         request.onblocked?.()
@@ -138,6 +175,7 @@ class FakeFactory {
         return
       }
       const database = new FakeDatabase(this.rows, this.commands)
+      database.closed = this.closeOnOpen
       this.databases.push(database)
       request.result = database
       request.onsuccess?.()
@@ -241,6 +279,136 @@ describe('IndexedDbSyncOutbox', () => {
 
     await expect(outbox.heldByAnotherOwner(SCOPE, SESSION, 'owner-1', 0)).resolves.toBe(false)
     expect(factory.opens).toBe(2)
+  })
+
+  it('reopens after an unexpected close without changing the exact pending command or dispatched marker', async () => {
+    const factory = new FakeFactory()
+    const outbox = outboxFor(factory)
+    const pending = {
+      ...command('uncertain', 10, 7),
+      bytes: '{"commandId":"uncertain"}',
+      operationId: 'original-action',
+      dispatchedAt: 12,
+    }
+    await outbox.put(pending)
+    const database = factory.databases[0]
+    expect(database.onclose).toBeInstanceOf(Function)
+    database.closed = true
+    database.onclose?.()
+    await expect(outbox.oldest(SESSION)).resolves.toEqual(pending)
+    expect(factory.opens).toBe(2)
+    expect(factory.commands.size).toBe(1)
+    database.onclose?.()
+    await expect(outbox.oldest(SESSION)).resolves.toEqual(pending)
+    expect(factory.opens).toBe(2)
+    outbox.close()
+  })
+
+  it('preserves concurrent-worker recovery claims and exact command identity across an unexpected close', async () => {
+    const factory = new FakeFactory()
+    const outbox = new ConcurrentIndexedDbSyncOutbox('worker-1', () => 20, factory as unknown as IDBFactory)
+    const pending = {
+      ...command('uncertain', 10, 7),
+      bytes: '{"commandId":"uncertain"}',
+      operationId: 'original-action',
+      dispatchedAt: 12,
+    }
+    await outbox.put(pending)
+    factory.databases[0].closed = true
+    factory.databases[0].onclose?.()
+    await expect(outbox.oldest(SESSION)).resolves.toMatchObject({
+      sessionScope: pending.sessionScope,
+      commandId: pending.commandId,
+      bytes: pending.bytes,
+      digest: pending.digest,
+      sequence: pending.sequence,
+      operationId: pending.operationId,
+      dispatchedAt: pending.dispatchedAt,
+      socketOnly: true,
+    })
+    expect(factory.opens).toBe(2)
+    expect(factory.commands.size).toBe(1)
+    outbox.close()
+  })
+
+  it('reopens once when transaction creation detects a closed handle before its close event arrives', async () => {
+    const factory = new FakeFactory()
+    const outbox = outboxFor(factory)
+    const pending = { ...command('uncertain', 10, 7), dispatchedAt: 12 }
+    await outbox.put(pending)
+    factory.databases[0].closed = true
+    const results = await Promise.all([outbox.oldest(SESSION), outbox.oldest(SESSION)])
+    expect(results).toEqual([pending, pending])
+    expect(factory.opens).toBe(2)
+    expect(factory.databases[0].transactions).toBe(1)
+    expect(factory.commands.size).toBe(1)
+    outbox.close()
+  })
+
+  it('does not retry unrelated transaction creation failures', async () => {
+    const factory = new FakeFactory()
+    const outbox = outboxFor(factory)
+    await outbox.heldByAnotherOwner(SCOPE, SESSION, 'owner', 0)
+    factory.databases[0].failNextTransaction = new DOMException('Storage is full', 'QuotaExceededError')
+    await expect(outbox.put(command('new', 1, 1))).rejects.toMatchObject({ name: 'QuotaExceededError' })
+    expect(factory.opens).toBe(1)
+    expect(factory.commands.size).toBe(0)
+    outbox.close()
+  })
+
+  it('bounds closed-handle retries and leaves uncertain journal records intact when reopening also fails', async () => {
+    const factory = new FakeFactory()
+    const outbox = outboxFor(factory)
+    const pending = { ...command('uncertain', 10, 1), dispatchedAt: 11 }
+    await outbox.put(pending)
+    factory.databases[0].closed = true
+    factory.closeOnOpen = true
+    await expect(outbox.oldest(SESSION)).rejects.toMatchObject({ name: 'InvalidStateError' })
+    expect(factory.opens).toBe(2)
+    expect(factory.commands.get(`${SESSION}|uncertain`)).toEqual(pending)
+    factory.closeOnOpen = false
+    await expect(outbox.oldest(SESSION)).resolves.toEqual(pending)
+    outbox.close()
+  })
+
+  it('does not retry an already-created transaction that aborts', async () => {
+    const factory = new FakeFactory()
+    const outbox = outboxFor(factory)
+    await outbox.heldByAnotherOwner(SCOPE, SESSION, 'owner', 0)
+    factory.databases[0].abortNextTransaction = new DOMException('Transaction aborted', 'AbortError')
+    await expect(outbox.heldByAnotherOwner(SCOPE, SESSION, 'owner', 0)).rejects.toMatchObject({ name: 'AbortError' })
+    expect(factory.opens).toBe(1)
+    expect(factory.databases[0].transactions).toBe(2)
+    outbox.close()
+  })
+
+  it('closes late success handles from blocked attempts without evicting a newer connection', async () => {
+    const factory = new FakeFactory()
+    const outbox = outboxFor(factory)
+    factory.blockNextOpen = true
+    await expect(outbox.oldest(SESSION)).rejects.toBeInstanceOf(SyncOutboxUnavailableError)
+    await expect(outbox.oldest(SESSION)).resolves.toBeUndefined()
+    const late = new FakeDatabase(factory.rows, factory.commands)
+    factory.requests[0].result = late
+    factory.requests[0].onsuccess?.()
+    expect(late.closed).toBe(true)
+    await expect(outbox.oldest(SESSION)).resolves.toBeUndefined()
+    expect(factory.opens).toBe(2)
+    outbox.close()
+  })
+
+  it('settles superseded open callers and keeps the replacement connection cached', async () => {
+    const factory = new FakeFactory()
+    const outbox = outboxFor(factory)
+    const superseded = expect(outbox.oldest(SESSION)).rejects.toBeInstanceOf(SyncOutboxUnavailableError)
+    outbox.close()
+    await expect(outbox.oldest(SESSION)).resolves.toBeUndefined()
+    await superseded
+    expect(factory.databases[0].closed).toBe(true)
+    expect(factory.databases[1].closed).toBe(false)
+    await expect(outbox.oldest(SESSION)).resolves.toBeUndefined()
+    expect(factory.opens).toBe(2)
+    outbox.close()
   })
 
   it('claims another owner only for a live lease held by a different tab in the same session', async () => {

@@ -169,19 +169,18 @@ export class IndexedDbSyncOutbox implements SyncOutboxStore {
   private databasePromise?: Promise<IDBDatabase>
   /** Identifies the open attempt that owns `databasePromise` right now. */
   private openAttempt = 0
+  private activeDatabase?: IDBDatabase
 
   constructor(private readonly factory: IDBFactory | undefined = globalThis.indexedDB) {}
 
   async put(record: SyncOutboxRecord): Promise<void> {
-    const database = await this.database()
-    const transaction = database.transaction(COMMAND_STORE, 'readwrite')
+    const transaction = await this.transaction(COMMAND_STORE, 'readwrite')
     transaction.objectStore(COMMAND_STORE).put(record)
     await transactionDone(transaction)
   }
 
   async oldest(sessionScope: string): Promise<SyncOutboxRecord | undefined> {
-    const database = await this.database()
-    const transaction = database.transaction(COMMAND_STORE, 'readonly')
+    const transaction = await this.transaction(COMMAND_STORE, 'readonly')
     const records = (await requestResult(
       transaction.objectStore(COMMAND_STORE).index(SESSION_SCOPE_INDEX).getAll(sessionScope),
     )) as SyncOutboxRecord[]
@@ -192,8 +191,7 @@ export class IndexedDbSyncOutbox implements SyncOutboxStore {
   }
 
   async quarantineSessionScope(sessionScope: string): Promise<void> {
-    const database = await this.database()
-    const transaction = database.transaction(COMMAND_STORE, 'readwrite')
+    const transaction = await this.transaction(COMMAND_STORE, 'readwrite')
     const store = transaction.objectStore(COMMAND_STORE)
     const records = (await requestResult(store.index(SESSION_SCOPE_INDEX).getAll(sessionScope))) as SyncOutboxRecord[]
     for (const record of records) {
@@ -205,8 +203,7 @@ export class IndexedDbSyncOutbox implements SyncOutboxStore {
   }
 
   async delete(sessionScope: string, commandId: string): Promise<void> {
-    const database = await this.database()
-    const transaction = database.transaction(COMMAND_STORE, 'readwrite')
+    const transaction = await this.transaction(COMMAND_STORE, 'readwrite')
     transaction.objectStore(COMMAND_STORE).delete([sessionScope, commandId])
     await transactionDone(transaction)
   }
@@ -217,8 +214,7 @@ export class IndexedDbSyncOutbox implements SyncOutboxStore {
     ownerId: string,
     now: number,
   ): Promise<boolean> {
-    const database = await this.database()
-    const transaction = database.transaction(LEASE_STORE, 'readonly')
+    const transaction = await this.transaction(LEASE_STORE, 'readonly')
     const current = (await requestResult(transaction.objectStore(LEASE_STORE).get(transportScope))) as
       OwnerLease | undefined
     await transactionDone(transaction)
@@ -231,8 +227,7 @@ export class IndexedDbSyncOutbox implements SyncOutboxStore {
   }
 
   async sessionHeldByAnotherOwner(sessionScope: string, ownerId: string, now: number): Promise<boolean> {
-    const database = await this.database()
-    const transaction = database.transaction(LEASE_STORE, 'readonly')
+    const transaction = await this.transaction(LEASE_STORE, 'readonly')
     const leases = (await requestResult(transaction.objectStore(LEASE_STORE).getAll())) as OwnerLease[]
     await transactionDone(transaction)
     // One row per transport scope, and a scope is a session plus an endpoint
@@ -249,8 +244,7 @@ export class IndexedDbSyncOutbox implements SyncOutboxStore {
     now: number,
     ttlMs: number,
   ): Promise<boolean> {
-    const database = await this.database()
-    const transaction = database.transaction(LEASE_STORE, 'readwrite')
+    const transaction = await this.transaction(LEASE_STORE, 'readwrite')
     const store = transaction.objectStore(LEASE_STORE)
     const current = (await requestResult(store.get(transportScope))) as OwnerLease | undefined
     const acquired =
@@ -269,8 +263,7 @@ export class IndexedDbSyncOutbox implements SyncOutboxStore {
     now: number,
     ttlMs: number,
   ): Promise<OwnerRenewalOutcome> {
-    const database = await this.database()
-    const transaction = database.transaction(LEASE_STORE, 'readwrite')
+    const transaction = await this.transaction(LEASE_STORE, 'readwrite')
     const store = transaction.objectStore(LEASE_STORE)
     const current = (await requestResult(store.get(transportScope))) as OwnerLease | undefined
     const outcome = ownerRenewalOutcome(current, sessionScope, ownerId, now)
@@ -282,8 +275,7 @@ export class IndexedDbSyncOutbox implements SyncOutboxStore {
   }
 
   async releaseOwner(transportScope: string, sessionScope: string, ownerId: string): Promise<void> {
-    const database = await this.database()
-    const transaction = database.transaction(LEASE_STORE, 'readwrite')
+    const transaction = await this.transaction(LEASE_STORE, 'readwrite')
     const store = transaction.objectStore(LEASE_STORE)
     const current = (await requestResult(store.get(transportScope))) as OwnerLease | undefined
     if (current?.sessionScope === sessionScope && current.ownerId === ownerId) {
@@ -293,8 +285,36 @@ export class IndexedDbSyncOutbox implements SyncOutboxStore {
   }
 
   close(): void {
+    ++this.openAttempt
     void this.databasePromise?.then((database) => database.close()).catch(() => undefined)
     this.databasePromise = undefined
+    this.activeDatabase = undefined
+  }
+
+  /** A closed cached connection may be reopened only before a transaction exists. */
+  protected async transaction(stores: string | string[], mode: IDBTransactionMode): Promise<IDBTransaction> {
+    for (let attempt = 0; ; attempt++) {
+      const database = await this.database()
+      try {
+        return database.transaction(stores, mode)
+      } catch (error) {
+        // Firefox can close an IDB handle without a versionchange (for example
+        // after storage/process suspension). Creating a transaction on that
+        // handle throws synchronously: no request or write has started, so one
+        // reopen is safe. Never replay a transaction that already existed.
+        if ((error as { name?: string })?.name !== 'InvalidStateError') {
+          throw error
+        }
+        if (this.activeDatabase === database) {
+          this.databasePromise = undefined
+          this.activeDatabase = undefined
+        }
+        database.close()
+        if (attempt >= 1) {
+          throw error
+        }
+      }
+    }
   }
 
   protected database(): Promise<IDBDatabase> {
@@ -316,9 +336,11 @@ export class IndexedDbSyncOutbox implements SyncOutboxStore {
     const forget = () => {
       if (this.openAttempt === attempt) {
         this.databasePromise = undefined
+        this.activeDatabase = undefined
       }
     }
     const pending = new Promise<IDBDatabase>((resolve, reject) => {
+      let settled = false
       const request = this.factory?.open(DATABASE_NAME, DATABASE_VERSION)
       if (!request) {
         reject(new SyncOutboxUnavailableError('IndexedDB is unavailable'))
@@ -338,6 +360,20 @@ export class IndexedDbSyncOutbox implements SyncOutboxStore {
       }
       request.onsuccess = () => {
         const database = request.result
+        // A blocked request can later succeed even though its promise was
+        // rejected, or close() can supersede it. Such a handle must not become
+        // an invisible schema-upgrade blocker or evict the newer connection.
+        if (settled || this.openAttempt !== attempt) {
+          database.close()
+          if (!settled) {
+            settled = true
+            reject(new SyncOutboxUnavailableError('Sync outbox open was superseded'))
+          }
+          return
+        }
+        settled = true
+        this.activeDatabase = database
+        database.onclose = forget
         // Another tab is upgrading the schema. Holding this connection open
         // blocks its open (and therefore its whole sync lane) until this page
         // closes; step aside and re-open on the next operation instead.
@@ -347,9 +383,14 @@ export class IndexedDbSyncOutbox implements SyncOutboxStore {
         }
         resolve(database)
       }
-      request.onerror = () =>
+      request.onerror = () => {
+        settled = true
         reject(new SyncOutboxUnavailableError(request.error?.message ?? 'Could not open sync outbox'))
-      request.onblocked = () => reject(new SyncOutboxUnavailableError('Sync outbox upgrade was blocked'))
+      }
+      request.onblocked = () => {
+        settled = true
+        reject(new SyncOutboxUnavailableError('Sync outbox upgrade was blocked'))
+      }
     }).catch((error: unknown) => {
       forget()
       throw error
@@ -389,8 +430,7 @@ export class ConcurrentIndexedDbSyncOutbox extends IndexedDbSyncOutbox {
   }
 
   override async oldest(sessionScope: string): Promise<SyncOutboxRecord | undefined> {
-    const database = await this.database()
-    const transaction = database.transaction([COMMAND_STORE, LEASE_STORE], 'readwrite')
+    const transaction = await this.transaction([COMMAND_STORE, LEASE_STORE], 'readwrite')
     const commands = transaction.objectStore(COMMAND_STORE)
     const leases = transaction.objectStore(LEASE_STORE)
     const index = commands.index(SESSION_SCOPE_INDEX)
@@ -423,8 +463,7 @@ export class ConcurrentIndexedDbSyncOutbox extends IndexedDbSyncOutbox {
   }
 
   override async put(record: SyncOutboxRecord): Promise<void> {
-    const database = await this.database()
-    const transaction = database.transaction([COMMAND_STORE, LEASE_STORE], 'readwrite')
+    const transaction = await this.transaction([COMMAND_STORE, LEASE_STORE], 'readwrite')
     const commands = transaction.objectStore(COMMAND_STORE)
     const leases = transaction.objectStore(LEASE_STORE)
     const storageSession = this.storageSession(record.sessionScope)
@@ -459,8 +498,7 @@ export class ConcurrentIndexedDbSyncOutbox extends IndexedDbSyncOutbox {
   }
 
   override async delete(sessionScope: string, commandId: string): Promise<void> {
-    const database = await this.database()
-    const transaction = database.transaction([COMMAND_STORE, LEASE_STORE], 'readwrite')
+    const transaction = await this.transaction([COMMAND_STORE, LEASE_STORE], 'readwrite')
     const commands = transaction.objectStore(COMMAND_STORE)
     const leases = transaction.objectStore(LEASE_STORE)
     const records = await Promise.all([
