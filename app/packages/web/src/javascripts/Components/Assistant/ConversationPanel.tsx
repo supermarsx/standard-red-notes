@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { observer } from 'mobx-react-lite'
 import { ApplicationEvent, ContentType, PrefKey, SNNote, isNote } from '@standardnotes/snjs'
 import { classNames } from '@standardnotes/utils'
@@ -181,6 +181,7 @@ type Props = {
   /** One-shot editor action routed by AssistantView into the active chat only. */
   directive?: AssistantChatDirective
   onDirectiveConsumed?: (directiveId: string) => void
+  recentChats?: ReactNode
 }
 
 function ConversationPanelImpl({
@@ -194,6 +195,7 @@ function ConversationPanelImpl({
   onFirstUserMessage,
   directive,
   onDirectiveConsumed,
+  recentChats,
 }: Props) {
   const { presentPane } = useResponsiveAppPane()
 
@@ -1462,6 +1464,7 @@ function ConversationPanelImpl({
       )}
 
       <div ref={scrollRef} className="min-h-0 flex-grow overflow-y-auto px-3 py-3">
+        {messages.length === 0 && recentChats}
         {!noticeDismissed && (
           <div className="border-warning bg-warning-faded mb-4 rounded border border-solid p-3">
             <div className="flex items-start justify-between gap-2">

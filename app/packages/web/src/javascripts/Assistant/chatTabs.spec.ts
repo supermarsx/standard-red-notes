@@ -9,6 +9,7 @@ import {
   getAssistantBrowsingContextId,
   persistTabs,
   persistTabsStrict,
+  assistantTabsByActivity,
   readPersistedTabs,
   readPersistedTabsResult,
 } from './chatTabs'
@@ -67,6 +68,33 @@ describe('persisted chat tabs', () => {
     expect(readPersistedTabs(storage, 'account-a')).toEqual([{ id: 'a', title: 'Private work', userRenamed: true }])
     expect(readPersistedTabs(storage, 'account-b')).toBeNull()
     expect(JSON.stringify(localStorage)).not.toContain('Private work')
+  })
+
+  it('restores legacy chats and encrypted typed investigations without trusting unknown modes', () => {
+    const { storage, values } = createStorage()
+    const tabs = [
+      { id: 'legacy', title: 'Older chat', userRenamed: false },
+      { id: 'research', title: 'A study', userRenamed: false, kind: 'research' as const, lastActiveAt: 123 },
+      { id: 'deep', title: 'A deeper study', userRenamed: true, kind: 'deep-research' as const, lastActiveAt: 456 },
+    ]
+    persistTabs(storage, 'modes', tabs)
+    expect(readPersistedTabs(storage, 'modes')).toEqual(tabs)
+    expect(JSON.stringify(localStorage)).not.toContain('A deeper study')
+    values.set(assistantChatTabsStorageKey('invalid'), { version: 1, tabs: [{ ...tabs[0], kind: 'execute-code' }] })
+    expect(readPersistedTabsResult(storage, 'invalid')).toEqual({ status: 'error' })
+    values.set(assistantChatTabsStorageKey('invalid'), { version: 1, tabs: [{ ...tabs[0], lastActiveAt: -1 }] })
+    expect(readPersistedTabsResult(storage, 'invalid')).toEqual({ status: 'error' })
+  })
+
+  it('orders recents by activity and falls back to legacy manifest order without mutating it', () => {
+    const tabs = [
+      { id: 'old', title: 'Old', userRenamed: false, lastActiveAt: 900 },
+      { id: 'new', title: 'New', userRenamed: false, lastActiveAt: 100 },
+      { id: 'legacy-one', title: 'Legacy one', userRenamed: false },
+      { id: 'legacy-two', title: 'Legacy two', userRenamed: false },
+    ]
+    expect(assistantTabsByActivity(tabs).map((tab) => tab.id)).toEqual(['old', 'new', 'legacy-two', 'legacy-one'])
+    expect(tabs[0].id).toBe('old')
   })
 
   it('isolates the retained dock from the separately mounted assistant window', () => {

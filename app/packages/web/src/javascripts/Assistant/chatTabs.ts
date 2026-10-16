@@ -7,6 +7,8 @@
 
 import { assistantWorkspaceRetention } from './assistantWorkspaceRetention'
 
+export type AssistantWorkTabKind = 'chat' | 'research' | 'deep-research'
+
 export type ChatTab = {
   id: string
   title: string
@@ -15,6 +17,10 @@ export type ChatTab = {
    * user message) must never overwrite a user-chosen title.
    */
   userRenamed: boolean
+  /** Missing on older encrypted manifests means an ordinary chat. */
+  kind?: AssistantWorkTabKind
+  /** Activity ordering is encrypted with the rest of this manifest. */
+  lastActiveAt?: number
 }
 
 export interface AssistantChatTabsStorage {
@@ -144,8 +150,19 @@ const isChatTab = (value: unknown): value is ChatTab => {
     /^[A-Za-z0-9_-]+$/.test(tab.id) &&
     typeof tab.title === 'string' &&
     tab.title.length <= MAX_TITLE_LENGTH &&
-    typeof tab.userRenamed === 'boolean'
+    typeof tab.userRenamed === 'boolean' &&
+    (tab.kind === undefined || tab.kind === 'chat' || tab.kind === 'research' || tab.kind === 'deep-research') &&
+    (tab.lastActiveAt === undefined ||
+      (typeof tab.lastActiveAt === 'number' && Number.isSafeInteger(tab.lastActiveAt) && tab.lastActiveAt >= 0))
   )
+}
+
+/** Newest activity first; old manifests fall back to their most recently added tab first. */
+export function assistantTabsByActivity(tabs: ChatTab[]): ChatTab[] {
+  return tabs
+    .map((tab, index) => ({ tab, index }))
+    .sort((left, right) => (right.tab.lastActiveAt ?? 0) - (left.tab.lastActiveAt ?? 0) || right.index - left.index)
+    .map(({ tab }) => tab)
 }
 
 const capTabs = (tabs: ChatTab[]): ChatTab[] => {

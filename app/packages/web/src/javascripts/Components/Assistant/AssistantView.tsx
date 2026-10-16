@@ -8,6 +8,7 @@ import { useResponsiveAppPane } from '../Panes/ResponsivePaneProvider'
 import { openOrFocusAssistantWindow } from '@/Assistant/assistantWindow'
 import {
   ChatTab,
+  AssistantWorkTabKind,
   DEFAULT_TAB_TITLE,
   MAX_CHAT_TABS,
   assistantChatWorkspaceScope,
@@ -21,6 +22,7 @@ import {
 import ConversationPanel from './ConversationPanel'
 import DeepResearchPanel from './DeepResearchPanel'
 import ResearchModePanel from './ResearchModePanel'
+import { AssistantHistoryPanel, AssistantRecentChats, assistantWorkTabIcon } from './AssistantHistoryPanel'
 import {
   clearAssistantChatHistoryDeletionTombstone,
   deleteAssistantChatHistory,
@@ -49,7 +51,13 @@ type Props = {
 
 const newId = () => Math.random().toString(36).slice(2)
 
-const createTab = (): ChatTab => ({ id: newId(), title: DEFAULT_TAB_TITLE, userRenamed: false })
+const createTab = (kind: AssistantWorkTabKind = 'chat', number = 1): ChatTab => ({
+  id: newId(),
+  title: kind === 'chat' ? DEFAULT_TAB_TITLE : `${kind === 'research' ? 'Research' : 'Deep research'} ${number}`,
+  userRenamed: false,
+  kind,
+  lastActiveAt: Date.now(),
+})
 
 /** Anchor + tab the tab context menu is open against. */
 type MenuState = { tabId: string; x: number; y: number }
@@ -63,6 +71,8 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
 
   const initialTab = useRef(createTab()).current
   const [tabs, setTabs] = useState<ChatTab[]>([initialTab])
+  const tabsRef = useRef(tabs)
+  tabsRef.current = tabs
   const [activeTabId, setActiveTabId] = useState<string>(initialTab.id)
   const activeTabIdRef = useRef(activeTabId)
   activeTabIdRef.current = activeTabId
@@ -80,10 +90,9 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
   const [editingTabId, setEditingTabId] = useState<string | null>(null)
   // Open context menu (right-click or caret), if any.
   const [menu, setMenu] = useState<MenuState | null>(null)
-  // Research panels may cover the chat, but never unmount it: a running assistant
-  // session remains alive while the user switches modes.
-  const [showDeepResearch, setShowDeepResearch] = useState(false)
-  const [showResearchMode, setShowResearchMode] = useState(false)
+  // History is a view of the encrypted manifest, never its own persisted chat.
+  const historyTabId = useRef(newId()).current
+  const [historyOpen, setHistoryOpen] = useState(false)
   const [pendingDirectives, setPendingDirectives] = useState<RoutedDirective[]>([])
   const [workspaceLocked, setWorkspaceLocked] = useState(false)
   const workspaceLockedRef = useRef(false)
@@ -150,8 +159,7 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
         setClosedTabIds([])
         setEditingTabId(null)
         setMenu(null)
-        setShowDeepResearch(false)
-        setShowResearchMode(false)
+        setHistoryOpen(false)
         setKeyEpoch((epoch) => epoch + 1)
         refreshSessionScope((revision) => revision + 1)
 
@@ -320,12 +328,27 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
       if (workspaceLockedRef.current || directive.accountScope !== observedAccountScopeRef.current) {
         return
       }
-      setShowDeepResearch(false)
-      setShowResearchMode(false)
+      const current = tabsRef.current
+      let target =
+        current.find((tab) => tab.id === activeTabIdRef.current && (!tab.kind || tab.kind === 'chat')) ??
+        current.find((tab) => !tab.kind || tab.kind === 'chat')
+      if (!target) {
+        if (current.length >= MAX_CHAT_TABS) {
+          return
+        }
+        target = createTab()
+        setTabs((previous) => [...previous, target!])
+      }
+      const targetTabId = target.id
+      setClosedTabIds((previous) => previous.filter((id) => id !== targetTabId))
+      setActiveTabId(targetTabId)
+      setTabs((previous) =>
+        previous.map((tab) => (tab.id === targetTabId ? { ...tab, lastActiveAt: Date.now() } : tab)),
+      )
       setPendingDirectives((current) => {
         return current.some((item) => item.directive.id === directive.id)
           ? current
-          : [...current, { directive, targetTabId: activeTabIdRef.current }]
+          : [...current, { directive, targetTabId }]
       })
     })
   }, [accountScope, chatAccountScope, loadedChatAccountScope, workspaceLocked, workspacePersistence])
@@ -402,31 +425,64 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
     }
   }, [dismissLastPane])
 
-  const addTab = useCallback(() => {
-    if (tabs.length >= MAX_CHAT_TABS) {
-      return
-    }
-    const tab = createTab()
-    setTabs((prev) => [...prev, tab])
-    setActiveTabId(tab.id)
-  }, [tabs.length])
+  const addTab = useCallback(
+    (kind: AssistantWorkTabKind = 'chat') => {
+      if (tabs.length >= MAX_CHAT_TABS) {
+        return
+      }
+      const tab = createTab(kind, tabs.filter((tab) => tab.kind === kind).length + 1)
+      setTabs((prev) => [...prev, tab])
+      setActiveTabId(tab.id)
+    },
+    [tabs],
+  )
 
   const visibleTabs = tabs.filter((tab) => !closedTabIds.includes(tab.id))
+  const displayedTabs =
+    loadedChatAccountScope === chatAccountScope && !workspaceLocked
+      ? [
+          ...visibleTabs,
+          ...(historyOpen ? [{ id: historyTabId, title: 'History', userRenamed: true, kind: 'history' as const }] : []),
+        ]
+      : []
+  const resumeTab = useCallback((tabId: string) => {
+    if (workspaceLockedRef.current || !tabsRef.current.some((tab) => tab.id === tabId)) {
+      return
+    }
+    setClosedTabIds((previous) => previous.filter((id) => id !== tabId))
+    setActiveTabId(tabId)
+    setTabs((previous) => previous.map((tab) => (tab.id === tabId ? { ...tab, lastActiveAt: Date.now() } : tab)))
+  }, [])
 
   const closeTab = useCallback(
     (tabId: string) => {
+      if (tabId === historyTabId) {
+        setHistoryOpen(false)
+        resumeTab((visibleTabs[0] ?? tabs[0]).id)
+        return
+      }
       const visible = tabs.filter((tab) => !closedTabIds.includes(tab.id))
-      if (visible.length <= 1 || !visible.some((tab) => tab.id === tabId)) {
+      if (!visible.some((tab) => tab.id === tabId)) {
+        return
+      }
+      if (visible.length <= 1) {
+        const only = visible[0]
+        if (!only.kind || only.kind === 'chat') {
+          return
+        }
+        setClosedTabIds((previous) => (previous.includes(tabId) ? previous : [...previous, tabId]))
+        setHistoryOpen(true)
+        setActiveTabId(historyTabId)
         return
       }
       const index = visible.findIndex((tab) => tab.id === tabId)
       const remaining = visible.filter((tab) => tab.id !== tabId)
       setClosedTabIds((prev) => (prev.includes(tabId) ? prev : [...prev, tabId]))
       if (activeTabId === tabId) {
-        setActiveTabId((remaining[index] ?? remaining[index - 1] ?? remaining[0]).id)
+        resumeTab((remaining[index] ?? remaining[index - 1] ?? remaining[0]).id)
       }
     },
-    [activeTabId, closedTabIds, tabs],
+    [activeTabId, closedTabIds, tabs, historyTabId, visibleTabs, resumeTab],
   )
 
   const restoreLastClosedTab = useCallback(() => {
@@ -436,6 +492,7 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
         return prev
       }
       setActiveTabId(tabId)
+      setTabs((tabs) => tabs.map((tab) => (tab.id === tabId ? { ...tab, lastActiveAt: Date.now() } : tab)))
       return prev.slice(0, -1)
     })
   }, [])
@@ -443,6 +500,8 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
   const deleteChat = useCallback(
     async (tabId: string) => {
       setMenu(null)
+      const transition = sessionTransitionRef.current
+      const activation = workspaceActivationRef.current
       const claim = workspaceClaimRef.current
       let retainForCleanup = false
       if (claim?.durable && workspacePersistence === 'durable') {
@@ -459,6 +518,14 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
           retired = false
         }
         retainForCleanup = !retired || !deletionDurable
+      }
+      if (
+        transition !== sessionTransitionRef.current ||
+        activation !== workspaceActivationRef.current ||
+        workspaceLockedRef.current ||
+        loadedChatAccountScope !== chatAccountScope
+      ) {
+        return
       }
       if (retainForCleanup) {
         setRetainedCleanupTabIds((current) => (current.includes(tabId) ? current : [...current, tabId]))
@@ -478,12 +545,14 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
         }
         if (activeTabId === tabId) {
           const visibleNext = next.filter((tab) => !closedTabIds.includes(tab.id))
-          setActiveTabId((visibleNext[index] ?? visibleNext[index - 1] ?? visibleNext[0] ?? next[0]).id)
+          const replacement = visibleNext[index] ?? visibleNext[index - 1] ?? visibleNext[0] ?? next[0]
+          setClosedTabIds((previous) => previous.filter((id) => id !== replacement.id))
+          setActiveTabId(replacement.id)
         }
         return next
       })
     },
-    [activeTabId, application, closedTabIds, loadedChatAccountScope, workspacePersistence],
+    [activeTabId, application, closedTabIds, loadedChatAccountScope, chatAccountScope, workspacePersistence],
   )
 
   // Auto-name from the first user message, but never clobber a user-chosen title.
@@ -549,28 +618,36 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
         </div>
         <div className="flex items-center gap-1">
           <button
-            className={classNames('hover:bg-contrast rounded p-1', showDeepResearch && 'bg-info-faded text-info')}
+            className={classNames(
+              'hover:bg-contrast rounded p-1',
+              activeTabId === historyTabId && 'bg-info-faded text-info',
+            )}
             onClick={() => {
-              setShowResearchMode(false)
-              setShowDeepResearch((value) => !value)
+              setHistoryOpen(true)
+              setActiveTabId(historyTabId)
             }}
-            aria-label="Deep research"
-            aria-pressed={showDeepResearch}
-            title="Deep research over your notes"
+            aria-label="Chat history"
+            aria-pressed={activeTabId === historyTabId}
+            title="Open chat history"
             disabled={workspaceLocked || workspacePersistence === 'pending'}
+          >
+            <Icon type="history" />
+          </button>
+          <button
+            className="hover:bg-contrast rounded p-1"
+            onClick={() => addTab('deep-research')}
+            aria-label="Deep research"
+            title="Start a new deep research investigation"
+            disabled={workspaceLocked || workspacePersistence === 'pending' || tabs.length >= MAX_CHAT_TABS}
           >
             <Icon type="search" />
           </button>
           <button
-            className={classNames('hover:bg-contrast rounded p-1', showResearchMode && 'bg-info-faded text-info')}
-            onClick={() => {
-              setShowDeepResearch(false)
-              setShowResearchMode((value) => !value)
-            }}
+            className="hover:bg-contrast rounded p-1"
+            onClick={() => addTab('research')}
             aria-label="Research mode"
-            aria-pressed={showResearchMode}
-            title="Research mode (write a structured note on a topic)"
-            disabled={workspaceLocked || workspacePersistence === 'pending'}
+            title="Start a new research investigation"
+            disabled={workspaceLocked || workspacePersistence === 'pending' || tabs.length >= MAX_CHAT_TABS}
           >
             <Icon type="notes" />
           </button>
@@ -608,19 +685,28 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
         </div>
       )}
 
-      <div className="border-border bg-contrast flex items-center gap-1 overflow-x-auto border-b px-2 py-1">
-        {visibleTabs.map((tab) => {
+      <div
+        role="tablist"
+        aria-label="Assistant workspaces"
+        className="border-border bg-contrast flex items-center gap-1 overflow-x-auto border-b px-2 py-1"
+      >
+        {displayedTabs.map((tab) => {
           const isActive = tab.id === activeTabId
           const isEditing = tab.id === editingTabId
+          const isHistory = tab.kind === 'history'
           return (
             <div
               key={tab.id}
-              role="button"
-              tabIndex={0}
-              onClick={() => setActiveTabId(tab.id)}
+              role="tab"
+              aria-selected={isActive}
+              tabIndex={isActive ? 0 : -1}
+              aria-label={tab.title}
+              onClick={() => (isHistory ? setActiveTabId(tab.id) : resumeTab(tab.id))}
               onContextMenu={(event) => {
                 event.preventDefault()
-                openMenu(event, tab.id)
+                if (!isHistory) {
+                  openMenu(event, tab.id)
+                }
               }}
               onKeyDown={(event) => {
                 if (isEditing) {
@@ -628,8 +714,29 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
                 }
                 if (event.key === 'Enter' || event.key === ' ') {
                   event.preventDefault()
-                  setActiveTabId(tab.id)
-                } else if (event.key === 'F2') {
+                  if (isHistory) {
+                    setActiveTabId(tab.id)
+                  } else {
+                    resumeTab(tab.id)
+                  }
+                } else if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+                  event.preventDefault()
+                  const index = displayedTabs.findIndex((item) => item.id === tab.id)
+                  const nextIndex =
+                    event.key === 'Home'
+                      ? 0
+                      : event.key === 'End'
+                        ? displayedTabs.length - 1
+                        : (index + (event.key === 'ArrowRight' ? 1 : -1) + displayedTabs.length) % displayedTabs.length
+                  const next = displayedTabs[nextIndex]
+                  if (next.id === historyTabId) {
+                    setActiveTabId(next.id)
+                  } else {
+                    resumeTab(next.id)
+                  }
+                  const tabElements = event.currentTarget.parentElement?.querySelectorAll<HTMLElement>('[role="tab"]')
+                  tabElements?.[nextIndex]?.focus()
+                } else if (event.key === 'F2' && !isHistory) {
                   // F2 is the conventional rename key; reachable without a mouse.
                   event.preventDefault()
                   startEditing(tab.id)
@@ -643,6 +750,11 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
               )}
               title={tab.title}
             >
+              <Icon
+                type={isHistory ? 'history' : assistantWorkTabIcon(tab as ChatTab)}
+                size="small"
+                className="shrink-0"
+              />
               {isEditing ? (
                 <input
                   ref={editInputRef}
@@ -669,7 +781,7 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
               )}
               {/* Caret affordance: keyboard- and touch-reachable way to open the
                     same menu as right-click (right-click is unavailable on touch). */}
-              {!isEditing && (
+              {!isEditing && !isHistory && (
                 <button
                   className="text-passive-1 hover:bg-contrast hover:text-text rounded p-0.5"
                   onClick={(event) => {
@@ -683,25 +795,26 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
                   <Icon type="chevron-down" size="small" />
                 </button>
               )}
-              {!isEditing && visibleTabs.length > 1 && (
-                <button
-                  className="hover:bg-contrast rounded p-0.5"
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    closeTab(tab.id)
-                  }}
-                  aria-label="Close chat"
-                  title="Hide chat; running work continues in the background"
-                >
-                  <Icon type="close" size="small" />
-                </button>
-              )}
+              {!isEditing &&
+                (isHistory || visibleTabs.length > 1 || tab.kind === 'research' || tab.kind === 'deep-research') && (
+                  <button
+                    className="hover:bg-contrast rounded p-0.5"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      closeTab(tab.id)
+                    }}
+                    aria-label={isHistory ? 'Close history' : 'Close chat'}
+                    title="Hide chat; running work continues in the background"
+                  >
+                    <Icon type="close" size="small" />
+                  </button>
+                )}
             </div>
           )
         })}
         <button
           className="border-border bg-contrast text-passive-0 hover:text-text flex flex-shrink-0 items-center rounded border p-1"
-          onClick={addTab}
+          onClick={() => addTab()}
           disabled={tabs.length >= MAX_CHAT_TABS}
           aria-label="New chat"
           title={tabs.length >= MAX_CHAT_TABS ? `Up to ${MAX_CHAT_TABS} chats can stay open` : 'New chat'}
@@ -779,12 +892,7 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
         </div>
       )}
 
-      <div
-        className={classNames(
-          'min-h-0 flex-1',
-          loadedChatAccountScope === chatAccountScope && (showDeepResearch || showResearchMode) && 'hidden',
-        )}
-      >
+      <div className={classNames('min-h-0 flex-1', historyOpen && activeTabId === historyTabId && 'hidden')}>
         {loadedChatAccountScope !== chatAccountScope ? (
           <div className="text-passive-0 p-4 text-sm">Loading conversations…</div>
         ) : (
@@ -792,50 +900,54 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
             const isActive = tab.id === activeTabId
             const workspaceClaim = workspaceClaimRef.current
             return (
-              <div key={`${loadedChatAccountScope}:${keyEpoch}:${tab.id}`} className={isActive ? 'contents' : 'hidden'}>
-                <ConversationPanel
-                  application={application}
-                  tabId={tab.id}
-                  accountScope={loadedChatAccountScope}
-                  isActive={isActive && !showDeepResearch && !showResearchMode}
-                  persistenceAllowed={workspacePersistence === 'durable' && manifestTabIds.includes(tab.id)}
-                  runPersistence={
-                    workspaceClaim ? (operation) => workspaceClaim.runPersistence(operation, tab.id) : undefined
-                  }
-                  registerPersistenceFinalizer={workspaceClaim?.registerFinalizer}
-                  onFirstUserMessage={(text) => autoNameTab(tab.id, text)}
-                  directive={pendingDirectives[0]?.targetTabId === tab.id ? pendingDirectives[0].directive : undefined}
-                  onDirectiveConsumed={consumeDirective}
-                />
+              <div
+                key={`${loadedChatAccountScope}:${keyEpoch}:${tab.id}`}
+                role="tabpanel"
+                aria-label={tab.title}
+                data-assistant-tab={tab.id}
+                className={isActive ? 'contents' : 'hidden'}
+              >
+                {tab.kind === 'research' ? (
+                  <ResearchModePanel
+                    application={application}
+                    onClose={() => closeTab(tab.id)}
+                    onTopicChange={(topic) => autoNameTab(tab.id, topic)}
+                  />
+                ) : tab.kind === 'deep-research' ? (
+                  <DeepResearchPanel
+                    application={application}
+                    onClose={() => closeTab(tab.id)}
+                    onTopicChange={(topic) => autoNameTab(tab.id, topic)}
+                  />
+                ) : (
+                  <ConversationPanel
+                    application={application}
+                    tabId={tab.id}
+                    accountScope={loadedChatAccountScope}
+                    isActive={isActive}
+                    persistenceAllowed={workspacePersistence === 'durable' && manifestTabIds.includes(tab.id)}
+                    runPersistence={
+                      workspaceClaim ? (operation) => workspaceClaim.runPersistence(operation, tab.id) : undefined
+                    }
+                    registerPersistenceFinalizer={workspaceClaim?.registerFinalizer}
+                    onFirstUserMessage={(text) => autoNameTab(tab.id, text)}
+                    directive={
+                      pendingDirectives[0]?.targetTabId === tab.id ? pendingDirectives[0].directive : undefined
+                    }
+                    onDirectiveConsumed={consumeDirective}
+                    recentChats={<AssistantRecentChats tabs={tabs} currentTabId={tab.id} onResume={resumeTab} />}
+                  />
+                )}
               </div>
             )
           })
         )}
       </div>
-      <div
-        className={classNames(
-          'min-h-0 flex-1',
-          (loadedChatAccountScope !== chatAccountScope || !showDeepResearch) && 'hidden',
-        )}
-      >
-        <DeepResearchPanel
-          key={`deep-research:${chatAccountScope}:${keyEpoch}`}
-          application={application}
-          onClose={() => setShowDeepResearch(false)}
-        />
-      </div>
-      <div
-        className={classNames(
-          'min-h-0 flex-1',
-          (loadedChatAccountScope !== chatAccountScope || !showResearchMode) && 'hidden',
-        )}
-      >
-        <ResearchModePanel
-          key={`research-mode:${chatAccountScope}:${keyEpoch}`}
-          application={application}
-          onClose={() => setShowResearchMode(false)}
-        />
-      </div>
+      {historyOpen && loadedChatAccountScope === chatAccountScope && !workspaceLocked && (
+        <div className={classNames('min-h-0 flex-1', activeTabId !== historyTabId && 'hidden')}>
+          <AssistantHistoryPanel tabs={tabs} closedTabIds={closedTabIds} onResume={resumeTab} />
+        </div>
+      )}
       {children}
     </div>
   )
