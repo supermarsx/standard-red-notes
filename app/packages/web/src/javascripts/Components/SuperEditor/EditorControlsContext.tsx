@@ -21,6 +21,7 @@ export function createEditorControlsState(identity?: object) {
     commentsWidth: 320,
   }
   const listeners = new Set<() => void>()
+  let existingCommentsRevealed = false
   return {
     identity,
     drafts: new Map<string, string>(),
@@ -56,6 +57,16 @@ export function createEditorControlsState(identity?: object) {
           : {}),
       }
       listeners.forEach((listener) => listener())
+    },
+    revealExistingComments: () => {
+      if (existingCommentsRevealed) {
+        return
+      }
+      existingCommentsRevealed = true
+      if (!snapshot.commentsOpen) {
+        snapshot = { ...snapshot, commentsOpen: true, commentsCollapsed: false }
+        listeners.forEach((listener) => listener())
+      }
     },
     setCommentsLayout: (
       patch: Partial<

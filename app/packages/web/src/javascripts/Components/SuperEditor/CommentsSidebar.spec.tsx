@@ -9,6 +9,36 @@ import { CommentsSidebar } from './CommentsSidebar'
 import { createEditorControlsState, EditorControlsProvider, useEditorControlsState } from './EditorControlsContext'
 import { $setChecklistTodoId } from './Lexical/Nodes/ChecklistItemNode'
 let mockCommentsFailure = false
+let mockPrivateComments = 0
+let mockSharedComments = 0
+const mockCommentUpdates = new Set<() => void>()
+const mockApplication = {
+  items: {
+    findItem: (uuid: string) => ({ uuid }),
+    streamItems: (_types: unknown, changed: () => void) => {
+      mockCommentUpdates.add(changed)
+      return () => mockCommentUpdates.delete(changed)
+    },
+  },
+  isAuthorizedToRenderItem: jest.fn(() => true),
+  addEventObserver: (changed: () => void) => {
+    mockCommentUpdates.add(changed)
+    return () => mockCommentUpdates.delete(changed)
+  },
+}
+
+jest.mock('@/Components/ApplicationProvider', () => ({ useApplication: () => mockApplication }))
+jest.mock('@/Comments/PrivateNoteComments', () => ({
+  readPrivateNoteComments: () => Array.from({ length: mockPrivateComments }),
+}))
+jest.mock('@/Comments/CommentAuthorship', () => ({
+  readDisplayNoteComments: () => ({ comments: Array.from({ length: mockSharedComments }), quarantinedCount: 0 }),
+}))
+beforeEach(() => {
+  mockPrivateComments = 0
+  mockSharedComments = 0
+  mockApplication.isAuthorizedToRenderItem.mockReturnValue(true)
+})
 
 jest.mock('@lexical/react/LexicalComposerContext', () => ({ useLexicalComposerContext: jest.fn() }))
 jest.mock('@/Components/Comments/CommentsPanel', () => ({
@@ -26,6 +56,97 @@ jest.mock('@/Components/Comments/CommentsPanel', () => ({
   },
 }))
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+
+it.each(['private', 'shared'] as const)('automatically opens for existing %s comments', async (scope) => {
+  const editor = createHeadlessEditor({
+    onError: (error) => {
+      throw error
+    },
+  })
+  jest.mocked(useLexicalComposerContext).mockReturnValue([editor, {} as never])
+  if (scope === 'private') mockPrivateComments = 1
+  else mockSharedComments = 1
+  const element = document.createElement('div')
+  const root = createRoot(element)
+  try {
+    await act(async () =>
+      root.render(
+        <EditorControlsProvider identity={{}}>
+          <CommentsSidebar note={{ uuid: 'existing' } as never} />
+        </EditorControlsProvider>,
+      ),
+    )
+    expect(element.querySelector('aside')?.hidden).toBe(false)
+  } finally {
+    await act(async () => root.unmount())
+  }
+})
+
+it.each(['private', 'shared'] as const)(
+  'opens when %s comments arrive, respects closing across updates and composer replacement, and reopens for a new note',
+  async (scope) => {
+    const editor = createHeadlessEditor({
+      onError: (error) => {
+        throw error
+      },
+    })
+    jest.mocked(useLexicalComposerContext).mockReturnValue([editor, {} as never])
+    const element = document.createElement('div')
+    const root = createRoot(element)
+    const identity = {}
+    const render = (owner: object, composer: string, uuid = 'late') =>
+      root.render(
+        <EditorControlsProvider identity={owner}>
+          <CommentsSidebar key={composer} note={{ uuid } as never} />
+        </EditorControlsProvider>,
+      )
+    try {
+      await act(async () => render(identity, 'first'))
+      expect(element.querySelector('aside')).toBeNull()
+      await act(async () => {
+        if (scope === 'private') mockPrivateComments = 1
+        else mockSharedComments = 1
+        mockCommentUpdates.forEach((changed) => changed())
+      })
+      expect(element.querySelector('aside')?.hidden).toBe(false)
+      await act(async () => element.querySelector<HTMLButtonElement>('[aria-label="Close comments sidebar"]')!.click())
+      await act(async () => mockCommentUpdates.forEach((changed) => changed()))
+      expect(element.querySelector('aside')?.hidden).toBe(true)
+      await act(async () => render(identity, 'replacement'))
+      expect(element.querySelector('aside')).toBeNull()
+      await act(async () => render({}, 'replacement', 'next-note'))
+      expect(element.querySelector('aside')?.hidden).toBe(false)
+    } finally {
+      await act(async () => root.unmount())
+    }
+    expect(mockCommentUpdates.size).toBe(0)
+  },
+)
+
+it('does not reveal comments from a note the current account cannot render', async () => {
+  const editor = createHeadlessEditor({
+    onError: (error) => {
+      throw error
+    },
+  })
+  jest.mocked(useLexicalComposerContext).mockReturnValue([editor, {} as never])
+  mockPrivateComments = mockSharedComments = 1
+  mockApplication.isAuthorizedToRenderItem.mockReturnValue(false)
+  const element = document.createElement('div')
+  const root = createRoot(element)
+  try {
+    await act(async () =>
+      root.render(
+        <EditorControlsProvider identity={{}}>
+          <CommentsSidebar note={{ uuid: 'unavailable' } as never} />
+        </EditorControlsProvider>,
+      ),
+    )
+    expect(element.querySelector('aside')).toBeNull()
+  } finally {
+    await act(async () => root.unmount())
+  }
+})
 
 it('does not load comments during startup and contains a comment rendering failure without replacing the document', async () => {
   const editor = createHeadlessEditor({

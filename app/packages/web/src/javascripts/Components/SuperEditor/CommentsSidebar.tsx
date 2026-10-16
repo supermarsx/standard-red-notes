@@ -2,7 +2,10 @@ import Dropdown from '@/Components/Dropdown/Dropdown'
 import { Component, lazy, ReactNode, Suspense, useEffect, useState, useSyncExternalStore } from 'react'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
 import { $getRoot, $getNodeByKey, $isElementNode, LexicalNode } from 'lexical'
-import { SNNote } from '@standardnotes/snjs'
+import { ApplicationEvent, ContentType, SNNote } from '@standardnotes/snjs'
+import { useApplication } from '@/Components/ApplicationProvider'
+import { readPrivateNoteComments } from '@/Comments/PrivateNoteComments'
+import { readDisplayNoteComments } from '@/Comments/CommentAuthorship'
 import { useEditorControlsState } from './EditorControlsContext'
 import { $getChecklistTodoId, $isChecklistItemNode } from './Lexical/Nodes/ChecklistItemNode'
 import type { CommentAnchor } from '@/Comments/comments'
@@ -31,11 +34,41 @@ class CommentsBoundary extends Component<{ children: ReactNode }, { failed: bool
 
 export function CommentsSidebar({ note }: { note: SNNote }) {
   const [editor] = useLexicalComposerContext()
+  const application = useApplication()
   const controls = useEditorControlsState()
   const layout = useSyncExternalStore(controls.subscribe, controls.getSnapshot)
   const [visited, setVisited] = useState(layout.commentsOpen)
   const [tasks, setTasks] = useState<{ todoId: string; text: string; key: string }[]>([])
   const [navigationStatus, setNavigationStatus] = useState('')
+  useEffect(() => {
+    let revealed = false
+    const reveal = () => {
+      if (revealed) {
+        return
+      }
+      const current = application.items.findItem<SNNote>(note.uuid)
+      if (!current || !application.isAuthorizedToRenderItem(current)) {
+        return
+      }
+      if (
+        readPrivateNoteComments(application, note.uuid).length > 0 ||
+        readDisplayNoteComments(application, current).comments.length > 0
+      ) {
+        revealed = true
+        controls.revealExistingComments()
+      }
+    }
+    reveal()
+    const stopItems = application.items.streamItems(
+      [ContentType.TYPES.Note, ContentType.TYPES.UserPrefs, ContentType.TYPES.TrustedContact],
+      reveal,
+    )
+    const stopPreferences = application.addEventObserver(async () => reveal(), ApplicationEvent.PreferencesChanged)
+    return () => {
+      stopItems()
+      stopPreferences()
+    }
+  }, [application, controls, note.uuid])
   useEffect(() => {
     if (layout.commentsOpen) {
       setVisited(true)
