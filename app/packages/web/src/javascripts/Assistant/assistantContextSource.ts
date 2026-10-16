@@ -160,8 +160,36 @@ type RawContextSelection = { notes: SNNote[]; collectionLabel?: string }
  * neither source is explicit we fail closed rather than authorizing stale
  * recently-opened history as the "current" note.
  */
+function currentContextItem(application: WebApplication) {
+  // ItemGroupController publishes callbacks, not MobX changes. The list's
+  // computed activeControllerItem can therefore retain a previous editor.
+  return application.itemControllerGroup
+    ? application.itemControllerGroup.activeItemViewController?.item
+    : application.itemListController.activeControllerItem
+}
+
+/** Lightweight identity for refreshing a preview without extracting note text. */
+export function assistantContextOwnerKey(
+  application: WebApplication,
+  scope: AssistantContextSelection['scope'],
+): string {
+  if (scope === 'open-notes') {
+    return application.itemControllerGroup.itemControllers.map((controller) => controller.item?.uuid ?? '').join(':')
+  }
+  if (scope !== 'current-note') {
+    return ''
+  }
+  return (
+    currentContextItem(application)?.uuid ??
+    (application.itemListController.selectedItemsCount === 1
+      ? application.itemListController.firstSelectedItem?.uuid
+      : undefined) ??
+    ''
+  )
+}
+
 function currentNote(application: WebApplication): SNNote | undefined {
-  const active = application.itemListController.activeControllerItem
+  const active = currentContextItem(application)
   if (active) {
     // An explicit active file/tag/other item owns the user's current context.
     // Never fall through to a stale note selection and disclose it instead.

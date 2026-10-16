@@ -16,6 +16,7 @@ import { useResponsiveAppPane } from '../Panes/ResponsivePaneProvider'
 import ConversationPanel from './ConversationPanel'
 
 jest.mock('@/Assistant/assistantContextSource', () => ({
+  ...jest.requireActual('@/Assistant/assistantContextSource'),
   buildContextForSelection: jest.fn(() => ({
     scope: 'current-note',
     noteCount: 0,
@@ -90,7 +91,7 @@ describe('ConversationPanel message removal persistence', () => {
       selectedItemsCount: number
       firstSelectedItem: undefined
     }
-    itemControllerGroup: { itemControllers: never[] }
+    itemControllerGroup: { itemControllers: never[]; addActiveControllerChangeObserver: () => () => void }
   }
 
   const persist = async (messages: PersistedAssistantMessage[]) => {
@@ -151,7 +152,7 @@ describe('ConversationPanel message removal persistence', () => {
         selectedItemsCount: 0,
         firstSelectedItem: undefined,
       },
-      itemControllerGroup: { itemControllers: [] },
+      itemControllerGroup: { itemControllers: [], addActiveControllerChangeObserver: () => () => undefined },
     }
     container = document.createElement('div')
     document.body.appendChild(container)

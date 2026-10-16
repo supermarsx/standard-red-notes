@@ -6,6 +6,7 @@ import { useResponsiveAppPane } from '../Panes/ResponsivePaneProvider'
 import ConversationPanel from './ConversationPanel'
 
 jest.mock('@/Assistant/assistantContextSource', () => ({
+  ...jest.requireActual('@/Assistant/assistantContextSource'),
   buildContextForSelection: jest.fn(() => ({
     scope: 'current-note',
     noteCount: 1,
@@ -34,6 +35,8 @@ describe('ConversationPanel context preview cadence', () => {
   let container: HTMLElement
   let root: Root
   let noteObserver: (() => void) | undefined
+  let editorObserver: (() => void) | undefined
+  const removeEditorObserver = jest.fn()
   const activeItem = { uuid: 'note-one' }
   const application = {
     identifier: 'test-app',
@@ -53,7 +56,15 @@ describe('ConversationPanel context preview cadence', () => {
       selectedItemsCount: 1,
       firstSelectedItem: activeItem,
     },
-    itemControllerGroup: { itemControllers: [] },
+    itemControllerGroup: {
+      itemControllers: [] as { item: { uuid: string } }[],
+      activeItemViewController: { item: activeItem } as { item: { uuid: string } } | undefined,
+      addActiveControllerChangeObserver: jest.fn((callback: () => void) => {
+        editorObserver = callback
+        callback()
+        return removeEditorObserver
+      }),
+    },
   }
 
   const renderPanel = (isActive = true) => {
@@ -80,6 +91,11 @@ describe('ConversationPanel context preview cadence', () => {
       return () => undefined
     })
     application.addEventObserver.mockImplementation(() => () => undefined)
+    application.itemControllerGroup.addActiveControllerChangeObserver.mockImplementation((callback: () => void) => {
+      editorObserver = callback
+      callback()
+      return removeEditorObserver
+    })
     jest.mocked(buildContextForSelection).mockImplementation(() => ({
       scope: 'current-note',
       noteCount: 1,
@@ -91,6 +107,9 @@ describe('ConversationPanel context preview cadence', () => {
       text: 'Current note',
     }))
     noteObserver = undefined
+    editorObserver = undefined
+    application.itemControllerGroup.activeItemViewController = { item: activeItem }
+    application.itemControllerGroup.itemControllers = []
   })
 
   afterEach(() => {
@@ -118,5 +137,35 @@ describe('ConversationPanel context preview cadence', () => {
 
     renderPanel(true)
     expect(buildContextForSelection).toHaveBeenCalledTimes(1)
+  })
+
+  it('updates an empty chat immediately on editor handoff without a note mutation or parent rerender', () => {
+    jest.mocked(buildContextForSelection).mockImplementation(() => {
+      const uuid = application.itemControllerGroup.activeItemViewController?.item.uuid
+      return {
+        scope: 'current-note',
+        noteCount: uuid ? 1 : 0,
+        characters: 12,
+        truncated: false,
+        noteTitles: uuid ? [uuid] : [],
+        noteUuids: uuid ? [uuid] : [],
+        omittedNoteCount: 0,
+        text: uuid ?? '',
+      }
+    })
+    renderPanel()
+    expect(container.textContent).toContain('“note-one”')
+    act(() => {
+      application.itemControllerGroup.activeItemViewController = { item: { uuid: 'note-two' } }
+      editorObserver?.()
+    })
+    expect(container.textContent).toContain('“note-two”')
+    expect(container.textContent).not.toContain('“note-one”')
+    expect(buildContextForSelection).toHaveBeenCalledTimes(2)
+    act(() => editorObserver?.())
+    expect(buildContextForSelection).toHaveBeenCalledTimes(2)
+    renderPanel(false)
+    expect(removeEditorObserver).toHaveBeenCalled()
+    expect(application.itemControllerGroup.addActiveControllerChangeObserver).toHaveBeenCalledTimes(2)
   })
 })

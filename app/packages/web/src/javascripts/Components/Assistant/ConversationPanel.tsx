@@ -20,6 +20,7 @@ import AssistantUsageMeter from './AssistantUsageMeter'
 import { AssistantUsageResponse, TokenWindowUsage } from '@/Assistant/usageMeter'
 import {
   AssistantContextSelection,
+  assistantContextOwnerKey,
   buildContextForSelection,
   resolveContextNoteUuids,
 } from '@/Assistant/assistantContextSource'
@@ -746,15 +747,20 @@ function ConversationPanelImpl({
   // Keep the disclosure preview live when notes or the active editor change,
   // without rescanning/extracting a large vault for every 40ms stream delta.
   // runPrompt separately builds a fresh context exactly once at send time.
-  const contextOwnerKey =
-    contextSelection.scope === 'current-note'
-      ? (application.itemListController.activeControllerItem?.uuid ??
-        (application.itemListController.selectedItemsCount === 1
-          ? application.itemListController.firstSelectedItem?.uuid
-          : undefined))
-      : contextSelection.scope === 'open-notes'
-        ? application.itemControllerGroup.itemControllers.map((controller) => controller.item?.uuid ?? '').join(':')
-        : ''
+  const contextOwnerKey = assistantContextOwnerKey(application, contextSelection.scope)
+  useEffect(() => {
+    if (!isActive || !['current-note', 'open-notes'].includes(contextSelection.scope)) {
+      return
+    }
+    let previous = contextOwnerKey
+    return application.itemControllerGroup.addActiveControllerChangeObserver(() => {
+      const next = assistantContextOwnerKey(application, contextSelection.scope)
+      if (next !== previous) {
+        previous = next
+        setContextItemsRevision((revision) => revision + 1)
+      }
+    })
+  }, [application, contextOwnerKey, contextSelection.scope, isActive])
   const contextPreview = useMemo(() => {
     // These lightweight revision keys intentionally invalidate the expensive
     // preview without becoming part of the returned disclosure payload.

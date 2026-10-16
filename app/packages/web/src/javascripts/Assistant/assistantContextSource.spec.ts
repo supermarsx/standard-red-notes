@@ -3,6 +3,27 @@ import { WebApplication } from '@/Application/WebApplication'
 import { MAX_CONTEXT_NOTES, resolveContextNoteUuids, resolveContextNotes } from './assistantContextSource'
 
 describe('assistant context authorization scope', () => {
+  it('uses the live editor for send-time context even when the list retains a previous active note', () => {
+    const old = { uuid: 'old', content_type: ContentType.TYPES.Note, title: 'Old', text: 'Old body' } as SNNote
+    const current = { ...old, uuid: 'current', title: 'Current', text: 'Current body' } as SNNote
+    const group = {
+      activeItemViewController: { item: current } as
+        { item: SNNote | { uuid: string; content_type: string } } | undefined,
+    }
+    const list = { activeControllerItem: old, firstSelectedItem: old, selectedItemsCount: 1 }
+    const application = {
+      isAuthorizedToRenderItem: () => true,
+      itemControllerGroup: group,
+      itemListController: list,
+    } as unknown as WebApplication
+    expect(resolveContextNoteUuids(application, { scope: 'current-note' })).toEqual(['current'])
+    expect(resolveContextNotes(application, { scope: 'current-note' }).notes[0].text).toBe('Current body')
+    group.activeItemViewController = { item: { uuid: 'file', content_type: ContentType.TYPES.File } }
+    expect(resolveContextNoteUuids(application, { scope: 'current-note' })).toEqual([])
+    group.activeItemViewController = undefined
+    list.selectedItemsCount = 0
+    expect(resolveContextNoteUuids(application, { scope: 'current-note' })).toEqual([])
+  })
   it('retains the current note when focus moves from the editor into the assistant', () => {
     const note = {
       uuid: 'focused-note',
