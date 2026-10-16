@@ -20,10 +20,10 @@
     "@standardnotes/sncrypto-web": "1.14.11",
     "@standardnotes/snjs": "2.212.4",
     "libsodium-wrappers-sumo": "0.8.4",
-    "uuid": "14.0.2"
+    "uuid": "14.0.3"
   },
   "devDependencies": {
-    "@types/node": "^26.6.4",
+    "@types/node": "^26.6.5",
     "esbuild": "^0.28.2",
     "typescript": "^7.0.2"
   }
