@@ -1151,11 +1151,14 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
   }
 
   /**
-   * True when a connection OTHER than `conn` holds a live editor lease in
-   * `room`, i.e. a local peer exists that can answer a full-state retry. With
+   * True when another connection, or another logical editor on `conn`, holds
+   * a live editor lease in `room` and may answer a full-state retry. With
    * a lifecycle attached, registry editor leases are activated by construction.
    */
   hasOtherEditor(room: string, conn: Conn<S>): boolean {
+    if (this.hasMultipleEditorLeases(room, conn)) {
+      return true
+    }
     const members = this.byRoom.get(room)
     if (!members) {
       return false
@@ -1171,6 +1174,21 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
         if (lease.role === 'editor') {
           return true
         }
+      }
+    }
+    return false
+  }
+
+  /** Separate editors can share a socket; each owns its own activated lease. */
+  hasMultipleEditorLeases(room: string, conn: Conn<S>): boolean {
+    const membership = this.byRoom.get(room)?.get(conn)
+    if (!membership || !this.pruneExpiredLeases(room, conn, membership)) {
+      return false
+    }
+    let editors = membership.legacyLease?.role === 'editor' ? 1 : 0
+    for (const lease of membership.requestIds.values()) {
+      if (lease.role === 'editor' && ++editors > 1) {
+        return true
       }
     }
     return false
@@ -1416,13 +1434,14 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
   }
 
   /**
-   * Send `message` to every member of `room` except `from`. Returns the number
-   * of sockets that received it.
+   * Send `message` to every member of `room` except `from`, unless includeSender
+   * is set for multiple logical editors sharing that socket. Returns the number
+   * of sockets that received it; backpressure applies to the sender too.
    */
-  broadcast(room: string, message: string, from: Conn<S>): number {
+  broadcast(room: string, message: string, from: Conn<S>, includeSender = false): number {
     let sent = 0
     for (const member of this.members(room)) {
-      if (member === from) {
+      if (member === from && !includeSender) {
         continue
       }
       if (!this.canSendWithoutBackpressure(member.socket)) {
@@ -2061,7 +2080,12 @@ export async function handleRelayFrame<S extends SendableSocket>(
       // R15: local peers receive the frame immediately; the cross-replica
       // publish follows and its failure still denies the room (fail closed for
       // convergence) without holding local delivery behind a Redis round trip.
-      const reached = rooms.broadcast(frame.room, JSON.stringify(frame), conn)
+      // Separate mounted editors can share this socket. Deliver their state
+      // requests, updates and awareness back to its local subscribers as well.
+      // Provider-origin updates are idempotent and are not re-transmitted. All
+      // membership, response-grant and control-budget checks above still apply.
+      const includeLocalEditors = frame.t !== 'comment' && rooms.hasMultipleEditorLeases(frame.room, conn)
+      const reached = rooms.broadcast(frame.room, JSON.stringify(frame), conn, includeLocalEditors)
       if (lifecycle) {
         try {
           await lifecycle.publish(frame)

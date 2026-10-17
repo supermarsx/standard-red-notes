@@ -2,6 +2,7 @@ import { webcrypto } from 'node:crypto'
 import { TextDecoder as NodeTextDecoder, TextEncoder as NodeTextEncoder } from 'node:util'
 import {
   CollaborationCipherError,
+  MAX_COLLABORATION_SENDER_EPOCHS,
   createCollaborationReplayLedger,
   createCollaborationRoomCipher,
   createRoomCipher,
@@ -97,6 +98,82 @@ maybeDescribe('collaboration room cipher security envelope', () => {
     expect((concurrent.find((result) => result.status === 'rejected') as PromiseRejectedResult).reason).toMatchObject({
       code: 'REPLAYED',
     })
+  })
+
+  it('delivers one authenticated broadcast to every live cipher while rejecting replays and later remounts', async () => {
+    const key = await roomKey()
+    const sender = collaborationCipher(key, SENDER_A)
+    const ledger = createCollaborationReplayLedger()
+    const first = createCollaborationRoomCipher(key, ROOM_EPOCH, RECEIVER, ledger)
+    const second = createCollaborationRoomCipher(key, ROOM_EPOCH, SENDER_B, ledger)
+    const text = encoder.encode('one broadcast, two editors')
+    const payload = await sender.encrypt(text)
+    await expect(Promise.all([first.decrypt(payload), second.decrypt(payload)])).resolves.toEqual([text, text])
+    await expect(first.decrypt(payload)).rejects.toMatchObject({ code: 'REPLAYED' })
+    await expect(second.decrypt(payload)).rejects.toMatchObject({ code: 'REPLAYED' })
+    const remounted = createCollaborationRoomCipher(key, ROOM_EPOCH, RECEIVER, ledger)
+    await expect(remounted.decrypt(payload)).rejects.toMatchObject({ code: 'REPLAYED' })
+  })
+
+  it('distinguishes a same-epoch sender echo from a foreign room epoch without decrypting either', async () => {
+    const key = await roomKey()
+    const sender = collaborationCipher(key, SENDER_A)
+    const payload = await sender.encrypt(encoder.encode('own update'))
+    await expect(sender.decrypt(payload)).rejects.toMatchObject({ code: 'SELF_FRAME' })
+    const foreignRoom = collaborationCipher(key, SENDER_A, OTHER_ROOM_EPOCH)
+    await expect(foreignRoom.decrypt(payload)).rejects.toMatchObject({ code: 'EPOCH_MISMATCH' })
+  })
+
+  it('fences a remount against a decrypt already pending in the old cipher', async () => {
+    const key = await roomKey()
+    const sender = collaborationCipher(key, SENDER_A)
+    const ledger = createCollaborationReplayLedger()
+    const first = createCollaborationRoomCipher(key, ROOM_EPOCH, RECEIVER, ledger)
+    const text = encoder.encode('pending authenticated state')
+    const payload = await sender.encrypt(text)
+    const pending = first.decrypt(payload)
+    const remounted = createCollaborationRoomCipher(key, ROOM_EPOCH, SENDER_B, ledger)
+    await expect(remounted.decrypt(payload)).rejects.toMatchObject({ code: 'REPLAYED' })
+    await expect(pending).resolves.toEqual(text)
+    await expect(remounted.decrypt(payload)).rejects.toMatchObject({ code: 'REPLAYED' })
+  })
+
+  it('does not poison a remounted cipher when the inherited pending decrypt fails authentication', async () => {
+    const key = await roomKey()
+    const sender = collaborationCipher(key, SENDER_A)
+    const ledger = createCollaborationReplayLedger()
+    const first = createCollaborationRoomCipher(key, ROOM_EPOCH, RECEIVER, ledger)
+    const text = encoder.encode('authenticated state')
+    const metadata = encoder.encode('correct metadata')
+    const payload = await sender.encrypt(text, metadata)
+    const pending = first.decrypt(payload, encoder.encode('incorrect metadata'))
+    const remounted = createCollaborationRoomCipher(key, ROOM_EPOCH, SENDER_B, ledger)
+    await expect(pending).rejects.toBeDefined()
+    await expect(remounted.decrypt(payload, metadata)).resolves.toEqual(text)
+  })
+
+  it('keeps each live receiver window independent of a faster sibling', () => {
+    const ledger = createCollaborationReplayLedger()
+    const first = ledger.createReceiver()
+    const slow = ledger.createReceiver()
+    const pending = slow.reserve(SENDER_A, 1)
+    first.commit(SENDER_A, 5000)
+    expect(() => slow.commit(SENDER_A, 1)).not.toThrow()
+    slow.release(pending)
+    expect(() => slow.reserve(SENDER_A, 1)).toThrow()
+    expect(() => ledger.createReceiver().reserve(SENDER_A, 1)).toThrow()
+  })
+
+  it('enforces the sender limit across all live receivers together', () => {
+    const ledger = createCollaborationReplayLedger()
+    const first = ledger.createReceiver()
+    const second = ledger.createReceiver()
+    for (let index = 0; index < MAX_COLLABORATION_SENDER_EPOCHS; index += 1) {
+      const receiver = index % 2 === 0 ? first : second
+      receiver.commit(`sender_epoch_${index}`, 1)
+    }
+    expect(() => first.commit('one_sender_too_many', 1)).toThrow(new CollaborationCipherError('SENDER_LIMIT'))
+    expect(() => second.commit('one_sender_too_many', 1)).toThrow(new CollaborationCipherError('SENDER_LIMIT'))
   })
 
   it('retains replay rejection when a cipher is recreated in the same room-key epoch', async () => {

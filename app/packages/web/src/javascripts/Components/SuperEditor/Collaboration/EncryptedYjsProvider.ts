@@ -217,6 +217,7 @@ export class EncryptedYjsProvider implements Provider {
   private recoveryStateAttempts = 0
   private readonly recoveryReasons = new Set<'inbound' | 'outbound'>()
   private stateRequestTimeout: ReturnType<typeof setTimeout> | undefined
+  private bootstrapYieldTimeout: ReturnType<typeof setTimeout> | undefined
   private correlatedStateAttempts = 0
   private stateServingReady = false
   private awaitingBootstrapSeed = false
@@ -2026,6 +2027,12 @@ export class EncryptedYjsProvider implements Provider {
         // only keep the editor read-only; fail over to a fresh bootstrap election now.
         if (this.options && this.joined && frame.requestId === this.awaitingStateRequestId) {
           this.clearStateRequest()
+          // A reconnect already re-uploaded and proved this retained document.
+          // Its peer merge is optional: an absent peer cannot invalidate that
+          // accepted state or discard local/offline edits through a remount.
+          if (this.stateServingReady && this.hasDocumentState()) {
+            break
+          }
           this.reportSyncFailure('encrypted-yjs-no-responder')
           this.requestBootstrapFailover()
         }
@@ -2107,6 +2114,23 @@ export class EncryptedYjsProvider implements Provider {
       case 'yjs-retry':
         if (this.joined && this.isValidRetryControlFrame(frame)) {
           if (!this.stateServingReady) {
+            // Two fresh followers can keep each other's lease alive after the
+            // seeder disappears. A follower that already waited one response
+            // window yields its own empty lease so the peer can re-elect via
+            // the server. Never abandon seeded or retained document state.
+            if (
+              this.options?.onBootstrapRetry &&
+              this.currentLease?.shouldBootstrap === false &&
+              this.awaitingStateRequestId !== undefined &&
+              this.correlatedStateAttempts >= 2 &&
+              frame.requesterClientId !== this.doc.clientID &&
+              !this.awaitingBootstrapSeed &&
+              this.stateEstablishingGeneration === undefined &&
+              !this.hasDocumentState()
+            ) {
+              this.requestBootstrapFailover(CONTROL_RESPONSE_TIMEOUT_MS + 2_000 + (this.doc.clientID % 1_000))
+              break
+            }
             this.pendingRetryBeforeReady = frame
           } else {
             this.handleStateRetry(frame)
@@ -2352,6 +2376,14 @@ export class EncryptedYjsProvider implements Provider {
     try {
       chunk = await this.cipher.decrypt(frame.payload, encodeChunkAdditionalData(frame))
     } catch (error) {
+      if (isCollaborationCipherError(error) && error.code === 'SELF_FRAME') {
+        // Do not put self-echoed chunks in the rejected-transfer ledger: the
+        // following chunks belong to the same valid outgoing snapshot.
+        if (this.inboundTransfers.get(frame.transferId) === transfer) {
+          this.releaseTransfer(frame.transferId, false)
+        }
+        return
+      }
       const shouldRetry = this.handleCipherFailure(error, 'encrypted-yjs-chunk-decryption-failed')
       this.rejectTransfer(frame.transferId, shouldRetry)
       return
@@ -2431,6 +2463,10 @@ export class EncryptedYjsProvider implements Provider {
       return true
     }
     switch (error.code) {
+      case 'SELF_FRAME':
+        // Multiple editor leases can share one socket. The gateway relays to
+        // that socket, so the sender also sees its own authenticated envelope.
+        return false
       case 'REPLAYED':
       case 'SEQUENCE_WINDOW':
         this.reportSyncFailure('encrypted-envelope-replay-rejected')
@@ -2909,10 +2945,15 @@ export class EncryptedYjsProvider implements Provider {
       }
       this.awaitingStateRequestId = undefined
       this.stateRequestTimeout = undefined
-      this.reportSyncFailure('encrypted-yjs-correlated-state-timeout')
+      const needsInitialState = !this.stateServingReady
+      if (needsInitialState) {
+        this.reportSyncFailure('encrypted-yjs-correlated-state-timeout')
+      }
       if (this.connected && this.joined) {
         if (this.correlatedStateAttempts >= MAX_CORRELATED_STATE_ATTEMPTS) {
-          this.requestBootstrapFailover()
+          if (needsInitialState) {
+            this.requestBootstrapFailover()
+          }
         } else {
           this.requestCorrelatedFullState()
         }
@@ -2930,14 +2971,18 @@ export class EncryptedYjsProvider implements Provider {
       if (this.stateRequestTimeout !== undefined) {
         clearTimeout(this.stateRequestTimeout)
       }
-      this.reportSyncFailure('encrypted-yjs-state-request-failed')
+      if (!this.stateServingReady) {
+        this.reportSyncFailure('encrypted-yjs-state-request-failed')
+      }
       this.stateRequestTimeout = setTimeout(() => {
         this.stateRequestTimeout = undefined
         if (!this.connected || !this.joined) {
           return
         }
         if (this.correlatedStateAttempts >= MAX_CORRELATED_STATE_ATTEMPTS) {
-          this.requestBootstrapFailover()
+          if (!this.stateServingReady) {
+            this.requestBootstrapFailover()
+          }
         } else {
           this.requestCorrelatedFullState()
         }
@@ -3023,10 +3068,13 @@ export class EncryptedYjsProvider implements Provider {
     }
   }
 
-  private requestBootstrapFailover(): void {
+  private requestBootstrapFailover(retryDelayMs = 0): void {
     if (!this.connected || !this.options) {
       return
     }
+    this.transportGeneration += 1
+    const generation = this.transportGeneration
+    this.clearBootstrapYield()
     this.awaitingBootstrapSeed = false
     this.setStateServingReady(false)
     this.setLocalStateReadiness(false)
@@ -3042,7 +3090,30 @@ export class EncryptedYjsProvider implements Provider {
     this.currentLease?.release()
     this.currentLease = undefined
     this.emit('sync', false as never)
-    this.options.onBootstrapRetry?.()
+    if (retryDelayMs > 0) {
+      // Stay out through the peer's next correlated timeout. Rejoining sooner
+      // would keep the room occupied and prevent a canonical bootstrap grant.
+      this.bootstrapYieldTimeout = setTimeout(() => {
+        this.bootstrapYieldTimeout = undefined
+        if (
+          generation === this.transportGeneration &&
+          this.connected &&
+          !this.joined &&
+          this.validateLiveAttachment()
+        ) {
+          this.options?.onBootstrapRetry?.()
+        }
+      }, retryDelayMs)
+    } else {
+      this.options.onBootstrapRetry?.()
+    }
+  }
+
+  private clearBootstrapYield(): void {
+    if (this.bootstrapYieldTimeout !== undefined) {
+      clearTimeout(this.bootstrapYieldTimeout)
+      this.bootstrapYieldTimeout = undefined
+    }
   }
 
   private waitForAcceptance(transferId: string): Promise<void> {
@@ -3191,6 +3262,7 @@ export class EncryptedYjsProvider implements Provider {
   }
 
   private clearJoinRetry(): void {
+    this.clearBootstrapYield()
     this.joinRecoveryCoolingDown = false
     if (this.joinRetryTimeout !== undefined) {
       clearTimeout(this.joinRetryTimeout)

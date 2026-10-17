@@ -69,6 +69,78 @@ function fakeLifecycle(): RoomRelayLifecycle {
   }
 }
 
+describe('editors sharing one room socket', () => {
+  it('routes retries, updates and awareness to local editors and remote peers', async () => {
+    const rooms = new RoomRegistry(() => 1_000)
+    const shared = fakeConn('shared')
+    const peer = fakeConn('peer')
+    rooms.join('n1', shared, 2_000, 'first', 'editor')
+    rooms.join('n1', shared, 2_000, 'second', 'editor')
+    const retry = { t: 'yjs-retry' as const, room: 'n1', requestId: 'retry', requesterClientId: 7 }
+    expect(rooms.hasOtherEditor('n1', shared)).toBe(true)
+    expect(await handleRelayFrame(rooms, shared, retry)).toBe(1)
+    expect(shared.sent).toEqual([JSON.stringify(retry)])
+    rooms.join('n1', peer, 2_000, 'peer', 'editor')
+    for (const frame of [
+      { t: 'yjs' as const, room: 'n1', payload: 'update' },
+      { t: 'awareness' as const, room: 'n1', payload: 'presence' },
+      {
+        t: 'yjs-chunk' as const,
+        room: 'n1',
+        payload: 'chunk',
+        transferId: 'transfer',
+        index: 0,
+        count: 1,
+        totalBytes: 1,
+      },
+    ]) {
+      expect(await handleRelayFrame(rooms, shared, frame)).toBe(2)
+      expect(shared.sent).toContain(JSON.stringify(frame))
+      expect(peer.sent).toContain(JSON.stringify(frame))
+    }
+    const comment = { t: 'comment' as const, room: 'n1', payload: 'comment' }
+    expect(await handleRelayFrame(rooms, shared, comment)).toBe(1)
+    expect(shared.sent).not.toContain(JSON.stringify(comment))
+  })
+
+  it('requires a valid response grant before echoing correlated state', async () => {
+    const rooms = new RoomRegistry(() => 1_000)
+    const shared = fakeConn('shared')
+    rooms.join('n1', shared, 2_000, 'first', 'editor')
+    rooms.join('n1', shared, 2_000, 'second', 'editor')
+    const response = { t: 'yjs' as const, room: 'n1', payload: 'state', stateRequestId: 'state-request' }
+    expect(await handleRelayFrame(rooms, shared, response)).toBe(0)
+    expect(shared.sent).toEqual([])
+    expect(rooms.recordYjsResponseGrant('n1', shared, 'state-request', 'first', 1_500)).toBe(true)
+    expect(await handleRelayFrame(rooms, shared, response)).toBe(1)
+    expect(await handleRelayFrame(rooms, shared, response)).toBe(0)
+    expect(shared.sent).toEqual([JSON.stringify(response)])
+  })
+
+  it('does not treat comment, pending, expired or released leases as a second editor', async () => {
+    let now = 1_000
+    const rooms = new RoomRegistry(() => now)
+    const shared = fakeConn('shared')
+    rooms.join('n1', shared, 3_000, 'first', 'editor')
+    rooms.join('n1', shared, 3_000, 'comments', 'comment')
+    rooms.reservePendingEditorSlot('n1', shared, 'pending')
+    expect(rooms.hasMultipleEditorLeases('n1', shared)).toBe(false)
+    rooms.join('n1', shared, 1_500, 'second', 'editor')
+    expect(rooms.hasMultipleEditorLeases('n1', shared)).toBe(true)
+    now = 1_501
+    expect(rooms.hasMultipleEditorLeases('n1', shared)).toBe(false)
+    rooms.join('n1', shared, 3_000, 'third', 'editor')
+    rooms.leave('n1', shared, 'third')
+    shared.sent.length = 0
+    const update = { t: 'yjs' as const, room: 'n1', payload: 'update' }
+    expect(await handleRelayFrame(rooms, shared, update)).toBe(0)
+    expect(shared.sent).toEqual([])
+    const retry = { t: 'yjs-retry' as const, room: 'n1', requestId: 'alone', requesterClientId: 7 }
+    expect(await handleRelayFrame(rooms, shared, retry)).toBe(0)
+    expect(shared.sent).toEqual([JSON.stringify({ t: 'yjs-no-responder', room: 'n1', requestId: 'alone' })])
+  })
+})
+
 describe('parseRelayFrame', () => {
   it('parses join/leave control frames', () => {
     expect(parseRelayFrame(JSON.stringify({ t: 'room-join', room: 'n1' }))).toEqual({ t: 'room-join', room: 'n1' })

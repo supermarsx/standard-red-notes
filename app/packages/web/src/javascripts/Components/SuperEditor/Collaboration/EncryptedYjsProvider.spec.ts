@@ -15,7 +15,13 @@ import {
   YJS_CHUNK_PLAINTEXT_BYTES,
   YJS_TRANSFER_TIMEOUT_MS,
 } from './EncryptedYjsProvider'
-import { CollaborationCipherError, createRoomCipher, RoomCipher } from './RoomCrypto'
+import {
+  CollaborationCipherError,
+  createRoomCipher,
+  createCollaborationRoomCipher,
+  createCollaborationReplayLedger,
+  RoomCipher,
+} from './RoomCrypto'
 import { COLLABORATION_PRESENCE_HEARTBEAT_INTERVAL_MS, type CollabChannel, type CollabFrame } from './CollabChannel'
 
 const TEST_ROOM_EPOCH = 'room_epoch_0000000000000001'
@@ -1596,6 +1602,312 @@ describe('EncryptedYjsProvider convergence', () => {
     expect(secondRelease).toHaveBeenCalledTimes(1)
     consoleError.mockRestore()
   })
+
+  it.each([false, true])(
+    'lets stranded empty followers yield for server election and cancels a destroyed yield (%s)',
+    async (cancelYield) => {
+      jest.useFakeTimers()
+      const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined)
+      const listeners = new Set<(frame: CollabFrame) => void>()
+      const activeLeases = new Set<string>(['first-initial', 'second-initial'])
+      const providers: EncryptedYjsProvider[] = []
+      const liveProviders = new Map<string, EncryptedYjsProvider>()
+      const bootstrapGrants: string[] = []
+      let sequence = 0
+      const deliver = (frame: CollabFrame) => [...listeners].forEach((listener) => listener(frame))
+      const channel: CollabChannel = {
+        isConnected: () => true,
+        authorize: jest.fn(),
+        subscribe: (listener) => {
+          listeners.add(listener)
+          return () => listeners.delete(listener)
+        },
+        send: (frame) => {
+          if (frame.t === 'yjs-retry' && activeLeases.size === 1) {
+            deliver({ t: 'yjs-no-responder', room: frame.room, requestId: frame.requestId })
+          } else if (frame.t === 'yjs-response-claim') {
+            deliver({ ...frame, t: 'yjs-response-granted', protocolVersion: 3 })
+          } else if (frame.t === 'yjs' || frame.t === 'awareness' || frame.t === 'yjs-retry') {
+            deliver(frame)
+            if (frame.t === 'yjs' && frame.transferId) {
+              deliver({ t: 'yjs-accepted', room: frame.room, transferId: frame.transferId, protocolVersion: 3 })
+            }
+          }
+        },
+      }
+      const mount = (name: string, initial = false): EncryptedYjsProvider => {
+        const shouldBootstrap = !initial && activeLeases.size === 0
+        const requestId = initial ? `${name}-initial` : `${name}-replacement-${++sequence}`
+        if (shouldBootstrap) bootstrapGrants.push(name)
+        activeLeases.add(requestId)
+        const doc = new Y.Doc()
+        if (shouldBootstrap) doc.getText('content').insert(0, 'canonical saved note')
+        const lease = {
+          requestId,
+          shouldBootstrap,
+          protocolVersion: 3 as const,
+          maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+          roomEpoch: TEST_ROOM_EPOCH,
+          release: () => {
+            activeLeases.delete(requestId)
+          },
+        }
+        const provider = new EncryptedYjsProvider(
+          doc,
+          'stranded-followers',
+          channel,
+          createTestTransportCipher(),
+          undefined,
+          requestId,
+          {
+            activeLease: lease,
+            shouldBootstrap,
+            validateAttachment: () => true,
+            reactivate: jest.fn(),
+            onFatal: jest.fn(),
+            onBootstrapRetry: () => {
+              provider.destroy()
+              mount(name)
+            },
+          },
+        )
+        liveProviders.set(name, provider)
+        providers.push(provider)
+        provider.connect()
+        return provider
+      }
+      try {
+        mount('first', true)
+        mount('second', true)
+        await settle(...providers)
+        expect(bootstrapGrants).toHaveLength(0)
+        await jest.advanceTimersByTimeAsync(10_000)
+        await settle(...providers)
+        expect(activeLeases.size).toBe(1)
+        expect(bootstrapGrants).toHaveLength(0)
+        if (cancelYield) {
+          for (const [name, provider] of liveProviders) {
+            if (!provider.isRoomJoined()) {
+              provider.destroy()
+              liveProviders.delete(name)
+            }
+          }
+        }
+        await jest.advanceTimersByTimeAsync(15_000)
+        await settle(...providers)
+        expect(bootstrapGrants).toHaveLength(1)
+        expect(activeLeases.size).toBe(cancelYield ? 1 : 2)
+        for (const provider of liveProviders.values()) {
+          expect(provider.isCanonicalReady()).toBe(true)
+          expect(provider.isRoomJoined()).toBe(true)
+          expect(provider.doc.getText('content').toString()).toBe('canonical saved note')
+        }
+        // A ready seeder sees later follower requests but never gives up its lease.
+        await jest.advanceTimersByTimeAsync(90_000)
+        expect(bootstrapGrants).toHaveLength(1)
+        expect(activeLeases.size).toBe(cancelYield ? 1 : 2)
+      } finally {
+        providers.forEach((provider) => provider.destroy())
+        consoleError.mockRestore()
+        jest.useRealTimers()
+      }
+    },
+  )
+
+  it.each([11, YJS_CHUNK_PLAINTEXT_BYTES * 2])(
+    'converges two logical editors sharing a socket without re-sending self-echoed frames (%s bytes)',
+    async (size) => {
+      jest.useFakeTimers()
+      const roomKey = await generateTestRoomKey()
+      const sharedReplayLedger = createCollaborationReplayLedger()
+      const listeners = new Set<(frame: CollabFrame) => void>()
+      const sent: CollabFrame[] = []
+      const deliver = (frame: CollabFrame) => listeners.forEach((listener) => listener(frame))
+      const channel: CollabChannel = {
+        isConnected: () => true,
+        authorize: jest.fn(),
+        subscribe: (listener) => {
+          listeners.add(listener)
+          return () => listeners.delete(listener)
+        },
+        send: (frame) => {
+          sent.push(frame)
+          if (frame.t === 'yjs-response-claim') {
+            deliver({ ...frame, t: 'yjs-response-granted', protocolVersion: 3 })
+          } else if (
+            frame.t === 'yjs' ||
+            frame.t === 'yjs-chunk' ||
+            frame.t === 'awareness' ||
+            frame.t === 'yjs-retry'
+          ) {
+            // The gateway cannot distinguish local subscribers on one socket;
+            // all of them receive the relay, including the original sender.
+            deliver(frame)
+            if (
+              (frame.t === 'yjs' && frame.transferId) ||
+              (frame.t === 'yjs-chunk' && frame.index === frame.count - 1)
+            ) {
+              deliver({ t: 'yjs-accepted', room: frame.room, transferId: frame.transferId!, protocolVersion: 3 })
+            }
+          }
+        },
+      }
+      const createProvider = (doc: Y.Doc, bootstrap: boolean) => {
+        const lease = {
+          requestId: bootstrap ? 'shared-socket-first-lease' : 'shared-socket-second-lease',
+          shouldBootstrap: bootstrap,
+          protocolVersion: 3 as const,
+          maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+          roomEpoch: TEST_ROOM_EPOCH,
+          release: jest.fn(),
+        }
+        return new EncryptedYjsProvider(
+          doc,
+          'shared-socket-room',
+          channel,
+          createCollaborationRoomCipher(roomKey, TEST_ROOM_EPOCH, undefined, sharedReplayLedger),
+          undefined,
+          lease.requestId,
+          {
+            activeLease: lease,
+            shouldBootstrap: bootstrap,
+            validateAttachment: () => true,
+            reactivate: jest.fn(),
+            onFatal: jest.fn(),
+          },
+        )
+      }
+      const firstDoc = new Y.Doc()
+      const initialText = 'x'.repeat(size)
+      firstDoc.getText('content').insert(0, initialText)
+      const first = createProvider(firstDoc, true)
+      const second = createProvider(new Y.Doc(), false)
+      try {
+        first.connect()
+        await settle(first)
+        second.connect()
+        await settle(first, second)
+        expect(second.doc.getText('content').toString()).toBe(initialText)
+        expect(first.isCanonicalReady()).toBe(true)
+        expect(second.isCanonicalReady()).toBe(true)
+        expect(sent.filter((frame) => frame.t === 'yjs-response-claim')).toHaveLength(1)
+        sent.length = 0
+        firstDoc.getText('content').insert(size, ' + first')
+        await settle(first, second)
+        expect(second.doc.getText('content').toString()).toBe(initialText + ' + first')
+        expect(sent.filter((frame) => frame.t === 'yjs')).toHaveLength(1)
+        second.doc.getText('content').insert(size + 8, ' + second')
+        await settle(first, second)
+        expect(firstDoc.getText('content').toString()).toBe(initialText + ' + first + second')
+        expect(sent.filter((frame) => frame.t === 'yjs')).toHaveLength(2)
+        const awareness = first.awareness as unknown as Awareness
+        awareness.setLocalState({ name: 'Alice', color: '#ff0000' })
+        await jest.advanceTimersByTimeAsync(LOCAL_AWARENESS_MIN_INTERVAL_MS)
+        await settle(first, second)
+        expect((second.awareness as unknown as Awareness).getStates().get(firstDoc.clientID)).toMatchObject({
+          name: 'Alice',
+        })
+        const count = sent.length
+        await settle(first, second)
+        expect(sent).toHaveLength(count)
+        expect(first.getLastSyncFailure()).toBeUndefined()
+        expect(second.getLastSyncFailure()).toBeUndefined()
+      } finally {
+        first.destroy()
+        second.destroy()
+        jest.useRealTimers()
+      }
+    },
+  )
+
+  it.each(['no-responder', 'timeout'] as const)(
+    'keeps an accepted retained document editable when reconnect peer merge ends with %s',
+    async (outcome) => {
+      jest.useFakeTimers()
+      const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined)
+      let inbound: ((frame: CollabFrame) => void) | undefined
+      let status: ((connected: boolean) => void) | undefined
+      let connected = true
+      const sent: CollabFrame[] = []
+      const release = jest.fn()
+      const onBootstrapRetry = jest.fn()
+      const setCanonicalOwnership = jest.fn()
+      const lease = {
+        requestId: 'retained-peer-merge',
+        shouldBootstrap: false,
+        protocolVersion: 3 as const,
+        maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+        roomEpoch: TEST_ROOM_EPOCH,
+        release,
+      }
+      const doc = new Y.Doc()
+      doc.getText('content').insert(0, 'original')
+      const provider = new EncryptedYjsProvider(
+        doc,
+        'retained-peer-room',
+        {
+          isConnected: () => connected,
+          authorize: jest.fn(),
+          subscribe: (handler) => {
+            inbound = handler
+            return () => undefined
+          },
+          subscribeStatus: (handler) => {
+            status = handler
+            return () => undefined
+          },
+          send: (frame) => {
+            sent.push(frame)
+            if (frame.t === 'yjs' && frame.transferId) {
+              inbound?.({ t: 'yjs-accepted', room: frame.room, transferId: frame.transferId, protocolVersion: 3 })
+            }
+          },
+        },
+        createTestTransportCipher(),
+        undefined,
+        'initial-retained-peer',
+        {
+          activeLease: { ...lease, requestId: 'initial-retained-peer', shouldBootstrap: true, release: jest.fn() },
+          shouldBootstrap: true,
+          validateAttachment: () => true,
+          reactivate: jest.fn().mockResolvedValue(lease),
+          onFatal: jest.fn(),
+          onBootstrapRetry,
+          setCanonicalOwnership,
+        },
+      )
+      try {
+        provider.connect()
+        await settle(provider)
+        expect(provider.isCanonicalReady()).toBe(true)
+        connected = false
+        status?.(false)
+        doc.getText('content').insert(8, ' + offline edit')
+        connected = true
+        status?.(true)
+        await settle(provider)
+        const request = sent.find((frame): frame is Extract<CollabFrame, { t: 'yjs-retry' }> => frame.t === 'yjs-retry')
+        expect(request).toBeDefined()
+        expect(setCanonicalOwnership).toHaveBeenLastCalledWith(true)
+        if (outcome === 'no-responder') {
+          inbound?.({ t: 'yjs-no-responder', room: 'retained-peer-room', requestId: request!.requestId })
+        }
+        await jest.advanceTimersByTimeAsync(90_000)
+        await settle(provider)
+        expect(onBootstrapRetry).not.toHaveBeenCalled()
+        expect(release).not.toHaveBeenCalled()
+        expect(provider.isRoomJoined()).toBe(true)
+        expect(provider.isCanonicalReady()).toBe(true)
+        expect(setCanonicalOwnership).toHaveBeenLastCalledWith(true)
+        expect(doc.getText('content').toString()).toBe('original + offline edit')
+        expect(provider.getLastSyncFailure()).toBeUndefined()
+      } finally {
+        provider.destroy()
+        consoleError.mockRestore()
+        jest.useRealTimers()
+      }
+    },
+  )
 
   it('retains its document across repeated bounded reconnect cycles and resumes on visibility', async () => {
     jest.useFakeTimers()

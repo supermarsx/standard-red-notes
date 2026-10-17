@@ -51,7 +51,7 @@ const COLLABORATION_ENVELOPE_DOMAIN = 'Standard Red Notes encrypted collaboratio
 const COLLABORATION_EPOCH_PATTERN = /^[A-Za-z0-9_-]{16,128}$/
 
 export type CollaborationCipherErrorCode =
-  'INVALID_ENVELOPE' | 'EPOCH_MISMATCH' | 'REPLAYED' | 'SEQUENCE_WINDOW' | 'SENDER_LIMIT'
+  'INVALID_ENVELOPE' | 'EPOCH_MISMATCH' | 'SELF_FRAME' | 'REPLAYED' | 'SEQUENCE_WINDOW' | 'SENDER_LIMIT'
 
 export class CollaborationCipherError extends Error {
   constructor(readonly code: CollaborationCipherErrorCode) {
@@ -89,6 +89,63 @@ type ReplayWindow = {
 export class CollaborationReplayLedger {
   private readonly replayWindows = new Map<string, ReplayWindow>()
   private readonly pendingSequences = new Set<string>()
+  private readonly pendingReceivers = new Map<string, number>()
+
+  /**
+   * Live subscribers each consume a broadcast once. A newly created cipher
+   * inherits all prior consumption, including decrypts still in flight, so a
+   * remount does not reset replay protection. Only counters are retained.
+   */
+  createReceiver(): Pick<CollaborationReplayLedger, 'reserve' | 'commit' | 'release'> {
+    const local = new CollaborationReplayLedger()
+    for (const [sender, window] of this.replayWindows) {
+      local.replayWindows.set(sender, { highestSequence: window.highestSequence, seen: new Set(window.seen) })
+    }
+    const inheritedPending = new Set([...this.pendingSequences, ...this.pendingReceivers.keys()])
+    return {
+      reserve: (sender, sequence) => {
+        const key = `${sender}:${sequence}`
+        if (inheritedPending.has(key)) {
+          const window = this.replayWindows.get(sender)
+          if (
+            this.pendingSequences.has(key) ||
+            this.pendingReceivers.has(key) ||
+            window?.seen.has(sequence) ||
+            (window && sequence <= window.highestSequence - COLLABORATION_REPLAY_WINDOW_SIZE)
+          ) {
+            throw new CollaborationCipherError('REPLAYED')
+          }
+          // Every earlier attempt failed authentication; it consumed no state.
+          inheritedPending.delete(key)
+        }
+        const pendingKey = local.reserve(sender, sequence)
+        this.pendingReceivers.set(pendingKey, (this.pendingReceivers.get(pendingKey) ?? 0) + 1)
+        return pendingKey
+      },
+      commit: (sender, sequence) => {
+        // Another already-mounted receiver may have consumed this broadcast.
+        // New senders and old sequence windows still enforce the shared bounds.
+        const sharedWindow = this.replayWindows.get(sender)
+        if (
+          !sharedWindow ||
+          (!sharedWindow.seen.has(sequence) &&
+            sequence > sharedWindow.highestSequence - COLLABORATION_REPLAY_WINDOW_SIZE)
+        ) {
+          this.commit(sender, sequence)
+        }
+        local.commit(sender, sequence)
+      },
+      release: (key) => {
+        local.release(key)
+        const count = this.pendingReceivers.get(key) ?? 0
+        if (count <= 1) {
+          this.pendingReceivers.delete(key)
+        } else {
+          this.pendingReceivers.set(key, count - 1)
+        }
+      },
+    }
+  }
 
   reserve(senderEpoch: string, sequence: number): string {
     const window = this.replayWindows.get(senderEpoch)
@@ -291,17 +348,21 @@ export function createCollaborationRoomCipher(
     throw new CollaborationCipherError('EPOCH_MISMATCH')
   }
   const cipher = createRoomCipher(key)
+  const receiver = replayLedger.createReceiver()
   let nextSequence = 0
 
   const assertCanReceive = (header: CollaborationEnvelopeHeader): string => {
-    if (header.roomEpoch !== roomEpoch || header.senderEpoch === senderEpoch) {
+    if (header.roomEpoch !== roomEpoch) {
       throw new CollaborationCipherError('EPOCH_MISMATCH')
     }
-    return replayLedger.reserve(header.senderEpoch, header.sequence)
+    if (header.senderEpoch === senderEpoch) {
+      throw new CollaborationCipherError('SELF_FRAME')
+    }
+    return receiver.reserve(header.senderEpoch, header.sequence)
   }
 
   const commitReceived = (header: CollaborationEnvelopeHeader): void => {
-    replayLedger.commit(header.senderEpoch, header.sequence)
+    receiver.commit(header.senderEpoch, header.sequence)
   }
 
   return {
@@ -328,7 +389,7 @@ export function createCollaborationRoomCipher(
         commitReceived(header)
         return plaintext
       } finally {
-        replayLedger.release(pendingKey)
+        receiver.release(pendingKey)
       }
     },
   }
