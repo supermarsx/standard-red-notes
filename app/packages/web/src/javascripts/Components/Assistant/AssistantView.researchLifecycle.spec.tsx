@@ -6,6 +6,7 @@ import { ApplicationEvent, ButtonType } from '@standardnotes/snjs'
 import { WebApplication } from '@/Application/WebApplication'
 import AssistantView from './AssistantView'
 const mockChatObservers = new Set<() => void>()
+const mockDeleteWait = jest.fn<Promise<void>, [string]>()
 jest.mock('@/Assistant/assistantSyncedChats', () => ({
   ...jest.requireActual('@/Assistant/assistantSyncedChats'),
   AssistantSyncedChats: class {
@@ -28,6 +29,7 @@ jest.mock('@/Assistant/assistantSyncedChats', () => ({
       this.application.storage.setValue(this.key(), next)
     }
     async delete(id: string) {
+      await mockDeleteWait(id)
       this.application.storage.setValue(
         this.key(),
         ((await this.read()) as { tab: { id: string } }[]).filter((row) => row.tab.id !== id),
@@ -146,6 +148,7 @@ describe('AssistantView shared conversation modes', () => {
   let root: Root
   beforeEach(() => {
     mockChatObservers.clear()
+    mockDeleteWait.mockResolvedValue(undefined)
     localStorage.clear()
     container = document.createElement('div')
     document.body.appendChild(container)
@@ -303,6 +306,57 @@ describe('AssistantView shared conversation modes', () => {
     expect(history.querySelector('[aria-label="Resume First"]')).toBeNull()
     expect(history.querySelector('[aria-label="Resume Second"]')).toBeNull()
   })
+
+  it.each([
+    { switchFocus: true, closeNeighbor: false },
+    { switchFocus: true, closeNeighbor: true },
+    { switchFocus: false, closeNeighbor: true },
+  ])(
+    'preserves focus and closed choices while deletion is pending (switch focus: $switchFocus, close neighbor: $closeNeighbor)',
+    async ({ switchFocus, closeNeighbor }) => {
+      const { application, values } = createApplication()
+      values.set('test-synced-chats:account-a', [
+        { tab: { id: 'first', title: 'First', kind: 'chat', userRenamed: false } },
+        { tab: { id: 'second', title: 'Second', kind: 'chat', userRenamed: false } },
+        { tab: { id: 'third', title: 'Third', kind: 'chat', userRenamed: false } },
+      ])
+      let finishDelete!: () => void
+      mockDeleteWait.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            finishDelete = resolve
+          }),
+      )
+      await renderAssistant(root, application)
+      click(container.querySelector('[aria-label="Restore closed chat"]')!)
+      click(container.querySelector('[aria-label="Restore closed chat"]')!)
+      const tab = (title: string) => container.querySelector<HTMLElement>(`[role="tab"][aria-label="${title}"]`)!
+      click(tab('First'))
+      act(() => tab('First').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true })))
+      click(
+        [...container.querySelectorAll('[role="menuitem"]')].find(
+          (item) => item.textContent?.trim() === 'Delete chat',
+        )!,
+      )
+      await act(async () => {
+        await Promise.resolve()
+      })
+      expect(mockDeleteWait).toHaveBeenCalledWith('first')
+      if (switchFocus) {
+        click(tab('Third'))
+      }
+      if (closeNeighbor) {
+        act(() => tab('Second').dispatchEvent(new MouseEvent('auxclick', { button: 1, bubbles: true })))
+      }
+      expect(tab(switchFocus ? 'Third' : 'First').getAttribute('aria-selected')).toBe('true')
+      await act(async () => finishDelete())
+      expect(tab('First')).toBeNull()
+      expect(tab('Third').getAttribute('aria-selected')).toBe('true')
+      if (closeNeighbor) {
+        expect(tab('Second')).toBeNull()
+      }
+    },
+  )
 
   it('renames a chat from history and saves the explicit title to synced metadata', async () => {
     const { application, values } = createApplication()

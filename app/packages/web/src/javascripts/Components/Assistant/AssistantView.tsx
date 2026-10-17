@@ -915,8 +915,10 @@ const AssistantView = forwardRef<HTMLDivElement, Props>((props, ref) => {
           setActiveTabId(replacement.id)
           return [replacement]
         }
-        if (activeTabId === tabId) {
-          const visibleNext = next.filter((tab) => !closedTabIds.includes(tab.id))
+        // Storage can settle after the user changes focus or hides another tab.
+        // Choose a replacement from the live UI intent, not the deletion click.
+        if (activeTabIdRef.current === tabId) {
+          const visibleNext = next.filter((tab) => !closedTabIdsRef.current.includes(tab.id))
           const replacement = visibleNext[index] ?? visibleNext[index - 1] ?? visibleNext[0] ?? next[0]
           setClosedTabIds((previous) => previous.filter((id) => id !== replacement.id))
           setActiveTabId(replacement.id)
@@ -925,7 +927,7 @@ const AssistantView = forwardRef<HTMLDivElement, Props>((props, ref) => {
       })
       return !retainForCleanup
     },
-    [activeTabId, application, closedTabIds, loadedChatAccountScope, chatAccountScope, workspacePersistence],
+    [application, loadedChatAccountScope, chatAccountScope, workspacePersistence],
   )
 
   const deleteHistoryChats = useCallback(
