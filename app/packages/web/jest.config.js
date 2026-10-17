@@ -117,4 +117,5 @@ module.exports = {
   },
   transformIgnorePatterns: ['node_modules/(?!(react-error-boundary)/)'],
   testEnvironment: 'jsdom',
+  setupFiles: ['<rootDir>/src/javascripts/__mocks__/browserMediaQueries.js'],
 }
