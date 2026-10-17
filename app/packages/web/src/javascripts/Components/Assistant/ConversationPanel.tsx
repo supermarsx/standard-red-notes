@@ -301,13 +301,13 @@ function ConversationPanelImpl({
           messages: sharedChat.history.messages,
           deniedToolNames: sharedChat.history.deniedToolNames,
         }
-      : persistenceAllowed
+      : !sharedChat && persistenceAllowed
         ? readAssistantChatHistoryResult(application.storage, accountScope, tabId)
         : ({ status: 'missing' } as const)
   })
   const historyReadFailed = initialHistoryRead.status === 'error'
-  const [historyPersistenceFailed, setHistoryPersistenceFailed] = useState(historyReadFailed)
-  const effectivePersistenceAllowed = persistenceAllowed && !historyPersistenceFailed
+  const [historyFailure, setHistoryFailure] = useState<'read' | 'write' | null>(historyReadFailed ? 'read' : null)
+  const effectivePersistenceAllowed = persistenceAllowed && historyFailure !== 'read'
   const [messages, setMessages] = useState<UIMessage[]>(() =>
     hydrateAssistantHistory(initialHistoryRead.status === 'found' ? initialHistoryRead.messages : []),
   )
@@ -450,7 +450,14 @@ function ConversationPanelImpl({
     }
     const restored = hydrateAssistantHistory(incoming.messages)
     const local = messagesRef.current
-    const merged = reconcileAssistantSharedMessages(restored, local, new Set(sharedDirtyIdsRef.current.keys()))
+    const merged = reconcileAssistantSharedMessages(
+      restored,
+      local,
+      new Set([
+        ...sharedDirtyIdsRef.current.keys(),
+        ...local.filter((message) => message.kind === 'assistant' && message.streaming).map((message) => message.id),
+      ]),
+    )
     if (JSON.stringify(local) !== JSON.stringify(merged)) {
       messagesRef.current = merged
       setMessages(merged)
@@ -463,10 +470,8 @@ function ConversationPanelImpl({
   }, [sharedChat?.history])
 
   const markHistoryPersistenceFailed = useCallback(() => {
-    persistenceAllowedRef.current = false
-    persistableHistoryRef.current = null
     if (mountedRef.current) {
-      setHistoryPersistenceFailed(true)
+      setHistoryFailure((previous) => (previous === 'read' ? 'read' : 'write'))
     }
   }, [])
 
@@ -632,6 +637,9 @@ function ConversationPanelImpl({
           .filter(([, decision]) => decision === false)
           .map(([name]) => name),
       )
+      if (mountedRef.current) {
+        setHistoryFailure(null)
+      }
       acknowledgeAssistantSharedVersions(sharedDirtyIdsRef.current, dirtyVersions)
       sharedDirtyRef.current = sharedDirtyIdsRef.current.size > 0
       if (acknowledged && mountedRef.current && sharedChatRef.current) {
@@ -639,7 +647,12 @@ function ConversationPanelImpl({
         const merged = reconcileAssistantSharedMessages(
           hydrateAssistantHistory(acknowledged.messages),
           current,
-          new Set(sharedDirtyIdsRef.current.keys()),
+          new Set([
+            ...sharedDirtyIdsRef.current.keys(),
+            ...current
+              .filter((message) => message.kind === 'assistant' && message.streaming)
+              .map((message) => message.id),
+          ]),
         )
         if (JSON.stringify(current) !== JSON.stringify(merged)) {
           messagesRef.current = merged
@@ -662,6 +675,9 @@ function ConversationPanelImpl({
       )
       if (!persisted) {
         throw new Error('Assistant chat persistence ownership was lost before the write completed.')
+      }
+      if (mountedRef.current) {
+        setHistoryFailure((previous) => (previous === 'write' ? null : previous))
       }
     } catch (error) {
       markHistoryPersistenceFailed()
@@ -1500,7 +1516,11 @@ function ConversationPanelImpl({
       setIsRunning(true)
       // Make the user's turn durable before the provider request begins; later
       // streaming changes are checkpointed on a bounded throttle.
-      const initiallyPersisted = await flushChatHistory()
+      let initiallyPersisted = await flushChatHistory()
+      // Retrying storage before the provider starts cannot replay a model request.
+      if (!initiallyPersisted && shared && isSessionCurrent() && !controller.signal.aborted) {
+        initiallyPersisted = await flushChatHistory()
+      }
       if (
         ((shared || messagesWithTurn.some((message) => message.kind === 'user' && message.attachments?.length)) &&
           !initiallyPersisted) ||
@@ -1508,6 +1528,20 @@ function ConversationPanelImpl({
         controller.signal.aborted ||
         abortRef.current !== controller
       ) {
+        if (!initiallyPersisted && isSessionCurrent() && !controller.signal.aborted) {
+          setMessagesSynced((current) => [
+            ...current.map((message) => {
+              return message.id === assistantId && message.kind === 'assistant'
+                ? { ...message, streaming: false }
+                : message
+            }),
+            {
+              kind: 'error',
+              id: newId(),
+              text: 'Your message was not sent because encrypted chat history could not be saved. Check storage and your connection, then send again.',
+            },
+          ])
+        }
         await runLeaseRef.current?.release()
         runLeaseRef.current = null
         if (abortRef.current === controller) {
@@ -2040,10 +2074,11 @@ function ConversationPanelImpl({
           </button>
         </div>
       )}
-      {historyPersistenceFailed && (
+      {historyFailure && (
         <div className="border-warning bg-warning-faded text-text border-b px-3 py-2 text-xs">
-          Saved chat history could not be read safely. This conversation is temporarily in-memory and will not overwrite
-          the saved copy.
+          {historyFailure === 'read'
+            ? 'Saved chat history could not be read safely. This conversation is temporarily in-memory and will not overwrite the saved copy.'
+            : 'Chat history could not be saved. Your current messages remain in this tab; a later successful save will clear this warning.'}
         </div>
       )}
       {todos.length > 0 && (

@@ -279,6 +279,97 @@ describe('Assistant immediate send feedback and preflight fences', () => {
     expect(runConversationMode).toHaveBeenCalledTimes(1)
   })
 
+  it('does not read obsolete local history for a shared draft without a canonical record', async () => {
+    const read = jest.spyOn(application.storage, 'getValue').mockImplementation(() => {
+      throw new Error('old local record unreadable')
+    })
+    const shared = { ready: true, refresh: jest.fn(async () => undefined), checkpoint: jest.fn(async () => undefined) }
+    try {
+      await act(async () => {
+        render('shared-new', shared)
+        await flush()
+      })
+      expect(read).not.toHaveBeenCalled()
+      expect(container.textContent).not.toContain('Saved chat history could not be read safely')
+      expect(runConversationMode).toHaveBeenCalledTimes(1)
+    } finally {
+      read.mockRestore()
+    }
+  })
+
+  it('keeps an unreadable local saved copy protected while permitting an in-memory direct conversation', async () => {
+    const read = jest.spyOn(application.storage, 'getValue').mockImplementation(() => {
+      throw new Error('Unreadable record')
+    })
+    try {
+      await act(async () => {
+        render()
+        await flush()
+      })
+      expect(container.textContent).toContain('Saved chat history could not be read safely')
+      expect(persist).not.toHaveBeenCalled()
+      expect(runConversationMode).toHaveBeenCalledTimes(1)
+    } finally {
+      read.mockRestore()
+    }
+  })
+
+  it('retains live streaming state when a shared checkpoint returns its canonical transcript', async () => {
+    const shared = {
+      ready: true,
+      refresh: jest.fn(async () => undefined),
+      checkpoint: jest.fn(async (messages: unknown[]) => ({ messages, deniedToolNames: [] }) as never),
+    }
+    await act(async () => {
+      render('shared-canonical', shared)
+      await flush()
+    })
+    const options = jest.mocked(runConversationMode).mock.calls[0][2]
+    await act(async () => {
+      options.onTextDelta?.('Current answer')
+      options.onToolCall?.({ id: 'still-running', name: 'notes.read', args: {} })
+      window.dispatchEvent(new Event('pagehide'))
+      await new Promise((resolve) => setTimeout(resolve, 60))
+      await flush()
+    })
+    expect(container.querySelector('[aria-label="Generating response"]')).not.toBeNull()
+    expect(shared.checkpoint.mock.calls.length).toBeGreaterThan(1)
+    expect(container.querySelector('summary')?.textContent).not.toContain('interrupted')
+  })
+
+  it('retries one transient initial checkpoint before sending once and clears the write warning', async () => {
+    const checkpoint = jest.fn(async () => undefined).mockRejectedValueOnce(new Error('Temporary storage failure'))
+    const shared = { ready: true, refresh: jest.fn(async () => undefined), checkpoint }
+    await act(async () => {
+      render('shared-retry', shared)
+      await flush()
+    })
+    expect(checkpoint).toHaveBeenCalledTimes(2)
+    expect(runConversationMode).toHaveBeenCalledTimes(1)
+    expect(container.textContent?.match(/Visible request/g)).toHaveLength(1)
+    expect(container.textContent).not.toContain('could not be saved')
+    expect(container.textContent).not.toContain('could not be read safely')
+  })
+
+  it('reports a persistent initial checkpoint failure instead of leaving a silent generating bubble', async () => {
+    const shared = {
+      ready: true,
+      refresh: jest.fn(async () => undefined),
+      checkpoint: jest.fn(async () => {
+        throw new Error('Storage is unavailable')
+      }),
+    }
+    await act(async () => {
+      render('shared-failed', shared)
+      await flush()
+    })
+    expect(runConversationMode).not.toHaveBeenCalled()
+    expect(container.textContent).toContain('message was not sent')
+    expect(container.textContent).toContain('could not be saved')
+    expect(container.textContent).not.toContain('could not be read safely')
+    expect(container.querySelector('[aria-label="Generating response"]')).toBeNull()
+  })
+
   it('persists stopped shared runs with the real lease guard and retains already received text', async () => {
     const response = deferred<AgentResult>()
     const actual = jest.requireActual<typeof import('@/Assistant/assistantChatRunLease')>(
