@@ -41,6 +41,7 @@ import {
 } from '@standardnotes/ui-services'
 import { ChangeEventHandler, createRef, FocusEvent, KeyboardEventHandler, RefObject, Suspense } from 'react'
 import { lazyWithRetry } from '@/Utils/lazyWithRetry'
+import { loadSuperEditor } from '../SuperEditor/loadSuperEditor'
 import ComponentErrorBoundary from '@/Components/ComponentErrorBoundary/ComponentErrorBoundary'
 import EditorLoadingPlaceholder from './EditorLoadingPlaceholder'
 // The Super (Lexical) editor and its plugin/node graph are heavy and only needed
@@ -48,7 +49,7 @@ import EditorLoadingPlaceholder from './EditorLoadingPlaceholder'
 // out of the main bundle into an async chunk. Rendered behind <Suspense> below.
 // `lazyWithRetry` retries a transient chunk failure once before surfacing it to
 // the surrounding <ComponentErrorBoundary>.
-const SuperEditor = lazyWithRetry(() => import('../SuperEditor/SuperEditorLazy'))
+const SuperEditor = lazyWithRetry(loadSuperEditor)
 import IndicatorCircle from '../IndicatorCircle/IndicatorCircle'
 import LinkedItemBubblesContainer from '../LinkedItems/LinkedItemBubblesContainer'
 import LinkedItemsButton from '../LinkedItems/LinkedItemsButton'

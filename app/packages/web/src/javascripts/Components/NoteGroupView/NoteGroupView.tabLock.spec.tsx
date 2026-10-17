@@ -65,6 +65,10 @@ const makeApplication = (controllers: FakeController[], initiallyLocked: string[
     itemControllerGroup: {
       isRetainedForCollaboration: jest.fn().mockReturnValue(false),
       itemControllers: controllers,
+      addOpeningChangeObserver: (callback: (opening: boolean) => void) => {
+        callback(false)
+        return noop
+      },
       activeItemViewController: controllers[0],
       addActiveControllerChangeObserver: (callback: () => void) => {
         callback()

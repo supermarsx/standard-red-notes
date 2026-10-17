@@ -19,6 +19,7 @@
 
 import { act, createElement, createRef, ReactElement } from 'react'
 import { createRoot, Root } from 'react-dom/client'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { WebApplication } from '@/Application/WebApplication'
 
 const noop = () => undefined
@@ -60,6 +61,10 @@ const makeApplication = (controllers: FakeController[], isInMobileView = false) 
     itemControllerGroup: {
       isRetainedForCollaboration: jest.fn().mockReturnValue(false),
       itemControllers: controllers,
+      addOpeningChangeObserver: (callback: (opening: boolean) => void) => {
+        callback(false)
+        return noop
+      },
       activeItemViewController: controllers[0],
       // The real group notifies on registration-relevant changes; fire once
       // immediately so the view picks up `itemControllers` the way it does in app.
@@ -223,5 +228,77 @@ describe('editor tab bar with a tab open', () => {
     const split = splitButton()
     expect((split as HTMLButtonElement).disabled).toBe(true)
     expect((split as HTMLButtonElement).getAttribute('title')).toBe('Splitting is unavailable on small screens')
+  })
+})
+
+describe('editor first render before mount subscriptions', () => {
+  const initialMarkup = (application: WebApplication) =>
+    renderToStaticMarkup(
+      createElement(ApplicationProvider, {
+        application,
+        children: createElement(AndroidBackHandlerProvider, {
+          application,
+          children: createElement(NoteGroupView, { application }),
+        }),
+      }),
+    )
+  const gridClass = (markup: string) => markup.match(/class="([^"]*\bgrid\b[^"]*)"/)?.[1] ?? ''
+  it('shows the loading skeleton only during a real pending controller open and clears it on completion', () => {
+    const { application } = makeApplication([])
+    let notify!: (opening: boolean) => void
+    const remove = jest.fn()
+    Object.assign(application.itemControllerGroup, {
+      isOpeningItemController: true,
+      addOpeningChangeObserver: (callback: (opening: boolean) => void) => {
+        notify = callback
+        callback(true)
+        return remove
+      },
+    })
+    expect(initialMarkup(application)).toContain('aria-busy="true"')
+    mount(createElement(NoteGroupView, { application }), application)
+    expect(container.querySelector('[aria-busy="true"]')).not.toBeNull()
+    act(() => notify(false))
+    expect(container.querySelector('[aria-busy="true"]')).toBeNull()
+    act(() => root.render(null))
+    expect(remove).toHaveBeenCalledTimes(1)
+  })
+  it('does not cover an intentional active empty tab with pending-open loading', () => {
+    const { application } = makeApplication([])
+    Object.assign(application.itemControllerGroup, { isOpeningItemController: true })
+    Object.assign(application.paneController, {
+      viewTabs: [{ id: 'empty', kind: 'empty', title: 'Empty tab', icon: 'add' }],
+      activeViewTabId: 'empty',
+    })
+    expect(initialMarkup(application)).not.toContain('aria-busy="true"')
+  })
+  it('renders existing controller content and active tab in the first paint', () => {
+    const { application } = makeApplication([{ runtimeId: 'ready', item: { uuid: 'ready-note', title: 'Ready note' } }])
+    const observe = jest.spyOn(application.itemControllerGroup, 'addActiveControllerChangeObserver')
+    const markup = initialMarkup(application)
+    expect(observe).not.toHaveBeenCalled()
+    expect(markup).toContain('data-testid="file-view"')
+    expect(markup).toContain('Ready note')
+    expect(markup).toContain('aria-selected="true"')
+    expect(gridClass(markup)).toContain('bg-default')
+  })
+  it('renders an existing active view tab immediately rather than an empty editor grid', () => {
+    const { application } = makeApplication([])
+    Object.assign(application.paneController, {
+      viewTabs: [{ id: 'empty', kind: 'empty', title: 'Empty tab', icon: 'add' }],
+      activeViewTabId: 'empty',
+    })
+    expect(initialMarkup(application)).toContain('data-testid="empty-tab-view"')
+  })
+  it('uses separators only for a real split and keeps intentional zero tabs neutral', () => {
+    const { application } = makeApplication([])
+    const markup = initialMarkup(application)
+    expect(gridClass(markup)).toContain('bg-default')
+    expect(markup).not.toContain('aria-busy="true"')
+    const split = makeApplication([{ runtimeId: 'first' }, { runtimeId: 'second' }]).application
+    localStorage.setItem('srn_editor_tile_layout', 'columns')
+    expect(gridClass(initialMarkup(split))).toContain('bg-border')
+    Object.assign(split.paneController, { isInMobileView: true })
+    expect(gridClass(initialMarkup(split))).not.toContain('bg-border')
   })
 })

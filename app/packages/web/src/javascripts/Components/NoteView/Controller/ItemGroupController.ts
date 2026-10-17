@@ -1,3 +1,4 @@
+import { preloadSuperEditor } from '../../SuperEditor/loadSuperEditor'
 import { removeFromArray } from '@standardnotes/utils'
 import { ContentType } from '@standardnotes/domain-core'
 import {
@@ -117,6 +118,27 @@ export class ItemGroupController {
    * so it cannot be stranded.
    */
   private pendingItemControllerOpens = 0
+  private readonly openingObservers = new Set<(opening: boolean) => void>()
+
+  public addOpeningChangeObserver(callback: (opening: boolean) => void): () => void {
+    this.openingObservers.add(callback)
+    try {
+      callback(this.isOpeningItemController)
+    } catch {
+      // Keep subscription cleanup available even when the initial indicator fails.
+    }
+    return () => this.openingObservers.delete(callback)
+  }
+
+  private notifyOpeningObservers(): void {
+    for (const observer of this.openingObservers) {
+      try {
+        observer(this.isOpeningItemController)
+      } catch {
+        // Loading indicators must not fail a controller open or its final cleanup.
+      }
+    }
+  }
 
   /** True while any item-controller open is mid-flight (see pendingItemControllerOpens). */
   public get isOpeningItemController(): boolean {
@@ -163,6 +185,7 @@ export class ItemGroupController {
     })
 
     this.changeObservers.length = 0
+    this.openingObservers.clear()
 
     for (const controller of this.itemControllers) {
       this.closeItemController(controller, { notify: false })
@@ -264,6 +287,9 @@ export class ItemGroupController {
       }
     }
 
+    if (context.note?.noteType === NoteType.Super) {
+      preloadSuperEditor()
+    }
     const open = this.performCreateItemController(context)
 
     if (targetUuid !== undefined) {
@@ -286,6 +312,9 @@ export class ItemGroupController {
     // cannot mistake the handover gap for "the user has nothing open".
     this.pendingItemControllerOpens++
     try {
+      if (this.pendingItemControllerOpens === 1) {
+        this.notifyOpeningObservers()
+      }
       if (reservation) {
         // Reserve before any asynchronous outgoing-controller flush so Todo
         // acquisition cannot mount a second whole-body editor in the gap.
@@ -300,6 +329,9 @@ export class ItemGroupController {
       throw error
     } finally {
       this.pendingItemControllerOpens--
+      if (this.pendingItemControllerOpens === 0) {
+        this.notifyOpeningObservers()
+      }
     }
   }
 

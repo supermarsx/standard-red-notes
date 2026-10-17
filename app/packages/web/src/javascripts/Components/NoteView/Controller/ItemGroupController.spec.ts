@@ -19,6 +19,7 @@ import {
   SessionsClientInterface,
   SyncServiceInterface,
 } from '@standardnotes/snjs'
+import { preloadSuperEditor } from '../../SuperEditor/loadSuperEditor'
 import { IsNativeMobileWeb } from '@standardnotes/ui-services'
 import { ChecklistEditorOpeningCanceledError, ItemGroupController } from './ItemGroupController'
 import { NoteViewController } from './NoteViewController'
@@ -29,6 +30,8 @@ import { CollaborationSaverRegistry } from '@/Components/SuperEditor/Collaborati
  * group's add/activate/switch/close logic can be exercised in isolation (the real
  * controllers do heavy async initialization against many services).
  */
+jest.mock('../../SuperEditor/loadSuperEditor', () => ({ preloadSuperEditor: jest.fn() }))
+
 jest.mock('./NoteViewController', () => {
   class MockNoteViewController {
     runtimeId = `${Math.random()}`
@@ -96,6 +99,55 @@ describe('ItemGroupController tabs/tiles', () => {
 
   const addTab = () => group.createItemController({ templateOptions: {}, openInNewTile: true })
   const superNote = (uuid: string) => ({ uuid, noteType: NoteType.Super }) as never
+
+  it('isolates broken loading observers and keeps their unsubscribe available', async () => {
+    const broken = jest.fn(() => {
+      throw new Error('indicator failed')
+    })
+    const remove = group.addOpeningChangeObserver(broken)
+    await expect(addTab()).resolves.toBeDefined()
+    expect(group.isOpeningItemController).toBe(false)
+    expect(broken).toHaveBeenCalledTimes(3)
+    remove()
+    await addTab()
+    expect(broken).toHaveBeenCalledTimes(3)
+  })
+
+  it('preloads a requested Super editor before handover completes and reports pending transitions separately', async () => {
+    const outgoing = (await addTab()) as NoteViewController
+    let finish!: () => void
+    jest.mocked(outgoing.prepareForRetainedNavigation).mockImplementation(
+      () =>
+        new Promise<boolean>((resolve) => {
+          finish = () => resolve(false)
+        }),
+    )
+    jest.mocked(preloadSuperEditor).mockClear()
+    const opening = jest.fn()
+    const remove = group.addOpeningChangeObserver(opening)
+    const next = group.createItemController({ note: superNote('preload-note') })
+    expect(preloadSuperEditor).toHaveBeenCalledTimes(1)
+    expect(opening.mock.calls).toEqual([[false], [true]])
+    expect(group.activeItemViewController).toBe(outgoing)
+    await Promise.resolve()
+    finish()
+    await next
+    expect(opening.mock.calls).toEqual([[false], [true], [false]])
+    remove()
+    await addTab()
+    expect(opening).toHaveBeenCalledTimes(3)
+  })
+
+  it('clears pending opening on a failed handover without preloading ordinary notes', async () => {
+    const outgoing = (await addTab()) as NoteViewController
+    jest.mocked(outgoing.prepareForRetainedNavigation).mockRejectedValueOnce(new Error('save failed'))
+    jest.mocked(preloadSuperEditor).mockClear()
+    const opening = jest.fn()
+    group.addOpeningChangeObserver(opening)
+    await expect(group.createItemController({ templateOptions: {} })).rejects.toThrow('save failed')
+    expect(preloadSuperEditor).not.toHaveBeenCalled()
+    expect(opening.mock.calls).toEqual([[false], [true], [false]])
+  })
 
   it('opens the next note immediately while retaining the pending editor, and closes it only after server coverage', async () => {
     const outgoing = (await addTab()) as NoteViewController

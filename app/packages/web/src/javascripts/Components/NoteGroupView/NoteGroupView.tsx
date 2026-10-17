@@ -6,6 +6,7 @@ import MultipleSelectedFiles from '../MultipleSelectedFiles/MultipleSelectedFile
 import { AppPaneId } from '../Panes/AppPaneMetadata'
 import FileView from '../FileView/FileView'
 import NoteView from '../NoteView/NoteView'
+import EditorLoadingPlaceholder from '../NoteView/EditorLoadingPlaceholder'
 import { NoteViewController } from '../NoteView/Controller/NoteViewController'
 import { FileViewController } from '../NoteView/Controller/FileViewController'
 import { WebApplication } from '@/Application/WebApplication'
@@ -56,6 +57,7 @@ const persistTileLayout = (layout: TileLayout): void => {
 type State = {
   showMultipleSelectedNotes: boolean
   showMultipleSelectedFiles: boolean
+  openingController: boolean
   controllers: (NoteViewController | FileViewController)[]
   activeControllerRuntimeId?: string
   selectedFile: FileItem | undefined
@@ -98,6 +100,7 @@ type Props = {
 
 class NoteGroupView extends AbstractComponent<Props, State> {
   private removeChangeObserver!: () => void
+  private removeOpeningObserver?: () => void
   private narrowTilingMediaQuery?: MediaQueryList
   private narrowTilingMQHandler = (event: MediaQueryListEvent | MediaQueryList) => {
     // `lg` query matches when width >= 1024px; narrow tiling applies below that.
@@ -107,18 +110,22 @@ class NoteGroupView extends AbstractComponent<Props, State> {
   constructor(props: Props) {
     super(props, props.application)
     const lgMatches = typeof window !== 'undefined' ? window.matchMedia(MediaQueryBreakpoints.lg).matches : true
+    const { itemControllerGroup, paneController, notesController, itemListController } = props.application
     this.state = {
-      showMultipleSelectedNotes: false,
-      showMultipleSelectedFiles: false,
-      controllers: [],
-      activeControllerRuntimeId: undefined,
-      selectedFile: undefined,
-      viewTabs: [],
-      activeViewTabId: undefined,
+      showMultipleSelectedNotes: (notesController?.selectedNotesCount ?? 0) > 1,
+      showMultipleSelectedFiles: (itemListController?.selectedFilesCount ?? 0) > 1,
+      controllers: itemControllerGroup.itemControllers.slice(),
+      openingController: itemControllerGroup.isOpeningItemController === true,
+      activeControllerRuntimeId: itemControllerGroup.activeItemViewController?.runtimeId,
+      selectedFile: itemListController?.selectedFiles[0],
+      selectedPane: paneController?.currentPane,
+      isInMobileView: paneController?.isInMobileView,
+      viewTabs: paneController?.viewTabs.slice() ?? [],
+      activeViewTabId: paneController?.activeViewTabId,
       tileLayout: loadPersistedTileLayout(),
       isNarrowTilingViewport: !lgMatches,
       tabCustomNames: loadTabCustomNames(),
-      lockedTabUuids: new Set<string>(),
+      lockedTabUuids: itemControllerGroup.lockedTabUuids ?? new Set<string>(),
     }
   }
 
@@ -168,6 +175,9 @@ class NoteGroupView extends AbstractComponent<Props, State> {
     }
 
     const controllerGroup = this.application.itemControllerGroup
+    this.removeOpeningObserver = controllerGroup.addOpeningChangeObserver((openingController) => {
+      this.setState({ openingController })
+    })
     this.removeChangeObserver = this.application.itemControllerGroup.addActiveControllerChangeObserver(() => {
       const controllers = controllerGroup.itemControllers
       this.setState({
@@ -222,6 +232,8 @@ class NoteGroupView extends AbstractComponent<Props, State> {
 
   override deinit() {
     this.removeChangeObserver?.()
+    this.removeOpeningObserver?.()
+    this.removeOpeningObserver = undefined
     ;(this.removeChangeObserver as unknown) = undefined
 
     if (this.narrowTilingMediaQuery) {
@@ -548,7 +560,8 @@ class NoteGroupView extends AbstractComponent<Props, State> {
                 pending room must not destroy its Y.Doc or its server save fence. */}
             <div
               className={classNames(
-                'bg-border grid min-h-0 w-full flex-grow gap-1',
+                'grid min-h-0 w-full flex-grow',
+                isTiling && effectiveLayout !== TileLayout.Single ? 'bg-border gap-1' : 'bg-default',
                 stackVertically && 'overflow-y-auto',
               )}
               style={{
@@ -560,6 +573,7 @@ class NoteGroupView extends AbstractComponent<Props, State> {
                 ...(activeViewTab ? { display: 'none' } : {}),
               }}
             >
+              {!hasControllers && !activeViewTab && this.state.openingController && <EditorLoadingPlaceholder />}
               {controllers.map((controller) => {
                 const isActive =
                   controller.runtimeId === this.state.activeControllerRuntimeId ||
