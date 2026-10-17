@@ -1074,6 +1074,8 @@
           url: /concurrency-performance-audit.html#other-unresolved-observations
         - title: Static-analysis follow-up
           url: /concurrency-performance-audit.html#static-analysis-follow-up--17-october
+        - title: Assistant and Firefox profile
+          url: /concurrency-performance-audit.html#assistant-history-and-firefox-profile
     - title: Dependency upgrade audit
       items:
         - title: Audit overview
