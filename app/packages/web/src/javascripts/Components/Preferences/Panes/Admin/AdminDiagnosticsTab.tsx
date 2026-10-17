@@ -1,3 +1,4 @@
+import { readAssistantChatStorageStats, type AssistantChatStorageStats } from '@/Assistant/assistantSyncedChats'
 import {
   readAssistantHistoryDiagnostics,
   subscribeAssistantHistoryDiagnostics,
@@ -456,6 +457,42 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
     [application],
   )
   const assistantHistoryScope = getAssistantAccountScope(application)
+  const [assistantStorageRefresh, setAssistantStorageRefresh] = useState(0)
+  const [assistantStorageReading, setAssistantStorageReading] = useState<{
+    application: WebApplication
+    scope: string | undefined
+    stats?: AssistantChatStorageStats
+  }>()
+  useEffect(() => {
+    let current = true
+    const scope = assistantHistoryScope
+    setAssistantStorageReading(undefined)
+    if (!scope) {
+      return () => {
+        current = false
+      }
+    }
+    void readAssistantChatStorageStats(application, scope)
+      .then((stats) => {
+        if (current && getAssistantAccountScope(application) === scope) {
+          setAssistantStorageReading({ application, scope, stats })
+        }
+      })
+      .catch(() => {
+        // Unavailable stays unavailable; exception text never enters diagnostics.
+        if (current) {
+          setAssistantStorageReading(undefined)
+        }
+      })
+    return () => {
+      current = false
+    }
+  }, [application, assistantHistoryScope, assistantStorageRefresh])
+  const assistantChatStorage =
+    assistantStorageReading?.application === application && assistantStorageReading.scope === assistantHistoryScope
+      ? assistantStorageReading.stats
+      : undefined
+
   const [payload, setPayload] = useState<SyncDiagnosticsPayload | undefined>(undefined)
   const [loading, setLoading] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -656,6 +693,7 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
         setFlagsReading(undefined)
         setLocalUsageBytes(undefined)
       } else {
+        setAssistantStorageRefresh((value) => value + 1)
         setBrowserObservations(undefined)
       }
       run.timer = setTimeout(() => {
@@ -1644,6 +1682,7 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
    * checks. Nothing that writes; those stay behind the button that says so.
    */
   const refresh = useCallback(() => {
+    setAssistantStorageRefresh((value) => value + 1)
     readTransport()
     void loadDiagnostics()
     void loadServerStatus()
@@ -2025,6 +2064,7 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
       buildBrowserSection({
         observations: browserObservations,
         assistantHistory: readAssistantHistoryDiagnostics(application, assistantHistoryScope),
+        assistantChatStorage,
         clock,
         ...(csp === undefined ? {} : { csp }),
         checks: readings,
@@ -2035,6 +2075,7 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
       application,
       assistantHistoryScope,
       assistantHistoryRevision,
+      assistantChatStorage,
       browserObservations,
       clock,
       csp,

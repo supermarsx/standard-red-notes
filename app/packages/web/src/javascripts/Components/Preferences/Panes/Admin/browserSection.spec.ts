@@ -1506,3 +1506,41 @@ describe('Assistant chat persistence diagnostics', () => {
     expect(model.reportLines.join('\n')).not.toContain('PRIVATE-')
   })
 })
+
+it('reports chat storage accounting with application limits separately from browser quota', () => {
+  const model = buildBrowserSection({
+    assistantHistory: {
+      failures: 1,
+      recoveries: 0,
+      active: true,
+      latest: { code: 'STORAGE_RECORD_LIMIT', stage: 'validate' },
+    },
+    assistantChatStorage: {
+      activeChats: 4,
+      trashedChats: 2,
+      deletedChats: 3,
+      deletedResidualRecords: 7,
+      writerRecords: 512,
+      lifecycleRecords: 5,
+      invalidRecords: 1,
+      serializedUnits: 9000,
+      limits: { chats: 100, writersPerChat: 64, records: 512, serializedUnits: 16777216, recordUnits: 1048576 },
+    },
+  })
+  const report = model.reportLines.join('\n')
+  expect(report).toContain('Assistant active chats: 4')
+  expect(report).toContain('Assistant trashed chats: 2')
+  expect(report).toContain('Assistant deleted residual records: 7')
+  expect(report).toContain('Assistant writer records: 512')
+  expect(report).toContain('Assistant serialized storage units: 9000')
+  expect(report).toContain('Assistant writer record limit: 512')
+  expect(report).toContain('STORAGE_RECORD_LIMIT')
+})
+
+it('does not invent empty storage accounting when no authorized snapshot was read', () => {
+  const report = buildBrowserSection({
+    assistantHistory: { failures: 0, recoveries: 0, active: false },
+  }).reportLines.join('\n')
+  expect(report).toContain('Assistant active chats:')
+  expect(report).not.toContain('Assistant active chats: 0')
+})

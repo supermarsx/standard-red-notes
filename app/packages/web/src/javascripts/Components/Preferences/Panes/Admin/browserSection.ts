@@ -1,5 +1,6 @@
 import type { AssistantHistoryDiagnostics } from '@/Assistant/assistantHistoryDiagnostics'
 import {
+  type AssistantChatStorageStats,
   ASSISTANT_CHAT_STORAGE_FAILURE_CAUSES,
   ASSISTANT_CHAT_STORAGE_FAILURE_CODES,
   ASSISTANT_CHAT_STORAGE_FAILURE_STAGES,
@@ -1198,6 +1199,7 @@ function observedRow(input: {
 
 export type BrowserSectionInput = {
   assistantHistory?: AssistantHistoryDiagnostics
+  assistantChatStorage?: AssistantChatStorageStats
   /** Absent until the first collection run resolves; every row then reads "not reported". */
   observations?: BrowserObservations
   clock?: BrowserClockReading
@@ -2022,7 +2024,7 @@ export function buildBrowserSection(input: BrowserSectionInput = {}): SectionMod
     buildPolicyBlock(observed, input.csp, collected),
     buildIdentityBlock(observed),
     buildClockBlock(input.clock),
-    ...(input.assistantHistory ? [buildAssistantHistoryBlock(input.assistantHistory)] : []),
+    ...(input.assistantHistory ? [buildAssistantHistoryBlock(input.assistantHistory, input.assistantChatStorage)] : []),
   ]
 
   return buildSectionModel({
@@ -2032,7 +2034,10 @@ export function buildBrowserSection(input: BrowserSectionInput = {}): SectionMod
   })
 }
 
-function buildAssistantHistoryBlock(history: AssistantHistoryDiagnostics): DiagnosticBlock {
+function buildAssistantHistoryBlock(
+  history: AssistantHistoryDiagnostics,
+  storage?: AssistantChatStorageStats,
+): DiagnosticBlock {
   const rows = [
     diagnosticRow({
       note: 'Current account in this browser tab; closed diagnostic values only.',
@@ -2085,6 +2090,72 @@ function buildAssistantHistoryBlock(history: AssistantHistoryDiagnostics): Diagn
         ]
       : []),
   ]
+  const storageRows = [
+    ['Assistant active chats', storage?.activeChats, 'Chats currently available in history.'],
+    [
+      'Assistant trashed chats',
+      storage?.trashedChats,
+      'Chats moved to Trash; their retained history still uses storage.',
+    ],
+    [
+      'Assistant deleted chat markers',
+      storage?.deletedChats,
+      'Deletion markers prevent old devices from restoring deleted chats.',
+    ],
+    [
+      'Assistant deleted residual records',
+      storage?.deletedResidualRecords,
+      'Writer and lifecycle records remaining behind deletion markers; cleanup can reclaim these without dropping deletion protection.',
+    ],
+    [
+      'Assistant writer records',
+      storage?.writerRecords,
+      'Per-writer encrypted records; multiple devices can contribute to one chat.',
+    ],
+    [
+      'Assistant lifecycle records',
+      storage?.lifecycleRecords,
+      'Trash and deletion lifecycle records are separate from writer records.',
+    ],
+    [
+      'Assistant invalid records',
+      storage?.invalidRecords,
+      'Authorized records that could not be parsed; no contents are exported.',
+    ],
+    [
+      'Assistant serialized storage units',
+      storage?.serializedUnits,
+      'UTF-16 code units in validated serialized records, including lifecycle and deletion markers; invalid records are counted separately. Not disk bytes.',
+    ],
+    ['Assistant chat count limit', storage?.limits.chats, 'Configured application chat count cap.'],
+    ['Assistant writers per chat limit', storage?.limits.writersPerChat, 'Configured per-chat writer cap.'],
+    [
+      'Assistant writer record limit',
+      storage?.limits.records,
+      'Deletion markers do not count toward this writer-record cap.',
+    ],
+    [
+      'Assistant serialized storage unit limit',
+      storage?.limits.serializedUnits,
+      'Application catalog cap in UTF-16 code units; distinct from browser disk quota.',
+    ],
+    [
+      'Assistant individual record unit limit',
+      storage?.limits.recordUnits,
+      'Maximum serialized size of one record in UTF-16 code units.',
+    ],
+  ] as const
+  rows.push(
+    ...storageRows.map(([label, value, note]) =>
+      diagnosticRow({
+        label: safeConstant(label),
+        value: safeCount(value),
+        note,
+        verdict: value === undefined ? 'undetermined' : 'informational',
+        evidence: value === undefined ? EVIDENCE_ABSENT : EVIDENCE_DIRECT,
+      }),
+    ),
+  )
   return {
     heading: safeConstant('Assistant chat persistence'),
     description:
@@ -2102,7 +2173,8 @@ function buildAssistantHistoryBlock(history: AssistantHistoryDiagnostics): Diagn
               code: 'ASSISTANT_CHAT_SAVE_FAILED',
               summary: 'Open the affected chat and follow its save warning before retrying.',
               steps: [
-                'Read the closed failure code and stage shown above. QUOTA_EXCEEDED requires freeing device space; SYNC_FAILED requires checking the connection.',
+                'Read the failure code and stage above. QUOTA_EXCEEDED means browser/device space; SYNC_FAILED means the sync checkpoint failed.',
+                'CHAT_LIMIT is the chat count cap; WRITER_LIMIT is per-chat writers; STORAGE_RECORD_LIMIT is total writer records; STORAGE_SIZE_LIMIT is serialized catalog size; RECORD_SIZE_LIMIT is one oversized record. Compare the usage and limits above. Trash retains history; permanent deletion removes writer bodies while retaining small deletion markers.',
                 'Keep the affected tab open while recovering. Its unsaved messages may exist only in memory. Retry saving after addressing the reported cause.',
               ],
               effort: BROWSER_SIDE,

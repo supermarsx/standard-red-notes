@@ -446,6 +446,14 @@ function buildParts(input: DiagnosticsReportInput): ReportParts {
   if (input.sections !== undefined) {
     verdictBlock.push(...summaryTable(input.sections), '')
   }
+  // Reuse only built SafeValue rows: the compact export must retain the exact
+  // failure and capacity facts needed to distinguish app budgets from disk quota.
+  const assistantBlock = input.sections?.browser.blocks.find((block) => block.heading === 'Assistant chat persistence')
+  if (assistantBlock) {
+    for (const row of assistantBlock.rows) {
+      verdictBlock.push(`- ${row.label}: ${row.value}`)
+    }
+  }
   verdictBlock.push(`- Checks: ${summarizeChecks(checks)}`)
   verdictBlock.push(`- ${COVERAGE_SENTENCE}`)
   verdictBlock.push(`- ${DIAGNOSIS_LABEL}: ${diagnosis.headline}`)

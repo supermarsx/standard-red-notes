@@ -1266,3 +1266,31 @@ describe('buildDiagnosticsSummary', () => {
     expect(summary).toContain('\n- Do (')
   })
 })
+
+it('keeps exact assistant failure and capacity evidence in the compact summary', () => {
+  const models = sections()
+  const browser = buildBrowserSection({
+    assistantHistory: {
+      failures: 1,
+      recoveries: 0,
+      active: true,
+      latest: { code: 'STORAGE_SIZE_LIMIT', stage: 'validate' },
+    },
+    assistantChatStorage: {
+      activeChats: 4,
+      trashedChats: 2,
+      deletedChats: 3,
+      deletedResidualRecords: 7,
+      writerRecords: 12,
+      lifecycleRecords: 5,
+      invalidRecords: 1,
+      serializedUnits: 16777216,
+      limits: { chats: 100, writersPerChat: 64, records: 512, serializedUnits: 16777216, recordUnits: 1048576 },
+    },
+  })
+  const summary = buildDiagnosticsSummary(input({ sections: { ...models, browser } }))
+  expect(summary).toContain('STORAGE_SIZE_LIMIT')
+  expect(summary).toContain('Assistant active chats: 4')
+  expect(summary).toContain('Assistant serialized storage units: 16777216')
+  expect(summary).toContain('Assistant serialized storage unit limit: 16777216')
+})
