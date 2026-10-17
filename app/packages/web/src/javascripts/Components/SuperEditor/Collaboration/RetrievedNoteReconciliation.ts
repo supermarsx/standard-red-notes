@@ -609,6 +609,7 @@ export function reconcileRetrievedNoteContent(input: {
   collaboration?: AttachedCollaboration
   collaborationHasLocalDivergence?(): boolean
   currentCollaborativeText?: () => string
+  currentEditorText?: () => string
   durableState?: RetrievedDurableState
   preserveDivergentRetrieved?: PreserveDivergentRetrieved
   editorHasPendingChanges(): boolean
@@ -616,7 +617,7 @@ export function reconcileRetrievedNoteContent(input: {
   changeEditor?: ChangeEditorFunction
   ignoreNextChangeRef: { current: RetrievedEditorUpdateToken | undefined }
   isEditorLifetimeCurrent?(): boolean
-}): 'preserved-collaboration' | 'preserved-conflict' | 'applied' | 'deferred' {
+}): 'preserved-collaboration' | 'preserved-conflict' | 'unchanged' | 'applied' | 'deferred' {
   if (input.editorHasPendingChanges()) {
     input.flushEditorSerialize()
   }
@@ -657,6 +658,12 @@ export function reconcileRetrievedNoteContent(input: {
     input.durableState.text = input.text
   }
   if (input.changeEditor) {
+    // Read after flushing pending serialization so an equal saved snapshot cannot
+    // hide a newer local keystroke. Metadata still advances above. No Lexical
+    // replacement means selection, node identity and undo history stay intact.
+    if (input.currentEditorText?.() === input.text) {
+      return 'unchanged'
+    }
     return applyRetrievedEditorContent({
       text: input.text,
       changeEditor: input.changeEditor,

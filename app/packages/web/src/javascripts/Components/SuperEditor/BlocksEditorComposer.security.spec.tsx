@@ -113,4 +113,37 @@ describe('BlocksEditorComposer collaboration editability', () => {
     })
     expect(persistedText).toEqual(['remote edit before sender disappears', 'remote edit after reconnect'])
   })
+
+  it('keeps the empty startup editor when canonical plugins mount without importing the saved preview', async () => {
+    let editor: LexicalEditor | undefined
+    const capture = (value: LexicalEditor) => (editor = value)
+    const InstallCanonicalBody = () => {
+      const [current] = useLexicalComposerContext()
+      useEffect(() => {
+        current.update(
+          () => {
+            $getRoot().append($createParagraphNode().append($createTextNode('canonical body')))
+          },
+          { discrete: true },
+        )
+      }, [current])
+      return null
+    }
+    const view = (ready: boolean) => (
+      <BlocksEditorComposer key="note:startup" initialValue="invalid saved preview must not be parsed" collaborating>
+        <CaptureEditor capture={capture} />
+        {ready ? <InstallCanonicalBody /> : <div>Loading encrypted note…</div>}
+      </BlocksEditorComposer>
+    )
+
+    await act(async () => root.render(view(false)))
+    const startupEditor = editor!
+    expect(startupEditor.isEditable()).toBe(false)
+    expect(startupEditor.getEditorState().read(() => $getRoot().getChildrenSize())).toBe(0)
+
+    await act(async () => root.render(view(true)))
+    expect(editor).toBe(startupEditor)
+    expect(startupEditor.getEditorState().read(() => $getRoot().getTextContent())).toBe('canonical body')
+    expect(startupEditor.getEditorState().read(() => $getRoot().getChildrenSize())).toBe(1)
+  })
 })

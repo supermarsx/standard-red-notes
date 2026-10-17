@@ -476,6 +476,24 @@ export const SuperEditor: FunctionComponent<Props> = ({
           initialEditorState: collaborationAccess.initialEditorState,
         }
       : undefined
+  // The initial encrypted editor starts empty and receives its body exactly once
+  // from the canonical provider. Do not first paint a standalone editor only to
+  // replace it with an empty collaborative composer a moment later.
+  const initialComposerLease = useRef<{ lifetime: RetrievedReconciliationLifetime; requestId?: string }>({
+    lifetime: retrievedLifetime,
+  })
+  const committedInitialLease =
+    initialComposerLease.current.lifetime === retrievedLifetime ? initialComposerLease.current.requestId : undefined
+  const firstComposerLease = committedInitialLease ?? (collaboration ? editorLease?.requestId : undefined)
+  const preparingInitialComposer =
+    !committedInitialLease &&
+    collaborationAccess.status === 'preparing' &&
+    application.sockets.hasConfiguredWebSocketUrl?.() !== false
+  const usesInitialComposer =
+    preparingInitialComposer || Boolean(collaboration && editorLease?.requestId === firstComposerLease)
+  useLayoutEffect(() => {
+    initialComposerLease.current = { lifetime: retrievedLifetime, requestId: firstComposerLease }
+  }, [retrievedLifetime, firstComposerLease])
   // A shared note must not expose a temporary ordinary editor while joining:
   // its pending serialization could race the clean bootstrap snapshot and be
   // discarded when the authoritative editor replaces that surface.
@@ -485,6 +503,7 @@ export const SuperEditor: FunctionComponent<Props> = ({
     application.sockets.hasConfiguredWebSocketUrl?.() !== false &&
     resolveCollaborationKeySource(application, lifetimeNote).available
   const isEditorReadonly =
+    preparingInitialComposer ||
     baseEditorReadonly ||
     sharedCollaborationJoining ||
     (Boolean(collaboration) && (!collaborationSaver || collaborationSaver.paused))
@@ -506,8 +525,8 @@ export const SuperEditor: FunctionComponent<Props> = ({
   /**
    * Publish collaboration state for the title-bar status chip.
    *
-   * Collaboration state must never take the editing surface away, so it is
-   * reported in the status row instead. This mount is the one that already knows
+   * Established collaboration recovery is reported in the status row rather
+   * than replacing the editing surface. This mount is the one that already knows
    * the answer; the chip reads it rather than mounting the (expensive,
    * traffic-generating) room-access hook a second time.
    *
@@ -876,6 +895,7 @@ export const SuperEditor: FunctionComponent<Props> = ({
           collaborationHasLocalDivergence: () =>
             Boolean(receiptLease && latestEditorText.current !== retrievedDurableState.text),
           currentCollaborativeText: () => latestEditorText.current,
+          currentEditorText: () => latestEditorText.current,
           durableState: retrievedDurableState,
           editorHasPendingChanges: () => controller.editorHasPendingChanges(),
           flushEditorSerialize: () => controller.flushEditorSerialize(),
@@ -1188,49 +1208,57 @@ export const SuperEditor: FunctionComponent<Props> = ({
                   key={retrievedEditorComposerLifetimeKey({
                     noteUuid: authorizedEditorNote.uuid,
                     generation: plannedEditorSurface.generation,
-                    ...(collaborationAccess.status === 'ready' && editorLease
-                      ? { leaseRequestId: editorLease.requestId }
-                      : {}),
+                    ...(usesInitialComposer
+                      ? { leaseRequestId: 'startup' }
+                      : collaborationAccess.status === 'ready' && editorLease
+                        ? { leaseRequestId: editorLease.requestId }
+                        : {}),
                   })}
-                  readonly={isEditorReadonly}
+                  readonly={isEditorReadonly || preparingInitialComposer}
                   initialValue={authorizedEditorNote.text}
-                  collaborating={Boolean(collaboration)}
+                  collaborating={Boolean(collaboration) || preparingInitialComposer}
                 >
-                  <BlocksEditor
-                    noteUuid={authorizedEditorNote.uuid}
-                    commentNote={authorizedEditorNote}
-                    onChange={handleChange}
-                    className="blocks-editor h-full resize-none"
-                    previewLength={SuperNotePreviewCharLimit}
-                    spellcheck={spellcheck}
-                    readonly={isEditorReadonly}
-                    onFocus={handleFocus}
-                    onBlur={onBlur}
-                    application={application}
-                    collaboration={collaboration}
-                    registerDebounceControl={registerDebounceControl}
-                    checklistOwnerLeaseId={effectiveChecklistOwnerLeaseId}
-                    persistChanges={() => controller.flushAndAwaitPendingSaveStrict()}
-                    backgroundOwner={backgroundOwner}
-                    isChecklistOwnerActive={isChecklistOwnerActive}
-                    onChecklistOwnerReady={handleChecklistOwnerReady}
-                  >
-                    {interactiveOwner && <ItemSelectionPlugin currentNote={authorizedEditorNote} />}
-                    {interactiveOwner && <FilePlugin currentNote={authorizedEditorNote} />}
-                    {interactiveOwner && <ItemBubblePlugin />}
-                    {interactiveOwner && <GetMarkdownPlugin ref={getMarkdownPlugin} />}
-                    <ChangeContentCallbackPlugin providerCallback={registerChangeEditorFunction} />
-                    {interactiveOwner && <NodeObserverPlugin onChange={handleEditorReferenceChanges} />}
-                    {readonly === undefined && (
-                      <ReadonlyPlugin
-                        note={authorizedEditorNote}
-                        forceReadonly={featureStatus !== FeatureStatus.Entitled}
-                      />
-                    )}
-                    {interactiveOwner && <AutoFocusPlugin isEnabled={controller.isTemplateNote} />}
-                    {interactiveOwner && <BlockPickerMenuPlugin />}
-                    {interactiveOwner && <NoteFromSelectionPlugin currentNote={authorizedEditorNote} />}
-                  </BlocksEditor>
+                  {preparingInitialComposer ? (
+                    <div className="text-passive-1 flex h-full items-center justify-center text-sm" role="status">
+                      Loading encrypted note…
+                    </div>
+                  ) : (
+                    <BlocksEditor
+                      noteUuid={authorizedEditorNote.uuid}
+                      commentNote={authorizedEditorNote}
+                      onChange={handleChange}
+                      className="blocks-editor h-full resize-none"
+                      previewLength={SuperNotePreviewCharLimit}
+                      spellcheck={spellcheck}
+                      readonly={isEditorReadonly}
+                      onFocus={handleFocus}
+                      onBlur={onBlur}
+                      application={application}
+                      collaboration={collaboration}
+                      registerDebounceControl={registerDebounceControl}
+                      checklistOwnerLeaseId={effectiveChecklistOwnerLeaseId}
+                      persistChanges={() => controller.flushAndAwaitPendingSaveStrict()}
+                      backgroundOwner={backgroundOwner}
+                      isChecklistOwnerActive={isChecklistOwnerActive}
+                      onChecklistOwnerReady={handleChecklistOwnerReady}
+                    >
+                      {interactiveOwner && <ItemSelectionPlugin currentNote={authorizedEditorNote} />}
+                      {interactiveOwner && <FilePlugin currentNote={authorizedEditorNote} />}
+                      {interactiveOwner && <ItemBubblePlugin />}
+                      {interactiveOwner && <GetMarkdownPlugin ref={getMarkdownPlugin} />}
+                      <ChangeContentCallbackPlugin providerCallback={registerChangeEditorFunction} />
+                      {interactiveOwner && <NodeObserverPlugin onChange={handleEditorReferenceChanges} />}
+                      {readonly === undefined && (
+                        <ReadonlyPlugin
+                          note={authorizedEditorNote}
+                          forceReadonly={featureStatus !== FeatureStatus.Entitled}
+                        />
+                      )}
+                      {interactiveOwner && <AutoFocusPlugin isEnabled={controller.isTemplateNote} />}
+                      {interactiveOwner && <BlockPickerMenuPlugin />}
+                      {interactiveOwner && <NoteFromSelectionPlugin currentNote={authorizedEditorNote} />}
+                    </BlocksEditor>
+                  )}
                 </BlocksEditorComposer>
               )}
             </EditorControlsProvider>

@@ -336,7 +336,8 @@ describe('shared note preparation protects the editor before the provider mounts
     currentNote.shared_vault_uuid = 'shared-vault'
     mockCollaborationAccess = { status: 'preparing' }
     await renderEditor()
-    expect(mockEditorReadonly).toBe(true)
+    expect(mockEditorOnChange).toBeUndefined()
+    expect(container.querySelector('[role="status"]')?.textContent).toBe('Loading encrypted note…')
     expect(CollaborationStatusRegistry.getState(NOTE_UUID)?.status).toEqual({ kind: 'preparing', readonly: true })
     await typeIntoEditor('an early callback cannot replace the canonical body')
     expect(save).not.toHaveBeenCalled()
@@ -355,8 +356,12 @@ describe('shared note preparation protects the editor before the provider mounts
     expect(save).toHaveBeenCalledTimes(1)
   })
 
-  it('keeps ordinary notes editable while collaboration prepares', async () => {
+  it('waits for canonical startup on eligible private notes, then allows ordinary editing if collaboration is unavailable', async () => {
     mockCollaborationAccess = { status: 'preparing' }
+    await renderEditor()
+    expect(mockEditorOnChange).toBeUndefined()
+    expect(container.querySelector('[role="status"]')?.textContent).toBe('Loading encrypted note…')
+    mockCollaborationAccess = { status: 'disabled', reason: 'Relay unavailable' }
     await renderEditor()
     expect(mockEditorReadonly).toBe(false)
     await typeIntoEditor('ordinary authoring')

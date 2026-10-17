@@ -1,23 +1,8 @@
+/** @jest-environment jsdom */
 /**
- * @jest-environment jsdom
- *
- * REGRESSION GUARD for the user-visible bug this change fixes.
- *
- * SuperEditor used to render this instead of the editor whenever the encrypted
- * room was still being prepared:
- *
- *   {collaborationAccess.status === 'preparing' ? (
- *     <div …>Preparing encrypted collaboration…</div>
- *   ) : …}
- *
- * Preparation runs on every Super note open and, on a deployment whose
- * collaboration gateway is unreachable, it runs and fails repeatedly — so the
- * editing surface kept vanishing out from under the user. Collaboration state
- * must NEVER remove, cover or disable the editing surface; it now reports itself
- * in the title-bar status row instead.
- *
- * This mounts the real SuperEditor with its heavy Lexical children stubbed and
- * asserts the composer is present in EVERY collaboration state.
+ * Initial room preparation mounts one empty composer, then hydrates it from
+ * canonical state. Established recovery and unavailable rooms keep readable
+ * editor surfaces; session and lease changes retain their remount fences.
  */
 import { act, createElement, ReactNode } from 'react'
 import { createRoot, Root } from 'react-dom/client'
@@ -30,6 +15,8 @@ const stub =
 
 const nullPlugin = () => null
 
+const mockSessionUser = { uuid: 'user-uuid' }
+let mockSourceId = 'source-id'
 let mockCollaborationAccess: CollaborationRoomAccessState
 
 jest.mock('./Collaboration/useCollaborationRoomAccess', () => ({
@@ -40,15 +27,22 @@ jest.mock('./Collaboration/CollaborationKeyDerivation', () => ({
   resolveNoteEncryptionIdentity: (_application: unknown, note: { uuid: string }) => ({
     noteUuid: note.uuid,
     userUuid: 'user-uuid',
-    sessionUser: { uuid: 'user-uuid' },
-    sourceId: 'source-id',
+    sessionUser: mockSessionUser,
+    sourceId: mockSourceId,
     keySystemIdentifier: null,
     sharedVaultUuid: null,
   }),
   matchesNoteEncryptionIdentity: () => true,
 }))
 
-jest.mock('./BlocksEditorComposer', () => ({ BlocksEditorComposer: stub('blocks-editor-composer') }))
+jest.mock('./BlocksEditorComposer', () => ({
+  BlocksEditorComposer: ({ children, collaborating }: { children?: ReactNode; collaborating?: boolean }) =>
+    createElement(
+      'div',
+      { 'data-testid': 'blocks-editor-composer', 'data-collaborating': String(collaborating) },
+      children,
+    ),
+}))
 jest.mock('./BlocksEditor', () => ({ BlocksEditor: stub('blocks-editor') }))
 jest.mock('./Plugins/ItemSelectionPlugin/ItemSelectionPlugin', () => ({ ItemSelectionPlugin: nullPlugin }))
 jest.mock('./Plugins/EncryptedFilePlugin/FilePlugin', () => ({ __esModule: true, default: nullPlugin }))
@@ -105,9 +99,10 @@ const noopDisposer = () => undefined
 
 const application = {
   platform: 'web',
+  sockets: { hasConfiguredWebSocketUrl: () => true },
   sessions: {
     isSignedIn: () => true,
-    getUser: () => ({ uuid: 'user-uuid' }),
+    getUser: () => mockSessionUser,
     isCurrentSessionReadOnly: () => false,
   },
   items: { findItem: () => note, streamItems: () => noopDisposer },
@@ -160,6 +155,7 @@ const renderEditor = async (): Promise<void> => {
 
 beforeEach(() => {
   mockCollaborationAccess = { status: 'preparing' }
+  mockSourceId = 'source-id'
   CollaborationStatusRegistry.clearRoom(NOTE_UUID)
   container = document.createElement('div')
   document.body.appendChild(container)
@@ -193,7 +189,7 @@ describe('the editing surface survives every collaboration state', () => {
         status: 'ready',
         sourceId: 'source-id',
         userUuid: 'user-uuid',
-        sessionUser: { uuid: 'user-uuid' },
+        sessionUser: mockSessionUser,
         roomKey: 'room-key',
         roomEpoch: 'epoch',
         username: 'user',
@@ -209,7 +205,7 @@ describe('the editing surface survives every collaboration state', () => {
     await renderEditor()
 
     expect(composer()).not.toBeNull()
-    expect(container.querySelector('[data-testid="blocks-editor"]')).not.toBeNull()
+    expect(Boolean(container.querySelector('[data-testid="blocks-editor"]'))).toBe(state.status !== 'preparing')
   })
 
   it('keeps the editor for a "preparing" that NEVER settles', async () => {
@@ -226,7 +222,7 @@ describe('the editing surface survives every collaboration state', () => {
     }
 
     expect(container.textContent).not.toContain('Preparing encrypted collaboration')
-    expect(container.querySelector('[data-testid="blocks-editor"]')).not.toBeNull()
+    expect(container.querySelector('[role="status"]')?.textContent).toBe('Loading encrypted note…')
   })
 
   it('never renders the removed "Preparing encrypted collaboration" takeover', async () => {
@@ -288,4 +284,56 @@ describe('collaboration state is published for the title-bar chip instead', () =
 
     expect(CollaborationStatusRegistry.getState(NOTE_UUID)).toBeUndefined()
   })
+})
+
+it('retains the initial composer across preparation and first lease, but fences replacement leases', async () => {
+  await renderEditor()
+  const initialComposer = composer()
+  expect(initialComposer?.getAttribute('data-collaborating')).toBe('true')
+  expect(container.querySelector('[data-testid="blocks-editor"]')).toBeNull()
+  const ready = {
+    status: 'ready',
+    sourceId: 'source-id',
+    userUuid: 'user-uuid',
+    sessionUser: mockSessionUser,
+    roomKey: 'room-key',
+    roomEpoch: 'epoch',
+    username: 'user',
+    initialEditorState: 'body',
+    editorLease: { requestId: 'initial-lease', shouldBootstrap: false },
+  } as unknown as CollaborationRoomAccessState
+  mockCollaborationAccess = ready
+  await renderEditor()
+  expect(composer()).toBe(initialComposer)
+  expect(composer()?.getAttribute('data-collaborating')).toBe('true')
+  expect(container.querySelector('[data-testid="blocks-editor"]')).not.toBeNull()
+  mockCollaborationAccess = {
+    ...ready,
+    editorLease: { requestId: 'replacement-lease', shouldBootstrap: false },
+  } as unknown as CollaborationRoomAccessState
+  await renderEditor()
+  expect(composer()).not.toBe(initialComposer)
+  const replacementComposer = composer()
+  mockSourceId = 'changed-key-source'
+  await renderEditor()
+  expect(composer()).not.toBe(replacementComposer)
+})
+
+it('loads the stored body if initial room preparation is unavailable', async () => {
+  await renderEditor()
+  const initialComposer = composer()
+  mockCollaborationAccess = {
+    status: 'disabled',
+    reason: 'Live collaboration is offline.',
+  } as CollaborationRoomAccessState
+  await renderEditor()
+  expect(composer()).not.toBe(initialComposer)
+  expect(container.querySelector('[data-testid="blocks-editor"]')).not.toBeNull()
+  expect(container.querySelector('[role="status"]')).toBeNull()
+  const offlineComposer = composer()
+  mockCollaborationAccess = { status: 'preparing' }
+  await renderEditor()
+  expect(composer()).not.toBe(offlineComposer)
+  expect(composer()?.getAttribute('data-collaborating')).toBe('true')
+  expect(container.querySelector('[data-testid="blocks-editor"]')).toBeNull()
 })

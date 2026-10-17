@@ -65,6 +65,61 @@ const localDatabaseCopy = <Payload extends DecryptedPayload<NoteContent>>(payloa
   payload.copy(undefined, PayloadSource.LocalDatabaseLoaded)
 
 describe('retrieved durable note reconciliation', () => {
+  it('advances metadata without replacing identical standalone editor content', () => {
+    const changeEditor = jest.fn()
+    const flushEditorSerialize = jest.fn()
+    const durableState = { serverUpdatedAtTimestamp: 10, text: 'body' }
+    const ignoreNextChangeRef = { current: undefined }
+    expect(
+      reconcileRetrievedNoteContent({
+        text: 'body',
+        serverUpdatedAtTimestamp: 20,
+        currentEditorText: () => 'body',
+        durableState,
+        editorHasPendingChanges: () => false,
+        flushEditorSerialize,
+        changeEditor,
+        ignoreNextChangeRef,
+      }),
+    ).toBe('unchanged')
+    expect(changeEditor).not.toHaveBeenCalled()
+    expect(flushEditorSerialize).not.toHaveBeenCalled()
+    expect(ignoreNextChangeRef.current).toBeUndefined()
+    expect(durableState).toEqual({ serverUpdatedAtTimestamp: 20, text: 'body' })
+  })
+
+  it('flushes pending local edits before deciding whether retrieved content is unchanged', () => {
+    let currentText = 'saved body'
+    const events: string[] = []
+    const changeEditor = jest.fn(() => events.push('replace'))
+    expect(
+      reconcileRetrievedNoteContent({
+        text: 'saved body',
+        currentEditorText: () => currentText,
+        editorHasPendingChanges: () => true,
+        flushEditorSerialize: () => {
+          events.push('preserve pending edit')
+          currentText = 'local edit'
+        },
+        changeEditor,
+        ignoreNextChangeRef: { current: undefined },
+      }),
+    ).toBe('applied')
+    expect(events).toEqual(['preserve pending edit', 'replace'])
+  })
+
+  it('defers an equal snapshot when there is no mounted editor', () => {
+    expect(
+      reconcileRetrievedNoteContent({
+        text: 'body',
+        currentEditorText: () => 'body',
+        editorHasPendingChanges: () => false,
+        flushEditorSerialize: jest.fn(),
+        ignoreNextChangeRef: { current: undefined },
+      }),
+    ).toBe('deferred')
+  })
+
   it('preserves newer collaborative CRDT state across sustained lagging durable revisions', () => {
     const doc = new Y.Doc()
     const text = doc.getText('content')
