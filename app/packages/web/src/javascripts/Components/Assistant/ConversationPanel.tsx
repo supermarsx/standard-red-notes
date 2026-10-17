@@ -23,6 +23,8 @@ import type { AssistantChatContextSnapshot } from '@/Assistant/assistantDirectiv
 import AssistantComposer from './AssistantComposer'
 import AssistantModeSelector from './AssistantModeSelector'
 import AssistantToolPermissionSelector from './AssistantToolPermissionSelector'
+import { useAssistantComposerSync } from './useAssistantComposerSync'
+import type { AssistantChatComposerPatch } from '@/Assistant/assistantChatComposerState'
 import AssistantTranscriptCopyButton from './AssistantTranscriptCopyButton'
 import type { AssistantConversationMode } from '@/Assistant/conversationModes'
 import { runConversationMode } from '@/Assistant/conversationModeRunner'
@@ -194,6 +196,7 @@ type ConversationPrompt = {
   providerPrompt: string
   directive?: AssistantChatDirective
   mode?: AssistantConversationMode
+  context?: AssistantContextSelection
 }
 
 const KNOWN_ASSISTANT_TOOL_NAMES = new Set([...TOOL_DEFINITIONS.map((tool) => tool.name), 'delegate'])
@@ -321,11 +324,15 @@ function ConversationPanelImpl({
   const [messages, setMessages] = useState<UIMessage[]>(() =>
     hydrateAssistantHistory(initialHistoryRead.status === 'found' ? initialHistoryRead.messages : []),
   )
-  const [input, setInputState] = useState('')
-  const inputRef = useRef('')
+  const composerUpdateRef = useRef<(patch: AssistantChatComposerPatch) => void>(() => undefined)
+  const [input, setInputState] = useState(sharedChat?.history?.composer?.draft?.value?.text ?? '')
+  const inputRef = useRef(input)
   const setInput = useCallback((value: string) => {
     inputRef.current = value
     setInputState(value)
+    composerUpdateRef.current({
+      draft: value || attachmentsRef.current.length ? { text: value, attachments: attachmentsRef.current } : null,
+    })
   }, [])
   const [isRunning, setIsRunning] = useState(false)
   const [isStopping, setIsStopping] = useState(false)
@@ -341,8 +348,10 @@ function ConversationPanelImpl({
     setChatTokenUsage(EMPTY_CHAT_TOKEN_USAGE)
     setTokenWindows(null)
   }, [accountScope])
-  const [attachments, setAttachments] = useState<AssistantAttachment[]>([])
-  const attachmentsRef = useRef<AssistantAttachment[]>([])
+  const [attachments, setAttachments] = useState<AssistantAttachment[]>(
+    sharedChat?.history?.composer?.draft?.value?.attachments ?? [],
+  )
+  const attachmentsRef = useRef<AssistantAttachment[]>(attachments)
   const [attachmentError, setAttachmentError] = useState('')
   const [attachmentsBusy, setAttachmentsBusy] = useState(false)
   const attachmentTaskRef = useRef(0)
@@ -388,9 +397,36 @@ function ConversationPanelImpl({
       document.removeEventListener('visibilitychange', refresh)
     }
   }, [accountScope])
-  const [contextSelection, setContextSelection] = useState<AssistantContextSelection>(() => ({
-    scope: readAssistantContextScope(accountScope),
-  }))
+  const [contextSelection, setContextSelectionState] = useState<AssistantContextSelection>(
+    () =>
+      sharedChat?.history?.composer?.context?.value ?? {
+        scope: readAssistantContextScope(accountScope),
+      },
+  )
+  const contextSelectionRef = useRef(contextSelection)
+  const setContextSelection = useCallback(
+    (next: AssistantContextSelection | ((previous: AssistantContextSelection) => AssistantContextSelection)) => {
+      const previous = contextSelectionRef.current
+      const value = typeof next === 'function' ? next(previous) : next
+      if (value === previous) {
+        return
+      }
+      contextSelectionRef.current = value
+      setContextSelectionState(value)
+      if (
+        value.scope === 'selection' ||
+        JSON.stringify({ ...previous, excerpt: undefined }) !== JSON.stringify({ ...value, excerpt: undefined })
+      ) {
+        composerUpdateRef.current({ context: value })
+      }
+    },
+    [],
+  )
+  const [chatToolPermissionMode, setChatToolPermissionMode] = useState<AssistantToolPermissionMode | undefined>(
+    sharedChat?.history?.composer?.toolPermissionMode?.value,
+  )
+  const chatToolPermissionModeRef = useRef(chatToolPermissionMode)
+  chatToolPermissionModeRef.current = chatToolPermissionMode
   const [contextItemsRevision, setContextItemsRevision] = useState(0)
   const [pendingConfirmation, setPendingConfirmation] = useState<{
     presentation: AssistantConfirmationPresentation
@@ -461,6 +497,61 @@ function ConversationPanelImpl({
   const consumedDirectiveIdsRef = useRef(new Set<string>())
   const sessionEpochRef = useRef(0)
   const observedPrincipalRef = useRef(captureAssistantSessionPrincipal(application.sessions))
+  const composerSessionValidRef = useRef(true)
+  const composerSync = useAssistantComposerSync({
+    identity: JSON.stringify([accountScope, tabId, sessionEpochRef.current]),
+    binding: composerSessionValidRef.current ? sharedChat : undefined,
+    onRemote: (patch) => {
+      if (!composerSessionValidRef.current) {
+        return
+      }
+      if ('draft' in patch) {
+        const draft = patch.draft
+        inputRef.current = draft?.text ?? ''
+        setInputState(inputRef.current)
+        attachmentsRef.current = draft?.attachments ?? []
+        setAttachments(attachmentsRef.current)
+      }
+      if (patch.context) {
+        contextSelectionRef.current =
+          patch.context.scope === 'selection'
+            ? patch.context
+            : {
+                ...patch.context,
+                excerpt: contextSelectionRef.current.excerpt,
+              }
+        setContextSelectionState(contextSelectionRef.current)
+      }
+      if (patch.toolPermissionMode) {
+        chatToolPermissionModeRef.current = patch.toolPermissionMode
+        setChatToolPermissionMode(patch.toolPermissionMode)
+      }
+    },
+  })
+  composerUpdateRef.current = (patch) => {
+    if (!composerSessionValidRef.current) {
+      return
+    }
+    // A fresh chat carries its current defaults as well as its first draft.
+    // Existing remote fields must never be reset by typing in another tab.
+    if ('draft' in patch) {
+      const stored = sharedChatRef.current?.history?.composer
+      composerSync.update({
+        ...(!stored?.context ? { context: contextSelectionRef.current } : {}),
+        ...(!stored?.toolPermissionMode
+          ? {
+              toolPermissionMode:
+                chatToolPermissionModeRef.current ??
+                application.getPreference(PrefKey.AssistantToolPermissionMode, 'allow-read'),
+            }
+          : {}),
+        ...patch,
+      })
+    } else {
+      composerSync.update(patch)
+    }
+  }
+  const flushComposer = composerSync.flush
 
   useEffect(() => {
     const incoming = sharedChat?.history
@@ -847,7 +938,6 @@ function ConversationPanelImpl({
 
   // Mirror the context selection so an in-flight run reads the latest scope
   // without re-creating runPrompt on every selection change.
-  const contextSelectionRef = useRef<AssistantContextSelection>(contextSelection)
   contextSelectionRef.current = contextSelection
   const conversationModeRef = useRef(conversationMode)
   conversationModeRef.current = conversationMode
@@ -858,7 +948,7 @@ function ConversationPanelImpl({
       setContextSelection((previous) => ({ ...next, excerpt: previous.excerpt }))
       persistAssistantContextScope(accountScope, next.scope)
     },
-    [accountScope],
+    [accountScope, setContextSelection],
   )
 
   const resolveConfirmation = useCallback(
@@ -880,6 +970,9 @@ function ConversationPanelImpl({
           sessionToolDecisionsRef.current.clear()
           historyCheckpointRef.current?.schedule()
           toolPermissionModeRef.current = 'allow-all'
+          chatToolPermissionModeRef.current = 'allow-all'
+          setChatToolPermissionMode('allow-all')
+          composerUpdateRef.current({ toolPermissionMode: 'allow-all' })
           void Promise.all([
             application.setPreference(PrefKey.AssistantToolPermissionMode, 'allow-all'),
             // Older clients know only this boolean and cannot run the new
@@ -1037,7 +1130,7 @@ function ConversationPanelImpl({
     capture()
     document.addEventListener('selectionchange', capture)
     return () => document.removeEventListener('selectionchange', capture)
-  }, [application, isActive, contextOwnerKey])
+  }, [application, isActive, contextOwnerKey, setContextSelection])
 
   useEffect(() => {
     if (!isActive || !['current-note', 'open-notes', 'selection'].includes(contextSelection.scope)) {
@@ -1084,8 +1177,10 @@ function ConversationPanelImpl({
           event === ApplicationEvent.SignedOut ||
           event === ApplicationEvent.KeyStatusChanged
         ) {
-          if (!pendingPermissionWrite.current) {
-            toolPermissionModeRef.current = application.getPreference(PrefKey.AssistantToolPermissionMode, 'allow-read')
+          if (!pendingPermissionWrite.current && !abortRef.current) {
+            toolPermissionModeRef.current =
+              chatToolPermissionModeRef.current ??
+              application.getPreference(PrefKey.AssistantToolPermissionMode, 'allow-read')
           }
           const nextPrincipal = captureAssistantSessionPrincipal(application.sessions)
           const accountChanged = !assistantSessionPrincipalMatches(observedPrincipalRef.current, nextPrincipal)
@@ -1100,6 +1195,14 @@ function ConversationPanelImpl({
             setTokenWindows(null)
             // Account changes and root-key changes are hard privacy boundaries.
             sessionEpochRef.current += 1
+            composerSessionValidRef.current = false
+            composerUpdateRef.current = () => undefined
+            inputRef.current = ''
+            setInputState('')
+            contextSelectionRef.current = { scope: 'current-note' }
+            setContextSelectionState(contextSelectionRef.current)
+            chatToolPermissionModeRef.current = undefined
+            setChatToolPermissionMode(undefined)
             setPreparingPrompt(null)
             queueRef.current = []
             steerQueueRef.current = []
@@ -1185,6 +1288,7 @@ function ConversationPanelImpl({
       ])
       attachmentsRef.current = next
       setAttachments(next)
+      composerUpdateRef.current({ draft: { text: inputRef.current, attachments: next } })
     } catch (error) {
       if (mountedRef.current && task === attachmentTaskRef.current) {
         setAttachmentError(error instanceof Error ? error.message : 'The attachment could not be read.')
@@ -1196,8 +1300,13 @@ function ConversationPanelImpl({
     }
   }
   const toolPermissionMode =
-    pendingToolPermissionMode ?? application.getPreference(PrefKey.AssistantToolPermissionMode, 'allow-read')
-  toolPermissionModeRef.current = application.getPreference(PrefKey.AssistantToolPermissionMode, 'allow-read')
+    pendingToolPermissionMode ??
+    chatToolPermissionMode ??
+    application.getPreference(PrefKey.AssistantToolPermissionMode, 'allow-read')
+  if (!abortRef.current) {
+    toolPermissionModeRef.current =
+      chatToolPermissionMode ?? application.getPreference(PrefKey.AssistantToolPermissionMode, 'allow-read')
+  }
   const previousToolPermissionModeRef = useRef(toolPermissionMode)
   const assistantAvailability = getSelectionAIAvailability(application)
 
@@ -1263,9 +1372,9 @@ function ConversationPanelImpl({
         ) {
           return
         }
-        setInput(request.providerPrompt)
         attachmentsRef.current = request.attachments ?? []
         setAttachments(attachmentsRef.current)
+        setInput(request.providerPrompt)
         // A retry must not include an unsent turn twice in the model history.
         if (turnIds.length) {
           setMessagesSynced((current) => current.filter((message) => !turnIds.includes(message.id)))
@@ -1366,7 +1475,7 @@ function ConversationPanelImpl({
             scope: 'collection',
             collection: { type: 'notes', uuids: request.directive.noteUuid ? [request.directive.noteUuid] : [] },
           }
-        : contextSelectionRef.current
+        : (request.context ?? contextSelectionRef.current)
       const resolvedNoteUuids = new Set(resolveContextNoteUuids(application, activeContextSelection))
       if (request.directive?.noteUuid && !resolvedNoteUuids.has(request.directive.noteUuid)) {
         setMessagesSynced((prev) => [
@@ -1396,6 +1505,11 @@ function ConversationPanelImpl({
       const shared = sharedChatRef.current
       let prepared = false
       try {
+        if (!(await flushComposer())) {
+          throw new Error(
+            'Your chat draft could not be synced. It remains in this tab; retry when storage and your connection are available.',
+          )
+        }
         try {
           if (!shared) {
             for (const noteUuid of resolvedNoteUuids) {
@@ -1995,6 +2109,7 @@ function ConversationPanelImpl({
       recordToolAuthorization,
       setMessagesSynced,
       setInput,
+      flushComposer,
       shouldRequestConfirmation,
     ],
   )
@@ -2045,7 +2160,7 @@ function ConversationPanelImpl({
       void runPromptRef.current?.({ providerPrompt: directive.providerPrompt, directive })
     }
     onDirectiveConsumed?.(directive.id)
-  }, [application, directive, isRunning, notifyFirstMessage, onDirectiveConsumed])
+  }, [application, directive, isRunning, notifyFirstMessage, onDirectiveConsumed, setContextSelection])
 
   const handleSend = useCallback(() => {
     const trimmed = input.trim()
@@ -2053,11 +2168,11 @@ function ConversationPanelImpl({
       return
     }
     notifyFirstMessage(trimmed)
-    setInput('')
     const sent = attachmentsRef.current
     attachmentsRef.current = []
     setAttachments([])
-    void runPrompt({ providerPrompt: trimmed, attachments: sent })
+    setInput('')
+    void runPrompt({ providerPrompt: trimmed, attachments: sent, context: contextSelectionRef.current })
   }, [input, attachments, attachmentsBusy, isRunning, notifyFirstMessage, runPrompt, setInput])
 
   // Steer: inject guidance into the in-flight run without restarting it.
@@ -2084,7 +2199,12 @@ function ConversationPanelImpl({
     setAttachments([])
     queueRef.current = [
       ...queueRef.current,
-      { providerPrompt: trimmed, mode: conversationModeRef.current, attachments: sent },
+      {
+        providerPrompt: trimmed,
+        mode: conversationModeRef.current,
+        attachments: sent,
+        context: contextSelectionRef.current,
+      },
     ]
     setQueue(queueRef.current)
     setInput('')
@@ -2312,6 +2432,11 @@ function ConversationPanelImpl({
                   ) {
                     throw new Error('Tool permission preference was not applied')
                   }
+                  if (mountedRef.current && permissionWriteRevision.current === revision) {
+                    chatToolPermissionModeRef.current = next
+                    setChatToolPermissionMode(next)
+                    composerUpdateRef.current({ toolPermissionMode: next })
+                  }
                 })
                 .catch(() => {
                   if (mountedRef.current && permissionWriteRevision.current === revision) {
@@ -2322,10 +2447,9 @@ function ConversationPanelImpl({
                   if (mountedRef.current && permissionWriteRevision.current === revision) {
                     pendingPermissionWrite.current = false
                     setPendingToolPermissionMode(null)
-                    toolPermissionModeRef.current = application.getPreference(
-                      PrefKey.AssistantToolPermissionMode,
-                      'allow-read',
-                    )
+                    toolPermissionModeRef.current =
+                      chatToolPermissionModeRef.current ??
+                      application.getPreference(PrefKey.AssistantToolPermissionMode, 'allow-read')
                   }
                 })
             }}
@@ -2343,6 +2467,14 @@ function ConversationPanelImpl({
             <AssistantTranscriptCopyButton messages={messages} />
           </div>
         </div>
+        {Boolean(composerSync.error) && (
+          <div role="alert" className="text-warning mb-2 text-xs">
+            Draft and chat settings could not be synced. Your changes remain in this tab.
+            <button type="button" className="ml-1 underline" onClick={() => void composerSync.flush()}>
+              Retry
+            </button>
+          </div>
+        )}
         {!noticeDismissed && (
           <div className="text-warning mb-2 flex items-start gap-2 text-xs">
             <div className="min-w-0 flex-1">
@@ -2392,6 +2524,9 @@ function ConversationPanelImpl({
             const next = attachmentsRef.current.filter((_, item) => item !== index)
             attachmentsRef.current = next
             setAttachments(next)
+            composerUpdateRef.current({
+              draft: inputRef.current || next.length ? { text: inputRef.current, attachments: next } : null,
+            })
             setAttachmentError('')
           }}
           input={input}

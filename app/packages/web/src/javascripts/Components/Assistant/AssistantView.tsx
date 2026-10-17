@@ -1613,6 +1613,29 @@ const AssistantView = forwardRef<HTMLDivElement, Props>((props, ref) => {
                         ? {
                             ready: sharedReady,
                             history: sharedChats.find((chat) => chat.tab.id === tab.id),
+                            checkpointComposer: async (patch) => {
+                              const current = tabsRef.current.find((entry) => entry.id === tab.id)
+                              if (
+                                !sharedStore ||
+                                sharedStoreRef.current !== sharedStore ||
+                                application.sessions.getUser()?.uuid !== accountScope ||
+                                !current ||
+                                workspaceLockedRef.current
+                              ) {
+                                throw new Error('Synced chat storage is unavailable.')
+                              }
+                              await sharedStore.checkpointComposer(tab.id, patch, current)
+                              const canonical = await sharedStore.read()
+                              if (
+                                sharedStoreRef.current !== sharedStore ||
+                                application.sessions.getUser()?.uuid !== accountScope ||
+                                workspaceLockedRef.current
+                              ) {
+                                throw new Error('Synced chat storage is unavailable.')
+                              }
+                              seededChatIdsRef.current.add(tab.id)
+                              return canonical.find((chat) => chat.tab.id === tab.id)
+                            },
                             removeMessage: async (messageId) => {
                               if (
                                 !sharedStore ||

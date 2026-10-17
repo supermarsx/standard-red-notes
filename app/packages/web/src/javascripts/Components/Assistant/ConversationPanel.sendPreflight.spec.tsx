@@ -10,6 +10,7 @@ import { flushAssistantNoteEditors } from '@/Assistant/assistantNoteChanges'
 import { acquireAssistantChatRun } from '@/Assistant/assistantChatRunLease'
 import { prepareAssistantAttachment } from '@/Assistant/attachments'
 import { TextEncoder } from 'util'
+import { AssistantTools } from '@/Assistant/tools'
 
 jest.mock('@/Assistant/attachments', () => ({
   ...jest.requireActual('@/Assistant/attachments'),
@@ -293,6 +294,139 @@ describe('Assistant immediate send feedback and preflight fences', () => {
       await flush()
     })
   }
+
+  const composerBinding = (): AssistantSharedChatBinding => ({
+    ready: true,
+    history: {
+      tab: { id: 'preflight-chat', kind: 'chat', title: 'Test', createdAt: 1, updatedAt: 1, userRenamed: false },
+      messages: [],
+      deniedToolNames: [],
+      composer: {
+        draft: {
+          value: { text: 'Synced draft', attachments: [{ kind: 'text', name: 'draft.txt', text: 'Context' }] },
+          updatedAt: 1,
+        },
+        context: { value: { scope: 'current-note' }, updatedAt: 1 },
+        toolPermissionMode: { value: 'allow-read', updatedAt: 1 },
+      },
+    } as AssistantSharedChatBinding['history'],
+    refresh: jest.fn(async () => undefined),
+    checkpoint: jest.fn(async () => undefined),
+    checkpointComposer: jest.fn(async () => undefined),
+  })
+
+  it('hydrates shared composer text and attachments without echoing a composer write', async () => {
+    const shared = composerBinding()
+    await act(async () => {
+      render(false, shared)
+      await flush()
+    })
+    expect(container.querySelector('textarea')!.value).toBe('Synced draft')
+    expect(container.querySelector('[aria-label="Remove draft.txt"]')).not.toBeNull()
+    expect(container.querySelector('[aria-label="Assistant tool permissions"]')?.textContent).toBe('Read')
+    await act(async () => {
+      window.dispatchEvent(new Event('pagehide'))
+      await flush()
+    })
+    expect(shared.checkpointComposer).not.toHaveBeenCalled()
+    typeDraft('Local replacement')
+    await act(async () => {
+      window.dispatchEvent(new Event('pagehide'))
+      await flush()
+    })
+    expect(shared.checkpointComposer).toHaveBeenCalledWith({
+      draft: {
+        text: 'Local replacement',
+        attachments: [{ kind: 'text', name: 'draft.txt', text: 'Context' }],
+      },
+    })
+  })
+
+  it('checkpoints a cleared composer before sending and restores it after provider failure', async () => {
+    const shared = composerBinding()
+    shared.refresh = jest.fn(async () => shared.history)
+    jest.mocked(runConversationMode).mockRejectedValueOnce(new Error('Provider unavailable'))
+    await act(async () => {
+      render(false, shared)
+      await flush()
+    })
+    await sendDraft()
+    expect(shared.checkpointComposer).toHaveBeenCalledWith({ draft: null })
+    expect(container.querySelector('textarea')!.value).toBe('Synced draft')
+    expect(container.querySelector('[aria-label="Remove draft.txt"]')).not.toBeNull()
+    await act(async () => {
+      window.dispatchEvent(new Event('pagehide'))
+      await flush()
+    })
+    expect(shared.checkpointComposer).toHaveBeenLastCalledWith({
+      draft: {
+        text: 'Synced draft',
+        attachments: [{ kind: 'text', name: 'draft.txt', text: 'Context' }],
+      },
+    })
+  })
+
+  it('does not let remotely elevated composer permissions change an active run', async () => {
+    const shared = composerBinding()
+    shared.refresh = jest.fn(async () => shared.history)
+    await act(async () => {
+      render(false, shared)
+      await flush()
+    })
+    await sendDraft()
+    expect(runConversationMode).toHaveBeenCalledTimes(1)
+    const context = jest.mocked(AssistantTools).mock.calls[0][1]
+    const request = { name: 'notes.update', args: { uuid: 'context-note', text: 'Update note' } } as never
+    expect(await context.shouldRequestConfirmation!(request, true)).toBe(true)
+    const incoming = {
+      ...shared,
+      history: {
+        ...shared.history!,
+        composer: {
+          ...shared.history!.composer,
+          toolPermissionMode: { value: 'bypass' as const, updatedAt: 2 },
+        },
+      },
+    }
+    await act(async () => {
+      render(false, incoming)
+      await flush()
+    })
+    expect(await context.shouldRequestConfirmation!(request, true)).toBe(true)
+    expect(shared.checkpointComposer).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not rehydrate the old composer after a key boundary before the parent remounts', async () => {
+    const shared = composerBinding()
+    await act(async () => {
+      render(false, shared)
+      await flush()
+    })
+    expect(container.querySelector('textarea')!.value).toBe('Synced draft')
+    await act(async () => {
+      await eventObserver(ApplicationEvent.KeyStatusChanged)
+      await flush()
+    })
+    expect(container.querySelector('textarea')!.value).toBe('')
+    const incoming = {
+      ...shared,
+      history: {
+        ...shared.history!,
+        composer: {
+          ...shared.history!.composer,
+          draft: { value: { text: 'Old account incoming draft' }, updatedAt: 20 },
+        },
+      },
+    }
+    await act(async () => {
+      render(false, incoming)
+      window.dispatchEvent(new Event('pagehide'))
+      await flush()
+    })
+    expect(container.querySelector('textarea')!.value).toBe('')
+    expect(container.querySelector('[aria-label="Remove draft.txt"]')).toBeNull()
+    expect(shared.checkpointComposer).not.toHaveBeenCalled()
+  })
 
   it.each(['throw', 'result'] as const)(
     'restores a failed provider submission (%s) without duplicating the retry',
