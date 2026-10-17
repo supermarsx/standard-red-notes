@@ -3,6 +3,7 @@ import { WebApplication } from '@/Application/WebApplication'
 import * as chatHistory from './assistantChatHistory'
 import {
   AssistantSyncedChats,
+  MAX_SYNCED_CHAT_FINGERPRINT_BYTES,
   mergeSyncedChats,
   normalizeSyncedChatRecord,
   reconcileSyncedChatSnapshots,
@@ -243,6 +244,50 @@ it('reuses parsed transcripts across content-identical replacement payloads from
   }
 })
 
+it('bounds raw fingerprint memory without limiting readable records or reusing uncached invalid replacements', async () => {
+  const h = harness()
+  // Unknown schema fields are discarded by normalization, but still count in
+  // exact-content comparisons. They must not turn the cache into another copy
+  // of an arbitrarily large imported catalog.
+  for (let index = 0; index < 20; index++) {
+    h.values.set(`item-${index}`, {
+      uuid: `item-${index}`,
+      content: { ...writer(`writer-${index}`, [], { chatId: `chat-${index}` }), padding: 'x'.repeat(512 * 1024) },
+    })
+  }
+  const store = new AssistantSyncedChats(h.application, 'a')
+  expect(await store.read()).toHaveLength(20)
+  const cache = store as unknown as {
+    fingerprintBytes: number
+    parsedRecords: Map<string, { serializedContent?: string }>
+  }
+  const actualBytes = () =>
+    [...cache.parsedRecords.values()].reduce((sum, value) => sum + (value.serializedContent?.length ?? 0) * 2, 0)
+  expect(actualBytes()).toBeGreaterThan(0)
+  expect(actualBytes()).toBeLessThanOrEqual(MAX_SYNCED_CHAT_FINGERPRINT_BYTES)
+  expect(cache.fingerprintBytes).toBe(actualBytes())
+  expect(cache.parsedRecords.get('item-19')?.serializedContent).toBeUndefined()
+  // A valid parsed record without a retained fingerprint must not match a
+  // replacement whose serialization also returns undefined.
+  h.values.set('item-19', {
+    uuid: 'item-19',
+    content: { ...writer('writer-19', [], { chatId: 'chat-19' }), padding: 'x'.repeat(1024 * 1024) },
+  })
+  expect(await store.read()).toHaveLength(19)
+  // Invalid but serializable records never retain raw strings either.
+  h.values.set('invalid', { uuid: 'invalid', content: { invalid: 'x'.repeat(512 * 1024) } })
+  expect(await store.read()).toHaveLength(19)
+  expect(cache.parsedRecords.get('invalid')?.serializedContent).toBeUndefined()
+  h.values.clear()
+  expect(await store.read()).toEqual([])
+  expect(cache.fingerprintBytes).toBe(0)
+  h.values.set('small', { uuid: 'small', content: writer('small') })
+  await store.read()
+  expect(cache.fingerprintBytes).toBeGreaterThan(0)
+  store.dispose()
+  expect(cache.fingerprintBytes).toBe(0)
+})
+
 it('rechecks authorization and sharing before cache access and evicts removed or inadmissible records', async () => {
   const h = harness()
   const content = writer('a', [entry('private', null)])
@@ -254,10 +299,12 @@ it('rechecks authorization and sharing before cache access and evicts removed or
   authorized.mockReturnValue(false)
   expect(await store.read()).toEqual([])
   expect(store['parsedRecords'].size).toBe(0)
+  expect(store['fingerprintBytes']).toBe(0)
   authorized.mockReturnValue(true)
   expect((await store.read())[0].messages).toEqual([message('private')])
   h.values.set(item.uuid, { ...item, shared_vault_uuid: 'vault' } as typeof item)
   expect(await store.read()).toEqual([])
+  expect(store['fingerprintBytes']).toBe(0)
   h.values.set(item.uuid, { ...item, key_system_identifier: 'shared-key' } as typeof item)
   expect(await store.read()).toEqual([])
   h.values.set(item.uuid, item)
@@ -270,6 +317,7 @@ it('rechecks authorization and sharing before cache access and evicts removed or
   h.setLocked(true)
   await expect(store.read()).rejects.toThrow('unlocked')
   expect(store['parsedRecords'].size).toBe(0)
+  expect(store['fingerprintBytes']).toBe(0)
   h.setLocked(false)
   await store.read()
   h.setPrincipal('other')

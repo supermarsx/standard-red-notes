@@ -10,6 +10,8 @@ export const MAX_SYNCED_CHATS = 100
 export const MAX_CHAT_WRITERS = 64
 export const MAX_SYNCED_CHAT_RECORDS = 512
 export const MAX_SYNCED_CHAT_BYTES = 16 * 1024 * 1024
+/** Raw JSON fingerprints are optional acceleration, never a limit on readable history. */
+export const MAX_SYNCED_CHAT_FINGERPRINT_BYTES = 16 * 1024 * 1024
 const MAX_RECORD_BYTES = 1024 * 1024
 const MAX_ENTRIES = 80
 const id = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value)
@@ -325,6 +327,7 @@ export class AssistantSyncedChats {
     { content: unknown; serializedContent: string | undefined; parsed: Parsed | undefined; serializedLength: number }
   >()
   private previousRecords: Parsed[] = []
+  private fingerprintBytes = 0
   private previousChats: SyncedChat[] = []
   private mergedGroups = new Map<string, { records: Parsed[]; chat: SyncedChat | undefined }>()
   private catalogSerializedLength = 2
@@ -353,6 +356,7 @@ export class AssistantSyncedChats {
   }
   private clearReadCache(): void {
     this.parsedRecords.clear()
+    this.fingerprintBytes = 0
     this.previousRecords = []
     this.previousChats = []
     this.mergedGroups.clear()
@@ -435,15 +439,25 @@ export class AssistantSyncedChats {
           // Equal raw content can reuse its validated transcript; equal revision
           // clocks cannot, since a remote writer may send different contents.
           const serializedContent = serializeSyncedChatContent(item.content)
-          if (cached && cached.serializedContent === serializedContent) {
+          if (cached && serializedContent !== undefined && cached.serializedContent === serializedContent) {
             cached.content = item.content
           } else {
             const record =
               serializedContent === undefined ? undefined : normalizeSerializedChatContent(item.content, this.ownerUuid)
             const parsed = record ? { uuid: item.uuid, record } : undefined
+            this.fingerprintBytes -= (cached?.serializedContent?.length ?? 0) * 2
+            // Decrypted records already own their content. Do not duplicate an
+            // unbounded imported catalog (or invalid records) as JSON strings.
+            // Count UTF-16 bytes conservatively; cache misses still read normally.
+            const retainFingerprint =
+              parsed !== undefined &&
+              serializedContent !== undefined &&
+              this.fingerprintBytes + serializedContent.length * 2 <= MAX_SYNCED_CHAT_FINGERPRINT_BYTES
+            const fingerprint = retainFingerprint ? serializedContent : undefined
+            this.fingerprintBytes += (fingerprint?.length ?? 0) * 2
             cached = {
               content: item.content,
-              serializedContent,
+              serializedContent: fingerprint,
               parsed,
               serializedLength: parsed ? JSON.stringify(parsed).length : 0,
             }
@@ -454,6 +468,7 @@ export class AssistantSyncedChats {
       })
     for (const uuid of this.parsedRecords.keys()) {
       if (!seen.has(uuid)) {
+        this.fingerprintBytes -= (this.parsedRecords.get(uuid)?.serializedContent?.length ?? 0) * 2
         this.parsedRecords.delete(uuid)
       }
     }
