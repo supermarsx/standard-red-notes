@@ -95,6 +95,8 @@ const AssistantView = forwardRef<HTMLDivElement, Props>((props, ref) => {
   // Closing is a reversible hide. Keeping the panel mounted lets an in-flight
   // run continue; Delete is the only operation that erases the transcript.
   const [closedTabIds, setClosedTabIds] = useState<string[]>([])
+  const closedTabIdsRef = useRef(closedTabIds)
+  closedTabIdsRef.current = closedTabIds
   const [mountedTabIds, setMountedTabIds] = useState<string[]>([])
   // Never render or persist one account's chat metadata under another account
   // while React catches up with a sign-in/account switch.
@@ -791,7 +793,9 @@ const AssistantView = forwardRef<HTMLDivElement, Props>((props, ref) => {
     if (workspaceLockedRef.current || !tabsRef.current.some((tab) => tab.id === tabId)) {
       return
     }
-    setClosedTabIds((previous) => previous.filter((id) => id !== tabId))
+    closedTabIdsRef.current = closedTabIdsRef.current.filter((id) => id !== tabId)
+    setClosedTabIds(closedTabIdsRef.current)
+    activeTabIdRef.current = tabId
     setActiveTabId(tabId)
     setTabs((previous) => previous.map((tab) => (tab.id === tabId ? { ...tab, lastActiveAt: Date.now() } : tab)))
   }, [])
@@ -803,34 +807,38 @@ const AssistantView = forwardRef<HTMLDivElement, Props>((props, ref) => {
         checkpointMetadata(next)
         tabsRef.current = [...tabsRef.current, next]
         setTabs(tabsRef.current)
+        setHistoryOpen(false)
+        activeTabIdRef.current = next.id
         setActiveTabId(next.id)
       }
+      const visible = tabsRef.current.filter((tab) => !closedTabIdsRef.current.includes(tab.id))
       if (tabId === historyTabId) {
         setHistoryOpen(false)
-        if (visibleTabs[0]) {
-          resumeTab(visibleTabs[0].id)
+        if (visible[0]) {
+          if (activeTabIdRef.current === historyTabId) {
+            resumeTab(visible[0].id)
+          }
         } else {
           freshChat()
         }
         return
       }
-      const visible = tabs.filter((tab) => !closedTabIds.includes(tab.id))
       if (!visible.some((tab) => tab.id === tabId)) {
         return
       }
+      closedTabIdsRef.current = [...closedTabIdsRef.current, tabId]
+      setClosedTabIds(closedTabIdsRef.current)
       if (visible.length <= 1) {
-        setClosedTabIds((previous) => (previous.includes(tabId) ? previous : [...previous, tabId]))
         freshChat()
         return
       }
       const index = visible.findIndex((tab) => tab.id === tabId)
       const remaining = visible.filter((tab) => tab.id !== tabId)
-      setClosedTabIds((prev) => (prev.includes(tabId) ? prev : [...prev, tabId]))
-      if (activeTabId === tabId) {
+      if (activeTabIdRef.current === tabId) {
         resumeTab((remaining[index] ?? remaining[index - 1] ?? remaining[0]).id)
       }
     },
-    [activeTabId, closedTabIds, tabs, historyTabId, visibleTabs, resumeTab, checkpointMetadata],
+    [historyTabId, resumeTab, checkpointMetadata],
   )
 
   const restoreLastClosedTab = useCallback(() => {

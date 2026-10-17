@@ -239,4 +239,38 @@ describe('AssistantView shared conversation modes', () => {
     expect(container.querySelectorAll('[role="tab"]')).toHaveLength(1)
     expect(container.querySelector<HTMLSelectElement>('[data-chat-active="true"] select')?.value).toBe('agent')
   })
+
+  it('closes legacy tabs in one batch and leaves exactly one fresh conversation', async () => {
+    const { application, values } = createApplication()
+    values.set('test-synced-chats:account-a', [
+      { tab: { id: 'research', title: 'Old research', kind: 'research', userRenamed: false } },
+      { tab: { id: 'deep', title: 'Old deep research', kind: 'deep-research', userRenamed: false } },
+    ])
+    await renderAssistant(root, application)
+    click(container.querySelector('[aria-label="Restore closed chat"]')!)
+    const closes = [...container.querySelectorAll('[role="tab"] [aria-label="Close chat"]')]
+    expect(closes).toHaveLength(2)
+    act(() => {
+      closes.forEach((close) => close.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    })
+    expect(container.querySelectorAll('[role="tab"]')).toHaveLength(1)
+    expect(container.querySelector('[role="tab"]')?.getAttribute('aria-label')).toBe('New chat')
+    expect(container.querySelector('[role="tab"]')?.getAttribute('aria-selected')).toBe('true')
+    expect(container.querySelector<HTMLSelectElement>('[data-chat-active="true"] select')?.value).toBe('agent')
+    click(container.querySelector('[aria-label="Close chat"]')!)
+    expect(container.querySelectorAll('[role="tab"]')).toHaveLength(1)
+    expect(container.querySelector('[role="tab"]')?.getAttribute('aria-label')).toBe('New chat')
+  })
+
+  it('closing the last conversation dismisses history and opens only a fresh chat', async () => {
+    const { application } = createApplication()
+    await renderAssistant(root, application)
+    click(container.querySelector('[aria-label="Chat history"]')!)
+    click(container.querySelector('[aria-label="Close chat"]')!)
+    expect(container.querySelectorAll('[role="tab"]')).toHaveLength(1)
+    expect(container.querySelector('[role="tab"]')?.getAttribute('aria-label')).toBe('New chat')
+    expect(container.querySelector('[role="tab"]')?.getAttribute('aria-selected')).toBe('true')
+    expect(container.querySelector('[aria-label="Close history"]')).toBeNull()
+    expect(container.querySelector('textarea')?.value).toBe('')
+  })
 })
