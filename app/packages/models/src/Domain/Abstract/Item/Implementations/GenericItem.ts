@@ -1,4 +1,5 @@
-import { dateToLocalizedString, deepFreeze } from '@standardnotes/utils'
+import { deferDeepFreeze } from '../../../Utilities/DeferredDeepFreeze'
+import { dateToLocalizedString } from '@standardnotes/utils'
 import { TransferPayload } from './../../TransferPayload/Interfaces/TransferPayload'
 import { ItemContentsDiffer } from '../../../Utilities/Item/ItemContentsDiffer'
 import { ItemInterface } from '../Interfaces/ItemInterface'
@@ -25,10 +26,7 @@ export abstract class GenericItem<P extends PayloadInterface = PayloadInterface>
     this.userModifiedDate = this.serverUpdatedAt || new Date()
     this.updatedAtString = dateToLocalizedString(this.userModifiedDate)
 
-    const timeToAllowSubclassesToFinishConstruction = 0
-    setTimeout(() => {
-      deepFreeze(this)
-    }, timeToAllowSubclassesToFinishConstruction)
+    deferDeepFreeze(this)
   }
 
   get uuid() {

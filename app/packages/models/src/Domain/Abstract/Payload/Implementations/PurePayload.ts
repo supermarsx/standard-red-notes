@@ -1,4 +1,5 @@
-import { deepFreeze, useBoolean } from '@standardnotes/utils'
+import { deferDeepFreeze } from '../../../Utilities/DeferredDeepFreeze'
+import { useBoolean } from '@standardnotes/utils'
 import { PayloadInterface } from '../Interfaces/PayloadInterface'
 import { PayloadSource } from '../Types/PayloadSource'
 import { TransferPayload } from '../../TransferPayload/Interfaces/TransferPayload'
@@ -92,10 +93,7 @@ export abstract class PurePayload<
 
     this.signatureData = rawPayload.signatureData
 
-    const timeToAllowSubclassesToFinishConstruction = 0
-    setTimeout(() => {
-      deepFreeze(this)
-    }, timeToAllowSubclassesToFinishConstruction)
+    deferDeepFreeze(this)
   }
 
   ejected(): TransferPayload {
