@@ -1474,3 +1474,35 @@ describe('whose build the shell cache is', () => {
     }
   })
 })
+
+describe('Assistant chat persistence diagnostics', () => {
+  it('exports an unresolved save finding with closed stage and cause and clears it after recovery', () => {
+    const assistantHistory = {
+      failures: 2,
+      recoveries: 0,
+      active: true,
+      latest: { code: 'WRITE_FAILED' as const, stage: 'write' as const, cause: 'InvalidStateError' as const },
+    }
+    const model = buildBrowserSection({ assistantHistory })
+    const report = model.reportLines.join('\n')
+    expect(report).toContain('ASSISTANT_CHAT_SAVE_FAILED')
+    expect(report).toContain('WRITE_FAILED')
+    expect(report).toContain('InvalidStateError')
+    expect(
+      buildBrowserSection({ assistantHistory: { ...assistantHistory, active: false, recoveries: 1 } }).reportLines.join(
+        '\n',
+      ),
+    ).not.toContain('ASSISTANT_CHAT_SAVE_FAILED')
+  })
+  it('masks unrecognized code, stage and cause even if a caller bypasses the type boundary', () => {
+    const model = buildBrowserSection({
+      assistantHistory: {
+        failures: 1,
+        recoveries: 0,
+        active: true,
+        latest: { code: 'PRIVATE-CODE', stage: 'PRIVATE-STAGE', cause: 'PRIVATE-CAUSE' },
+      } as never,
+    })
+    expect(model.reportLines.join('\n')).not.toContain('PRIVATE-')
+  })
+})

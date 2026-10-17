@@ -1,3 +1,8 @@
+import {
+  readAssistantHistoryDiagnostics,
+  subscribeAssistantHistoryDiagnostics,
+} from '@/Assistant/assistantHistoryDiagnostics'
+import { getAssistantAccountScope } from '@/Assistant/personaSettings'
 import { FunctionComponent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ApplicationEvent, ContentType, isErrorResponse, PrefKey, SettingName } from '@standardnotes/snjs'
 import { convertTimestampToMilliseconds } from '@standardnotes/utils'
@@ -445,6 +450,12 @@ const observed = <T,>(read: () => T): T | undefined => {
  * line — see diagnosticsReport.ts and `SafeValue` in diagnosticsSections.ts.
  */
 const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForbidden }) => {
+  const [assistantHistoryRevision, setAssistantHistoryRevision] = useState(0)
+  useEffect(
+    () => subscribeAssistantHistoryDiagnostics(application, () => setAssistantHistoryRevision((value) => value + 1)),
+    [application],
+  )
+  const assistantHistoryScope = getAssistantAccountScope(application)
   const [payload, setPayload] = useState<SyncDiagnosticsPayload | undefined>(undefined)
   const [loading, setLoading] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -2008,16 +2019,28 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
       }),
     [accountObservations, payload, readFailure, readings, witnesses],
   )
+  // The ledger revision invalidates this snapshot when a checkpoint fails or recovers.
   const browserModel = useMemo(
     () =>
       buildBrowserSection({
         observations: browserObservations,
+        assistantHistory: readAssistantHistoryDiagnostics(application, assistantHistoryScope),
         clock,
         ...(csp === undefined ? {} : { csp }),
         checks: readings,
         witnesses,
       }),
-    [browserObservations, clock, csp, readings, witnesses],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- The subscription versions the mutable diagnostic ledger.
+    [
+      application,
+      assistantHistoryScope,
+      assistantHistoryRevision,
+      browserObservations,
+      clock,
+      csp,
+      readings,
+      witnesses,
+    ],
   )
 
   /**

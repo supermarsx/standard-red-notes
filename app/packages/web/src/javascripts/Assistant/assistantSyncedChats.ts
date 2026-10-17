@@ -5,6 +5,108 @@ import { PersistedAssistantMessage, sanitizeAssistantChatMessages } from './assi
 import type { AssistantWorkTabKind, ChatTab } from './chatTabs'
 import { AssistantConversationMode, isAssistantConversationMode } from './conversationModes'
 
+/** Closed diagnostics: never expose exception text, note contents or provider credentials. */
+export const ASSISTANT_CHAT_STORAGE_MESSAGES = {
+  QUOTA_EXCEEDED: 'Browser storage is full. Free some disk space, then retry saving this chat.',
+  STORAGE_UNAVAILABLE: 'Synced chats are unavailable until this account is loaded and unlocked.',
+  HISTORY_NOT_READY: 'Chat history is still loading. Wait for it to finish, then retry.',
+  HISTORY_INVALID: 'Chat checkpoint did not pass encrypted storage validation.',
+  SESSION_CHANGED: 'The account changed before this chat could be saved.',
+  OWNERSHIP_LOST: 'This chat no longer owns its save checkpoint. Retry after chat ownership is re-established.',
+  ATTACHMENT_LIMIT: 'The chat attachments exceed the supported encrypted storage limit.',
+  WRITE_FAILED: 'The chat checkpoint could not be saved. Your current messages remain in this tab.',
+  UNKNOWN_FAILURE: 'The chat checkpoint could not be completed. Your current messages remain in this tab.',
+  SYNC_FAILED:
+    'The encrypted chat checkpoint could not complete syncing. Your current messages remain in this tab. Check your connection and retry.',
+  READ_ONLY: 'This session cannot save synced chats.',
+  CHAT_DELETED: 'This chat was deleted on another device.',
+  CHAT_LIMIT: 'Synced chat storage is full. Delete an older chat first.',
+  WRITER_LIMIT: 'This chat has reached its writer limit. Start a new chat to continue.',
+  STORAGE_BUDGET:
+    'The encrypted chat storage budget is full, including retained deletion markers. Export or start with a different account before adding more history.',
+  INVALID_CHAT: 'Invalid synced chat identity.',
+  WRITER_UNAVAILABLE: 'This browser cannot coordinate encrypted chat writers safely.',
+  CHECKPOINT_MISSING: 'The chat checkpoint disappeared before saving.',
+} as const
+export type AssistantChatStorageFailureCode = keyof typeof ASSISTANT_CHAT_STORAGE_MESSAGES
+export const ASSISTANT_CHAT_STORAGE_FAILURE_CODES = Object.keys(
+  ASSISTANT_CHAT_STORAGE_MESSAGES,
+) as readonly AssistantChatStorageFailureCode[]
+export const ASSISTANT_CHAT_STORAGE_FAILURE_STAGES = [
+  'read',
+  'validate',
+  'write',
+  'checkpoint',
+  'writer',
+  'access',
+] as const
+export type AssistantChatStorageFailureStage = (typeof ASSISTANT_CHAT_STORAGE_FAILURE_STAGES)[number]
+export const ASSISTANT_CHAT_STORAGE_FAILURE_CAUSES = [
+  'TypeError',
+  'InvalidStateError',
+  'AbortError',
+  'SecurityError',
+  'quota',
+  'unknown',
+] as const
+export type AssistantChatStorageFailureCause = (typeof ASSISTANT_CHAT_STORAGE_FAILURE_CAUSES)[number]
+export type AssistantChatStorageFailure = {
+  cause?: AssistantChatStorageFailureCause
+  code: AssistantChatStorageFailureCode
+  stage: AssistantChatStorageFailureStage
+  message: string
+}
+export class AssistantChatStorageError extends Error {
+  constructor(
+    readonly code: AssistantChatStorageFailureCode,
+    readonly stage: AssistantChatStorageFailureStage,
+    readonly cause?: AssistantChatStorageFailureCause,
+  ) {
+    super(ASSISTANT_CHAT_STORAGE_MESSAGES[code])
+    this.name = 'AssistantChatStorageError'
+  }
+}
+const storageCause = (error: unknown): AssistantChatStorageFailureCause => {
+  const name =
+    error instanceof Error || (typeof DOMException !== 'undefined' && error instanceof DOMException)
+      ? error.name
+      : undefined
+  if (name === 'QuotaExceededError' || name === 'NS_ERROR_DOM_QUOTA_REACHED') {
+    return 'quota'
+  }
+  return name === 'TypeError' || name === 'InvalidStateError' || name === 'AbortError' || name === 'SecurityError'
+    ? name
+    : 'unknown'
+}
+const isQuotaFailure = (error: unknown): boolean => storageCause(error) === 'quota'
+export function getAssistantChatStorageFailure(error: unknown): AssistantChatStorageFailure {
+  const known =
+    error instanceof AssistantChatStorageError &&
+    Object.hasOwn(ASSISTANT_CHAT_STORAGE_MESSAGES, error.code) &&
+    ASSISTANT_CHAT_STORAGE_FAILURE_STAGES.includes(error.stage)
+      ? error
+      : new AssistantChatStorageError(
+          isQuotaFailure(error) ? 'QUOTA_EXCEEDED' : 'UNKNOWN_FAILURE',
+          'checkpoint',
+          storageCause(error),
+        )
+  return {
+    code: known.code,
+    stage: known.stage,
+    message: ASSISTANT_CHAT_STORAGE_MESSAGES[known.code],
+    ...(known.cause && ASSISTANT_CHAT_STORAGE_FAILURE_CAUSES.includes(known.cause) ? { cause: known.cause } : {}),
+  }
+}
+function storageFailure(error: unknown, stage: AssistantChatStorageFailureStage): AssistantChatStorageError {
+  return error instanceof AssistantChatStorageError
+    ? error
+    : new AssistantChatStorageError(
+        isQuotaFailure(error) ? 'QUOTA_EXCEEDED' : stage === 'checkpoint' ? 'SYNC_FAILED' : 'WRITE_FAILED',
+        stage,
+        storageCause(error),
+      )
+}
+
 export const ASSISTANT_CHAT_CONTENT_TYPE = 'SN|AssistantChat'
 export const MAX_SYNCED_CHATS = 100
 export const MAX_CHAT_WRITERS = 64
@@ -367,7 +469,7 @@ export class AssistantSyncedChats {
       return
     }
     if (!navigator.locks) {
-      throw new Error('This browser cannot coordinate encrypted chat writers safely.')
+      throw new AssistantChatStorageError('WRITER_UNAVAILABLE', 'writer')
     }
     for (let attempt = 0; attempt < 2; attempt++) {
       let ready!: (acquired: boolean) => void
@@ -378,26 +480,37 @@ export class AssistantSyncedChats {
       const lifetime = new Promise<void>((resolve) => {
         release = resolve
       })
-      void navigator.locks
-        .request(
-          `assistant-chat-writer:${this.ownerUuid}:${this.writerId}`,
-          { mode: 'exclusive', ifAvailable: true },
-          async (lock) => {
-            ready(Boolean(lock))
-            if (lock) {
-              await lifetime
-            }
-          },
+      let requestFailed = false
+      let requestCause: AssistantChatStorageFailureCause = 'unknown'
+      void Promise.resolve()
+        .then(() =>
+          navigator.locks.request(
+            `assistant-chat-writer:${this.ownerUuid}:${this.writerId}`,
+            { mode: 'exclusive', ifAvailable: true },
+            async (lock) => {
+              ready(Boolean(lock))
+              if (lock) {
+                await lifetime
+              }
+            },
+          ),
         )
-        .catch(() => ready(false))
+        .catch((error: unknown) => {
+          requestCause = storageCause(error)
+          requestFailed = true
+          ready(false)
+        })
       if (await acquired) {
         if (!this.current()) {
           release()
-          throw new Error('The account changed before chat writer admission.')
+          throw new AssistantChatStorageError('SESSION_CHANGED', 'writer')
         }
         this.releaseIdentity = release
         this.identityClaimed = true
         return
+      }
+      if (requestFailed) {
+        throw new AssistantChatStorageError('WRITER_UNAVAILABLE', 'writer', requestCause)
       }
       // Browser duplication copies sessionStorage. The loser rotates before any item write.
       this._writerId = crypto.randomUUID()
@@ -407,7 +520,7 @@ export class AssistantSyncedChats {
         /* Session persistence is optional; writer admission is authoritative. */
       }
     }
-    throw new Error('Another view owns this chat writer identity. Try again.')
+    throw new AssistantChatStorageError('OWNERSHIP_LOST', 'writer')
   }
   private current(): boolean {
     return this.active && this.application.sessions.getUser()?.uuid === this.ownerUuid
@@ -420,7 +533,7 @@ export class AssistantSyncedChats {
       !this.current()
     ) {
       this.clearReadCache()
-      throw new Error('Synced chats are unavailable until this account is loaded and unlocked.')
+      throw new AssistantChatStorageError('STORAGE_UNAVAILABLE', 'access')
     }
   }
   private records(): Parsed[] {
@@ -535,33 +648,31 @@ export class AssistantSyncedChats {
       await this.assertAvailable()
       await this.claimIdentity()
       if (this.application.sessions.isCurrentSessionReadOnly()) {
-        throw new Error('This session cannot save synced chats.')
+        throw new AssistantChatStorageError('READ_ONLY', 'validate')
       }
       if (!id(tab.id)) {
-        throw new Error('Invalid synced chat identity.')
+        throw new AssistantChatStorageError('INVALID_CHAT', 'validate')
       }
       const records = this.records(),
         group = records.filter(({ record }) => record.chatId === tab.id)
       if (group.some(({ record }) => record.kind === 'deleted')) {
-        throw new Error('This chat was deleted on another device.')
+        throw new AssistantChatStorageError('CHAT_DELETED', 'validate')
       }
       const own = group
         .filter(({ record }) => record.writerId === this.writerId)
         .sort((a, b) => a.record.revision - b.record.revision || rank(a, b))
         .at(-1)
       if (!own && new Set(group.map(({ record }) => record.writerId)).size >= MAX_CHAT_WRITERS) {
-        throw new Error('This chat has reached its writer limit. Start a new chat to continue.')
+        throw new AssistantChatStorageError('WRITER_LIMIT', 'validate')
       }
       if (!group.length && mergeSyncedChats(records).length >= MAX_SYNCED_CHATS) {
-        throw new Error('Synced chat storage is full. Delete an older chat first.')
+        throw new AssistantChatStorageError('CHAT_LIMIT', 'validate')
       }
       if (
         (!own && records.filter(({ record }) => record.kind === 'writer').length >= MAX_SYNCED_CHAT_RECORDS) ||
         this.catalogSerializedLength >= MAX_SYNCED_CHAT_BYTES
       ) {
-        throw new Error(
-          'The encrypted chat storage budget is full, including retained deletion markers. Export or start with a different account before adding more history.',
-        )
+        throw new AssistantChatStorageError('STORAGE_BUDGET', 'validate')
       }
       const revision = (own?.record.revision ?? 0) + 1,
         updatedAt = Date.now()
@@ -641,7 +752,7 @@ export class AssistantSyncedChats {
         this.ownerUuid,
       )
       if (!record) {
-        throw new Error('Chat checkpoint did not pass encrypted storage validation.')
+        throw new AssistantChatStorageError('HISTORY_INVALID', 'validate')
       }
       await this.write(own?.uuid, record)
     })
@@ -655,7 +766,7 @@ export class AssistantSyncedChats {
       }
       const group = this.records().filter(({ record }) => record.chatId === chatId)
       if (group.some(({ record }) => record.kind === 'deleted')) {
-        throw new Error('This chat was deleted on another device.')
+        throw new AssistantChatStorageError('CHAT_DELETED', 'validate')
       }
       const merged = mergeSyncedChats(group)[0]
       if (!merged) {
@@ -739,26 +850,34 @@ export class AssistantSyncedChats {
   }
   private async write(uuid: string | undefined, record: SyncedChatRecord): Promise<void> {
     if (!this.current()) {
-      throw new Error('The account changed before this chat could be saved.')
+      throw new AssistantChatStorageError('SESSION_CHANGED', 'write')
     }
     const content = { ...record, references: [] } as ItemContent
-    if (uuid) {
-      const item = this.application.items.findItem<DecryptedItemInterface>(uuid)
-      if (!item) {
-        throw new Error('The chat checkpoint disappeared before saving.')
-      }
-      await this.application.mutator.changeItem<DecryptedItemMutator>(item, (mutator) => {
-        if (!this.current()) {
-          throw new Error('The account changed before saving.')
+    try {
+      if (uuid) {
+        const item = this.application.items.findItem<DecryptedItemInterface>(uuid)
+        if (!item) {
+          throw new AssistantChatStorageError('CHECKPOINT_MISSING', 'write')
         }
-        mutator.setCustomContent(content)
-      })
-    } else {
-      await this.application.mutator.createItem(ASSISTANT_CHAT_CONTENT_TYPE, content, true)
+        await this.application.mutator.changeItem<DecryptedItemMutator>(item, (mutator) => {
+          if (!this.current()) {
+            throw new AssistantChatStorageError('SESSION_CHANGED', 'write')
+          }
+          mutator.setCustomContent(content)
+        })
+      } else {
+        await this.application.mutator.createItem(ASSISTANT_CHAT_CONTENT_TYPE, content, true)
+      }
+    } catch (error) {
+      throw storageFailure(error, 'write')
     }
     if (!this.current()) {
-      throw new Error('The account changed while this chat was saving.')
+      throw new AssistantChatStorageError('SESSION_CHANGED', 'write')
     }
-    await this.application.sync.sync({ sourceDescription: 'Assistant encrypted chat checkpoint' })
+    try {
+      await this.application.sync.sync({ sourceDescription: 'Assistant encrypted chat checkpoint' })
+    } catch (error) {
+      throw storageFailure(error, 'checkpoint')
+    }
   }
 }

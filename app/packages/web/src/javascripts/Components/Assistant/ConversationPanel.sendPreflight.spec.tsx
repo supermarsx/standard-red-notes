@@ -1,4 +1,5 @@
 /** @jest-environment jsdom */
+import { AssistantChatStorageError, type AssistantSharedChatBinding } from '@/Assistant/assistantSyncedChats'
 import { act, type RefObject, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { ApplicationEvent } from '@standardnotes/snjs'
@@ -7,7 +8,6 @@ import { type AgentResult } from '@/Assistant/agent'
 import ConversationPanel from './ConversationPanel'
 import { flushAssistantNoteEditors } from '@/Assistant/assistantNoteChanges'
 import { acquireAssistantChatRun } from '@/Assistant/assistantChatRunLease'
-import type { AssistantSharedChatBinding } from '@/Assistant/assistantSyncedChats'
 
 jest.mock('@/Assistant/conversationModeRunner', () => ({ runConversationMode: jest.fn() }))
 jest.mock('@/Assistant/agent', () => ({ run: jest.fn() }))
@@ -368,6 +368,44 @@ describe('Assistant immediate send feedback and preflight fences', () => {
     expect(container.textContent).toContain('could not be saved')
     expect(container.textContent).not.toContain('could not be read safely')
     expect(container.querySelector('[aria-label="Generating response"]')).toBeNull()
+  })
+
+  it('shows a safe reason and diagnostic code for a failed checkpoint', async () => {
+    const shared = {
+      ready: true,
+      refresh: jest.fn(async () => undefined),
+      checkpoint: jest.fn(async () => {
+        const error = new AssistantChatStorageError('QUOTA_EXCEEDED', 'write')
+        error.message = 'SECRET private chat text'
+        throw error
+      }),
+    }
+    await act(async () => {
+      render('quota-failure', shared)
+      await flush()
+    })
+    expect(runConversationMode).not.toHaveBeenCalled()
+    expect(container.textContent).toContain('QUOTA_EXCEEDED (write)')
+    expect(container.textContent).toContain('Free some disk space')
+    expect(container.textContent).not.toContain('SECRET')
+  })
+
+  it('does not start the provider when shared readiness disappears during preflight', async () => {
+    const shared = {
+      ready: true,
+      refresh: jest.fn(async () => {
+        shared.ready = false
+        return undefined
+      }),
+      checkpoint: jest.fn(async () => undefined),
+    }
+    await act(async () => {
+      render('readiness-race', shared)
+      await flush()
+    })
+    expect(runConversationMode).not.toHaveBeenCalled()
+    expect(shared.checkpoint).not.toHaveBeenCalled()
+    expect(container.textContent).toContain('HISTORY_NOT_READY')
   })
 
   it('persists stopped shared runs with the real lease guard and retains already received text', async () => {

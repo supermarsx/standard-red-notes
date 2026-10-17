@@ -1,3 +1,9 @@
+import {
+  AssistantChatStorageError,
+  getAssistantChatStorageFailure,
+  type AssistantSharedChatBinding,
+} from '@/Assistant/assistantSyncedChats'
+import { reportAssistantHistoryFailure, reportAssistantHistoryRecovery } from '@/Assistant/assistantHistoryDiagnostics'
 import { changedAssistantMessageIds } from '@/Assistant/assistantMessageRevisions'
 import {
   AssistantAttachment,
@@ -103,7 +109,6 @@ import {
 } from '@/Assistant/assistantNoteChanges'
 import { applyAssistantChangeHistory } from '@/Assistant/assistantChangeLedger'
 import AssistantMessageActions from './AssistantMessageActions'
-import type { AssistantSharedChatBinding } from '@/Assistant/assistantSyncedChats'
 import { acquireAssistantChatRun, AssistantChatRunGuard } from '@/Assistant/assistantChatRunLease'
 import {
   acknowledgeAssistantSharedVersions,
@@ -307,6 +312,9 @@ function ConversationPanelImpl({
   })
   const historyReadFailed = initialHistoryRead.status === 'error'
   const [historyFailure, setHistoryFailure] = useState<'read' | 'write' | null>(historyReadFailed ? 'read' : null)
+  const historyDiagnosticSource = JSON.stringify([accountScope, tabId])
+  const [historyFailureDetail, setHistoryFailureDetail] = useState<ReturnType<typeof getAssistantChatStorageFailure>>()
+  const historyFailureDetailRef = useRef<ReturnType<typeof getAssistantChatStorageFailure> | undefined>(undefined)
   const effectivePersistenceAllowed = persistenceAllowed && historyFailure !== 'read'
   const [messages, setMessages] = useState<UIMessage[]>(() =>
     hydrateAssistantHistory(initialHistoryRead.status === 'found' ? initialHistoryRead.messages : []),
@@ -469,11 +477,17 @@ function ConversationPanelImpl({
     }
   }, [sharedChat?.history])
 
-  const markHistoryPersistenceFailed = useCallback(() => {
-    if (mountedRef.current) {
-      setHistoryFailure((previous) => (previous === 'read' ? 'read' : 'write'))
-    }
-  }, [])
+  const markHistoryPersistenceFailed = useCallback(
+    (error: unknown, scope = getAssistantAccountScope(application)) => {
+      const failure = reportAssistantHistoryFailure(application, scope, error, historyDiagnosticSource)
+      if (mountedRef.current && scope === getAssistantAccountScope(application)) {
+        historyFailureDetailRef.current = failure
+        setHistoryFailureDetail(failure)
+        setHistoryFailure((previous) => (previous === 'read' ? 'read' : 'write'))
+      }
+    },
+    [application, historyDiagnosticSource],
+  )
 
   const setMessagesSynced = useCallback((updater: (prev: UIMessage[]) => UIMessage[]) => {
     const previous = messagesRef.current
@@ -575,6 +589,7 @@ function ConversationPanelImpl({
   )
 
   const writeChatHistory = useCallback(async () => {
+    const persistenceScope = getAssistantAccountScope(application)
     const history = persistableHistoryRef.current
     const persist = runPersistenceRef.current
     const shared = sharedChatRef.current
@@ -582,10 +597,13 @@ function ConversationPanelImpl({
       return
     }
     // Incoming sync updates schedule the same checkpoint effect as local edits.
-    // Skip clean/unready shared histories before mapping and sanitizing the
+    // Skip clean shared histories before mapping and sanitizing the
     // entire transcript, especially for inactive mounted chat tabs.
-    if (shared && (!sharedDirtyRef.current || !shared.ready)) {
+    if (shared && !sharedDirtyRef.current) {
       return
+    }
+    if (shared && !shared.ready) {
+      throw new AssistantChatStorageError('HISTORY_NOT_READY', 'checkpoint')
     }
     const checkpointSource = messagesRef.current
     const dirtyVersions = new Map(sharedDirtyIdsRef.current)
@@ -622,14 +640,12 @@ function ConversationPanelImpl({
         JSON.stringify(normalizedMessages.find((item) => item.id === message.id)?.attachments) !==
           JSON.stringify(message.attachments)
       ) {
-        throw new Error(
-          'This conversation cannot retain another attachment safely. Remove earlier attachments or start a new chat.',
-        )
+        throw new AssistantChatStorageError('ATTACHMENT_LIMIT', 'validate')
       }
     }
     if (shared) {
       if (runLeaseRef.current && !runLeaseRef.current.canCheckpoint()) {
-        throw new Error('Chat generation ownership expired before checkpointing.')
+        throw new AssistantChatStorageError('OWNERSHIP_LOST', 'checkpoint')
       }
       const acknowledged = await shared.checkpoint(
         latestMessages,
@@ -637,7 +653,10 @@ function ConversationPanelImpl({
           .filter(([, decision]) => decision === false)
           .map(([name]) => name),
       )
-      if (mountedRef.current) {
+      reportAssistantHistoryRecovery(application, persistenceScope, historyDiagnosticSource)
+      if (mountedRef.current && persistenceScope === getAssistantAccountScope(application)) {
+        historyFailureDetailRef.current = undefined
+        setHistoryFailureDetail(undefined)
         setHistoryFailure(null)
       }
       acknowledgeAssistantSharedVersions(sharedDirtyIdsRef.current, dirtyVersions)
@@ -661,7 +680,7 @@ function ConversationPanelImpl({
       }
       return
     }
-    try {
+    {
       const persisted = await persist!(() =>
         persistAssistantChatHistoryStrict(
           application.storage,
@@ -674,17 +693,25 @@ function ConversationPanelImpl({
         ),
       )
       if (!persisted) {
-        throw new Error('Assistant chat persistence ownership was lost before the write completed.')
+        throw new AssistantChatStorageError('OWNERSHIP_LOST', 'write')
       }
-      if (mountedRef.current) {
+      reportAssistantHistoryRecovery(application, persistenceScope, historyDiagnosticSource)
+      if (mountedRef.current && persistenceScope === getAssistantAccountScope(application)) {
+        historyFailureDetailRef.current = undefined
+        setHistoryFailureDetail(undefined)
         setHistoryFailure((previous) => (previous === 'write' ? null : previous))
       }
+    }
+  }, [application, historyDiagnosticSource])
+  historyWriterRef.current = async () => {
+    const scope = getAssistantAccountScope(application)
+    try {
+      await writeChatHistory()
     } catch (error) {
-      markHistoryPersistenceFailed()
+      markHistoryPersistenceFailed(error, scope)
       throw error
     }
-  }, [application, markHistoryPersistenceFailed])
-  historyWriterRef.current = writeChatHistory
+  }
   if (!historyCheckpointRef.current) {
     historyCheckpointRef.current = createAssistantChatHistoryCheckpoint(() => historyWriterRef.current())
   }
@@ -694,10 +721,10 @@ function ConversationPanelImpl({
       await historyCheckpointRef.current!.flush()
       return true
     } catch {
-      markHistoryPersistenceFailed()
+      // The writer records both explicit flush failures and scheduled checkpoints.
       return false
     }
-  }, [markHistoryPersistenceFailed])
+  }, [])
 
   useEffect(() => {
     if (!effectivePersistenceAllowed || !registerPersistenceFinalizer) {
@@ -1538,7 +1565,7 @@ function ConversationPanelImpl({
             {
               kind: 'error',
               id: newId(),
-              text: 'Your message was not sent because encrypted chat history could not be saved. Check storage and your connection, then send again.',
+              text: `Your message was not sent because encrypted chat history could not be saved. ${historyFailureDetailRef.current?.message ?? 'Retry when storage is available.'}${historyFailureDetailRef.current ? ` Diagnostic: ${historyFailureDetailRef.current.code} (${historyFailureDetailRef.current.stage}${historyFailureDetailRef.current.cause ? ` / ${historyFailureDetailRef.current.cause}` : ''}).` : ''}`,
             },
           ])
         }
@@ -2075,10 +2102,17 @@ function ConversationPanelImpl({
         </div>
       )}
       {historyFailure && (
-        <div className="border-warning bg-warning-faded text-text border-b px-3 py-2 text-xs">
+        <div role="alert" className="border-warning bg-warning-faded text-text border-b px-3 py-2 text-xs">
           {historyFailure === 'read'
             ? 'Saved chat history could not be read safely. This conversation is temporarily in-memory and will not overwrite the saved copy.'
-            : 'Chat history could not be saved. Your current messages remain in this tab; a later successful save will clear this warning.'}
+            : `Chat history could not be saved. ${historyFailureDetail?.message ?? 'Retry when storage is available.'} Your current messages remain in this tab.`}
+          {historyFailureDetail && (
+            <span>
+              {' '}
+              Diagnostic: {historyFailureDetail.code} ({historyFailureDetail.stage}
+              {historyFailureDetail.cause ? ` / ${historyFailureDetail.cause}` : ''}).
+            </span>
+          )}
         </div>
       )}
       {todos.length > 0 && (

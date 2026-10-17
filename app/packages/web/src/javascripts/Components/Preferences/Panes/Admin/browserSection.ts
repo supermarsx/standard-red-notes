@@ -1,3 +1,9 @@
+import type { AssistantHistoryDiagnostics } from '@/Assistant/assistantHistoryDiagnostics'
+import {
+  ASSISTANT_CHAT_STORAGE_FAILURE_CAUSES,
+  ASSISTANT_CHAT_STORAGE_FAILURE_CODES,
+  ASSISTANT_CHAT_STORAGE_FAILURE_STAGES,
+} from '@/Assistant/assistantSyncedChats'
 import { buildChecksBlock, witnessFrom, type CheckReading, type WitnessBoard, type WitnessId } from './diagnosticChecks'
 import type { Remedy, RemedyEffort } from './diagnosticRemedies'
 import {
@@ -1191,6 +1197,7 @@ function observedRow(input: {
 /* -------------------------------------------------------------------------- */
 
 export type BrowserSectionInput = {
+  assistantHistory?: AssistantHistoryDiagnostics
   /** Absent until the first collection run resolves; every row then reads "not reported". */
   observations?: BrowserObservations
   clock?: BrowserClockReading
@@ -2015,6 +2022,7 @@ export function buildBrowserSection(input: BrowserSectionInput = {}): SectionMod
     buildPolicyBlock(observed, input.csp, collected),
     buildIdentityBlock(observed),
     buildClockBlock(input.clock),
+    ...(input.assistantHistory ? [buildAssistantHistoryBlock(input.assistantHistory)] : []),
   ]
 
   return buildSectionModel({
@@ -2022,4 +2030,87 @@ export function buildBrowserSection(input: BrowserSectionInput = {}): SectionMod
     blocks,
     extraReportLines: [REPORT_UA_WITHHELD, REPORT_DB_OPEN],
   })
+}
+
+function buildAssistantHistoryBlock(history: AssistantHistoryDiagnostics): DiagnosticBlock {
+  const rows = [
+    diagnosticRow({
+      note: 'Current account in this browser tab; closed diagnostic values only.',
+      label: safeConstant('Assistant chat save failures in this tab'),
+      value: safeCount(history.failures),
+      verdict: history.active ? 'degraded' : 'informational',
+      evidence: EVIDENCE_DIRECT,
+    }),
+    diagnosticRow({
+      note: 'Current account in this browser tab; closed diagnostic values only.',
+      label: safeConstant('Assistant chat save recoveries in this tab'),
+      value: safeCount(history.recoveries),
+      verdict: 'informational',
+      evidence: EVIDENCE_DIRECT,
+    }),
+    diagnosticRow({
+      note: 'Current account in this browser tab; closed diagnostic values only.',
+      label: safeConstant('Assistant chat save failure remains unresolved'),
+      value: safeYesNo(history.active),
+      verdict: history.active ? 'degraded' : 'informational',
+      evidence: EVIDENCE_DIRECT,
+    }),
+    ...(history.latest
+      ? [
+          diagnosticRow({
+            note: 'Current account in this browser tab; closed diagnostic values only.',
+            label: safeConstant('Most recent Assistant chat save failure'),
+            value: safeEnum(history.latest.code, ASSISTANT_CHAT_STORAGE_FAILURE_CODES),
+            verdict: 'informational',
+            evidence: EVIDENCE_DIRECT,
+          }),
+          diagnosticRow({
+            note: 'Current account in this browser tab; closed diagnostic values only.',
+            label: safeConstant('Most recent Assistant chat save failure stage'),
+            value: safeEnum(history.latest.stage, ASSISTANT_CHAT_STORAGE_FAILURE_STAGES),
+            verdict: 'informational',
+            evidence: EVIDENCE_DIRECT,
+          }),
+          ...(history.latest.cause
+            ? [
+                diagnosticRow({
+                  note: 'Current account in this browser tab; closed diagnostic values only.',
+                  label: safeConstant('Most recent Assistant save exception category'),
+                  value: safeEnum(history.latest.cause, ASSISTANT_CHAT_STORAGE_FAILURE_CAUSES),
+                  verdict: 'informational',
+                  evidence: EVIDENCE_DIRECT,
+                }),
+              ]
+            : []),
+        ]
+      : []),
+  ]
+  return {
+    heading: safeConstant('Assistant chat persistence'),
+    description:
+      'Observed saves for the current account in this tab only. No chat contents, identifiers, or exception text are reported. No recorded failure does not establish that a save was attempted.',
+    rows,
+    findings: history.active
+      ? [
+          diagnosticFinding({
+            code: safeConstant('ASSISTANT_CHAT_SAVE_FAILED'),
+            title: 'An Assistant chat could not be saved',
+            detail: 'A chat checkpoint failed and this tab has not observed a successful retry for that conversation.',
+            verdict: 'degraded',
+            evidence: EVIDENCE_DIRECT,
+            remedy: {
+              code: 'ASSISTANT_CHAT_SAVE_FAILED',
+              summary: 'Open the affected chat and follow its save warning before retrying.',
+              steps: [
+                'Read the closed failure code and stage shown above. QUOTA_EXCEEDED requires freeing device space; SYNC_FAILED requires checking the connection.',
+                'Keep the affected tab open while recovering. Its unsaved messages may exist only in memory. Retry saving after addressing the reported cause.',
+              ],
+              effort: BROWSER_SIDE,
+              basis: 'verified',
+              because: ['The chat checkpoint rejected. A successful save in another chat does not clear this failure.'],
+            },
+          }),
+        ]
+      : [],
+  }
 }

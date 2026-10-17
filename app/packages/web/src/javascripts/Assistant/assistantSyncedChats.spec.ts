@@ -1,8 +1,18 @@
 /** @jest-environment jsdom */
+import {
+  CreateDecryptedItemFromPayload,
+  CreateDecryptedMutatorForItem,
+  DecryptedPayload,
+  ItemContent,
+  MutationType,
+  PayloadTimestampDefaults,
+} from '@standardnotes/snjs'
 import { WebApplication } from '@/Application/WebApplication'
 import * as chatHistory from './assistantChatHistory'
 import {
   AssistantSyncedChats,
+  AssistantChatStorageError,
+  getAssistantChatStorageFailure,
   MAX_SYNCED_CHAT_FINGERPRINT_BYTES,
   mergeSyncedChats,
   normalizeSyncedChatRecord,
@@ -553,3 +563,131 @@ it('retained chat tombstones do not permanently exhaust the live record count ca
   await store.save({ id: 'new-chat', title: 'New', userRenamed: false }, [message('new-message')])
   expect((await store.read()).map((chat) => chat.tab.id)).toEqual(['new-chat'])
 })
+
+it('creates and updates a chat through real payload and item mutators used by the application', async () => {
+  const h = harness()
+  const uuid = '00000000-0000-4000-8000-000000000001'
+  h.raw.mutator.createItem.mockImplementation(async (contentType, content) => {
+    const payload = new DecryptedPayload({
+      uuid,
+      content_type: contentType,
+      content: content as ItemContent,
+      dirty: true,
+      ...PayloadTimestampDefaults(),
+    })
+    const item = CreateDecryptedItemFromPayload(payload)
+    h.values.set(uuid, item)
+    return item
+  })
+  h.raw.mutator.changeItem.mockImplementation(async (item, change) => {
+    const current = h.values.get(item.uuid)!
+    const mutator = CreateDecryptedMutatorForItem(
+      current as ReturnType<typeof CreateDecryptedItemFromPayload>,
+      MutationType.UpdateUserTimestamps,
+    )
+    change({ setCustomContent: (content: unknown) => mutator.setCustomContent(content as ItemContent) })
+    h.values.set(item.uuid, CreateDecryptedItemFromPayload(mutator.getResult()))
+  })
+  const store = new AssistantSyncedChats(h.application, 'writer')
+  const tab = { id: 'chat', title: 'Chat', userRenamed: false }
+  await store.save(tab, [])
+  await store.save(tab, [message('question'), { id: 'answer', kind: 'assistant', text: '' }])
+  expect(h.raw.mutator.createItem).toHaveBeenCalledTimes(1)
+  expect(h.raw.mutator.changeItem).toHaveBeenCalledTimes(1)
+  expect((await store.read())[0].messages).toContainEqual(message('question'))
+  expect(h.raw.sync.sync).toHaveBeenCalledTimes(2)
+})
+
+it.each([
+  [new Error('private transport exception secret'), 'WRITE_FAILED'],
+  [new DOMException('private browser quota details', 'QuotaExceededError'), 'QUOTA_EXCEEDED'],
+])('classifies local checkpoint failures without exposing exception contents: %s', async (error, code) => {
+  const h = harness()
+  h.raw.mutator.createItem.mockRejectedValueOnce(error)
+  const store = new AssistantSyncedChats(h.application, 'writer')
+  let failure: unknown
+  try {
+    await store.save({ id: 'chat', title: 'Chat', userRenamed: false }, [message('question')])
+  } catch (error) {
+    failure = error
+  }
+  expect(getAssistantChatStorageFailure(failure)).toMatchObject({ code, stage: 'write' })
+  expect(JSON.stringify(getAssistantChatStorageFailure(failure))).not.toContain('private')
+  expect(h.raw.sync.sync).not.toHaveBeenCalled()
+})
+
+it('distinguishes a sync checkpoint failure after the local item mutation succeeded', async () => {
+  const h = harness()
+  h.raw.sync.sync.mockRejectedValueOnce(new Error('private gateway detail'))
+  const store = new AssistantSyncedChats(h.application, 'writer')
+  await expect(
+    store.save({ id: 'chat', title: 'Chat', userRenamed: false }, [message('question')]),
+  ).rejects.toMatchObject({ code: 'SYNC_FAILED', stage: 'checkpoint' })
+  expect((await store.read())[0].messages).toEqual([message('question')])
+})
+
+it('returns only allowlisted diagnostics for unknown or tampered exceptions', () => {
+  expect(getAssistantChatStorageFailure(new Error('secret note content'))).toMatchObject({
+    code: 'UNKNOWN_FAILURE',
+    stage: 'checkpoint',
+  })
+  const error = new AssistantChatStorageError('WRITE_FAILED', 'write')
+  Object.assign(error, { code: 'secret note content', stage: 'secret hostname' })
+  expect(getAssistantChatStorageFailure(error)).toMatchObject({ code: 'UNKNOWN_FAILURE', stage: 'checkpoint' })
+  expect(JSON.stringify(getAssistantChatStorageFailure(error))).not.toContain('secret')
+})
+
+it('saves the initial user message through the normal browser writer admission path', async () => {
+  const previous = navigator.locks
+  const request = jest.fn(async (_name: string, _options: unknown, callback: (lock: object) => Promise<void>) =>
+    callback({}),
+  )
+  Object.defineProperty(navigator, 'locks', { configurable: true, value: { request } })
+  const h = harness()
+  const store = new AssistantSyncedChats(h.application)
+  try {
+    await store.save({ id: 'fresh-chat', title: 'New chat', userRenamed: false }, [message('first')])
+    expect(request).toHaveBeenCalledTimes(1)
+    expect((await store.read())[0].messages).toEqual([message('first')])
+    expect(h.raw.sync.sync).toHaveBeenCalledTimes(1)
+  } finally {
+    store.dispose()
+    Object.defineProperty(navigator, 'locks', { configurable: true, value: previous })
+  }
+})
+
+it.each(['reject', 'throw'] as const)(
+  'reports browser writer admission %s without falsely claiming another live owner',
+  async (mode) => {
+    const previous = navigator.locks
+    const failure = new DOMException('private browser details', 'InvalidStateError')
+    const request = jest.fn(() => {
+      if (mode === 'throw') throw failure
+      return Promise.reject(failure)
+    })
+    Object.defineProperty(navigator, 'locks', { configurable: true, value: { request } })
+    const h = harness()
+    const store = new AssistantSyncedChats(h.application)
+    try {
+      await expect(
+        store.save({ id: 'fresh-chat', title: 'New chat', userRenamed: false }, [message('first')]),
+      ).rejects.toMatchObject({ code: 'WRITER_UNAVAILABLE', stage: 'writer', cause: 'InvalidStateError' })
+      expect(request).toHaveBeenCalledTimes(1)
+      expect(h.raw.mutator.createItem).not.toHaveBeenCalled()
+    } finally {
+      store.dispose()
+      Object.defineProperty(navigator, 'locks', { configurable: true, value: previous })
+    }
+  },
+)
+
+it.each(['TypeError', 'InvalidStateError', 'AbortError', 'SecurityError'] as const)(
+  'retains only the bounded %s exception kind',
+  (name) => {
+    expect(getAssistantChatStorageFailure(new DOMException('private data', name))).toMatchObject({
+      code: 'UNKNOWN_FAILURE',
+      stage: 'checkpoint',
+      cause: name,
+    })
+  },
+)
