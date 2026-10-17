@@ -34,12 +34,12 @@ describe('Assistant mode explanations', () => {
       'Research',
       'Deep Research',
     ])
-    expect(select.options[0].title).toContain('without using tools')
+    expect(select.options[0].title).toContain('using read-only tools')
     expect(select.options[1].title).toContain('tool permissions')
     expect(select.options[2].title).toContain('without making changes')
     expect(select.options[3].title).toContain('configured and approved')
     expect(select.options[4].title).toContain('multiple research and refinement steps')
-    expect(container.textContent).not.toContain('Discuss the supplied context')
+    expect(container.textContent).not.toContain('Discuss the selected context')
     await act(async () => {
       select.value = 'plan'
       select.dispatchEvent(new Event('change', { bubbles: true }))
@@ -51,7 +51,7 @@ describe('Assistant mode explanations', () => {
       await new Promise((resolve) => setTimeout(resolve, 600))
     })
     const tooltip = document.querySelector('[role="tooltip"]')
-    expect(tooltip?.textContent).toContain('Discuss the supplied context')
+    expect(tooltip?.textContent).toContain('Discuss the selected context')
     expect(tooltip?.textContent).toContain('Deep Research')
     expect(tooltip?.className).toContain('bg-contrast')
   })

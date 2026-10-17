@@ -1,5 +1,7 @@
 import { ContentType, SNNote, SNTag } from '@standardnotes/snjs'
 import { WebApplication } from '@/Application/WebApplication'
+import { AppPaneId } from '@/Components/Panes/AppPaneMetadata'
+import { openAssistantEditorTab } from './assistantEditorNavigation'
 import {
   MAX_CONTEXT_NOTES,
   resolveContextNoteUuids,
@@ -8,6 +10,51 @@ import {
 } from './assistantContextSource'
 
 describe('assistant context authorization scope', () => {
+  it('keeps editor-owned context in an Assistant tab and follows the next active note', () => {
+    const first = {
+      uuid: 'first-note',
+      title: 'First note',
+      text: 'First body',
+      noteType: 'org.standardnotes.plain-text',
+      content_type: ContentType.TYPES.Note,
+    } as unknown as SNNote
+    const second = { ...first, uuid: 'second-note', title: 'Second note', text: 'Second body' } as SNNote
+    const controllers = [{ item: first }, { item: second }]
+    const group = { itemControllers: controllers, activeItemViewController: controllers[0] }
+    const paneController = {
+      activeViewTabId: undefined as AppPaneId | undefined,
+      openPaneTab: jest.fn((id: AppPaneId) => {
+        paneController.activeViewTabId = id
+      }),
+      removePane: jest.fn(),
+    }
+    const application = {
+      sessions: { getUser: () => ({ uuid: 'context-test-account' }) },
+      isAuthorizedToRenderItem: jest.fn().mockReturnValue(true),
+      itemControllerGroup: group,
+      // No list fallback: ownership must come from the still-open editor.
+      itemListController: { selectedItemsCount: 0, firstSelectedItem: undefined },
+      paneController,
+    } as unknown as WebApplication
+    const selection = { scope: 'current-note' as const }
+
+    openAssistantEditorTab(application, 'context-test-chat')
+    expect(paneController.activeViewTabId).toBe(AppPaneId.Assistant)
+    expect(resolveContextNoteUuids(application, selection)).toEqual([first.uuid])
+    expect(buildContextForSelection(application, selection).text).toContain('First body')
+
+    // Selecting another note changes editor ownership; returning to the Assistant
+    // view must use that note rather than its original or a cached list selection.
+    paneController.activeViewTabId = undefined
+    group.activeItemViewController = controllers[1]
+    openAssistantEditorTab(application, 'context-test-chat')
+    expect(resolveContextNoteUuids(application, selection)).toEqual([second.uuid])
+    const context = buildContextForSelection(application, selection)
+    expect(context.noteUuids).toEqual([second.uuid])
+    expect(context.text).toContain('Second body')
+    expect(context.text).not.toContain('First body')
+  })
+
   it('uses the live editor for send-time context even when the list retains a previous active note', () => {
     const old = { uuid: 'old', content_type: ContentType.TYPES.Note, title: 'Old', text: 'Old body' } as SNNote
     const current = { ...old, uuid: 'current', title: 'Current', text: 'Current body' } as SNNote

@@ -67,18 +67,21 @@ it('strictly recognizes supported modes while legacy UI falls back to Agent', ()
   expect(normalizeAssistantConversationMode(undefined)).toBe('agent')
 })
 
-it.each(['agent', 'research', 'deep-research'] as const)('%s respects the account internet lockdown', async (mode) => {
-  const harness = setup()
-  harness.options.session = new AssistantTools({ getPreference: () => false } as unknown as WebApplication, {
-    confirmBeforeWrite: false,
-    requestConfirmation: async () => true,
-    presentPane: () => undefined,
-  })
-  await runConversationMode(mode, [], harness.options, harness.extras)
-  expect(webSearch).not.toHaveBeenCalled()
-  expect(webFetch).not.toHaveBeenCalled()
-  expect(harness.extras.requestWebConfirmation).not.toHaveBeenCalled()
-})
+it.each(['chat', 'plan', 'agent', 'research', 'deep-research'] as const)(
+  '%s respects the account internet lockdown',
+  async (mode) => {
+    const harness = setup()
+    harness.options.session = new AssistantTools({ getPreference: () => false } as unknown as WebApplication, {
+      confirmBeforeWrite: false,
+      requestConfirmation: async () => true,
+      presentPane: () => undefined,
+    })
+    await runConversationMode(mode, [], harness.options, harness.extras)
+    expect(webSearch).not.toHaveBeenCalled()
+    expect(webFetch).not.toHaveBeenCalled()
+    expect(harness.extras.requestWebConfirmation).not.toHaveBeenCalled()
+  },
+)
 
 it.each(['chat', 'plan'] as const)(
   '%s rejects a forged write tool independently of model instructions and forwards abort signal',
@@ -106,13 +109,10 @@ it.each(['chat', 'plan'] as const)(
     expect(harness.session.call).not.toHaveBeenCalled()
     expect(harness.seen[0].tools.some((tool) => tool.name === 'notes.create')).toBe(false)
     expect(harness.session.setAbortSignal).toHaveBeenCalledWith(expect.any(AbortSignal))
-    if (mode === 'chat') {
-      expect(harness.seen[0].tools).toEqual([])
-    }
   },
 )
 
-it.each(['plan', 'agent'] as const)('%s retains approved read tools', async (mode) => {
+it.each(['chat', 'plan', 'agent'] as const)('%s retains approved read tools', async (mode) => {
   const harness = setup((_request, index) =>
     index === 0
       ? [
@@ -123,6 +123,29 @@ it.each(['plan', 'agent'] as const)('%s retains approved read tools', async (mod
   )
   await runConversationMode(mode, [{ role: 'user', content: 'read' }], harness.options, harness.extras)
   expect(harness.session.call).toHaveBeenCalledWith('notes.read', { uuid: 'source' }, 'read')
+})
+
+it('preserves selected context in the Chat model request while exposing only read tools', async () => {
+  const harness = setup()
+  harness.options.systemPrompt = 'Trusted instructions\nSelected context: PRIVATE scoped excerpt'
+  await runConversationMode('chat', [{ role: 'user', content: 'Summarize this' }], harness.options, harness.extras)
+  expect(harness.seen[0].system).toContain('Selected context: PRIVATE scoped excerpt')
+  expect(harness.seen[0].tools.map((tool) => tool.name)).toEqual(['notes.read', 'web.search', 'web.fetch'])
+  expect(harness.seen[0].system).toContain('do not make changes')
+})
+
+it.each(['chat', 'plan'] as const)('%s checks the current tool scope again before executing a read', async (mode) => {
+  let current = true
+  const harness = setup(() => {
+    current = false
+    return [
+      { kind: 'tool-call', id: 'read', name: 'notes.read', args: { uuid: 'source' } },
+      { kind: 'finish', stopReason: 'tool_use' },
+    ]
+  })
+  harness.extras.isCurrent = () => current
+  await runConversationMode(mode, [], harness.options, harness.extras)
+  expect(harness.session.call).not.toHaveBeenCalled()
 })
 
 it.each(['research', 'deep-research'] as const)(

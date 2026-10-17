@@ -41,7 +41,7 @@ class ModeBoundary extends Error {
 }
 
 function restrictSession(session: ToolSession, mode: 'chat' | 'plan', isCurrent: () => boolean): AbortAwareSession {
-  const available = () => (mode === 'chat' ? [] : session.tools().filter((tool) => !tool.mutating))
+  const available = () => session.tools().filter((tool) => !tool.mutating)
   return {
     tools: available,
     setAbortSignal: (signal) => (session as AbortAwareSession).setAbortSignal?.(signal),
@@ -68,7 +68,9 @@ export async function runConversationMode(
       systemPrompt:
         mode === 'plan'
           ? `${options.systemPrompt}\n\nPlan the work and explain proposed changes. Do not make changes.`
-          : options.systemPrompt,
+          : mode === 'chat'
+            ? `${options.systemPrompt}\n\nAnswer questions about the supplied context. Use available read-only tools when needed; do not make changes.`
+            : options.systemPrompt,
     })
   }
 

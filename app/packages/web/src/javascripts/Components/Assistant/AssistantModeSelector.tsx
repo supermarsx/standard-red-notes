@@ -2,7 +2,11 @@ import type { AssistantConversationMode } from '@/Assistant/conversationModes'
 import StyledTooltip from '@/Components/StyledTooltip/StyledTooltip'
 
 const modes: { value: AssistantConversationMode; label: string; description: string }[] = [
-  { value: 'chat', label: 'Chat', description: 'Discuss the supplied context without using tools or changing notes.' },
+  {
+    value: 'chat',
+    label: 'Chat',
+    description: 'Discuss the selected context using read-only tools when needed, without changing notes.',
+  },
   {
     value: 'agent',
     label: 'Agent',
