@@ -1520,7 +1520,12 @@ it('reports chat storage accounting with application limits separately from brow
       trashedChats: 2,
       deletedChats: 3,
       deletedResidualRecords: 7,
-      writerRecords: 512,
+      writerRecords: 600,
+      budgetedWriterRecords: 512,
+      budgetedSerializedUnits: 4000,
+      trashedSerializedUnits: 3000,
+      deletedSerializedUnits: 2000,
+      trashRetentionDays: 30,
       lifecycleRecords: 5,
       invalidRecords: 1,
       serializedUnits: 9000,
@@ -1531,7 +1536,11 @@ it('reports chat storage accounting with application limits separately from brow
   expect(report).toContain('Assistant active chats: 4')
   expect(report).toContain('Assistant trashed chats: 2')
   expect(report).toContain('Assistant deleted residual records: 7')
-  expect(report).toContain('Assistant writer records: 512')
+  expect(report).toContain('Assistant writer records: 600')
+  expect(report).toContain('Assistant active writer records: 512')
+  expect(report).toContain('Assistant active serialized storage units: 4000')
+  expect(report).toContain('Assistant deleted serialized storage units: 2000')
+  expect(report).toContain('Assistant trash retention days: 30')
   expect(report).toContain('Assistant serialized storage units: 9000')
   expect(report).toContain('Assistant writer record limit: 512')
   expect(report).toContain('STORAGE_RECORD_LIMIT')

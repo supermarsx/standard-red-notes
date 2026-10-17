@@ -2095,7 +2095,7 @@ function buildAssistantHistoryBlock(
     [
       'Assistant trashed chats',
       storage?.trashedChats,
-      'Chats moved to Trash; their retained history still uses storage.',
+      'Chats moved to Trash retain history until expiry, but do not consume active-chat budgets.',
     ],
     [
       'Assistant deleted chat markers',
@@ -2110,7 +2110,7 @@ function buildAssistantHistoryBlock(
     [
       'Assistant writer records',
       storage?.writerRecords,
-      'Per-writer encrypted records; multiple devices can contribute to one chat.',
+      'All retained per-writer records, including Trash and deleted residuals. Compare active writer records, not this total, with the active cap.',
     ],
     [
       'Assistant lifecycle records',
@@ -2127,17 +2127,46 @@ function buildAssistantHistoryBlock(
       storage?.serializedUnits,
       'UTF-16 code units in validated serialized records, including lifecycle and deletion markers; invalid records are counted separately. Not disk bytes.',
     ],
-    ['Assistant chat count limit', storage?.limits.chats, 'Configured application chat count cap.'],
+    [
+      'Assistant active writer records',
+      storage?.budgetedWriterRecords,
+      'Only records in active chats count toward the writer-record cap.',
+    ],
+    [
+      'Assistant active serialized storage units',
+      storage?.budgetedSerializedUnits,
+      'Validated active catalog units used for admission; excludes entire trashed and deleted groups.',
+    ],
+    [
+      'Assistant trashed serialized storage units',
+      storage?.trashedSerializedUnits,
+      'Retained trash history, excluded from active budgets.',
+    ],
+    [
+      'Assistant deleted serialized storage units',
+      storage?.deletedSerializedUnits,
+      'Deletion markers and any residual records, excluded from active budgets.',
+    ],
+    [
+      'Assistant trash retention days',
+      storage?.trashRetentionDays,
+      'Trash is eligible for permanent cleanup after this many days. Deletion markers remain to prevent resurrection.',
+    ],
+    [
+      'Assistant chat count limit',
+      storage?.limits.chats,
+      'Application active-chat count cap; Trash and permanently deleted chats are exempt.',
+    ],
     ['Assistant writers per chat limit', storage?.limits.writersPerChat, 'Configured per-chat writer cap.'],
     [
       'Assistant writer record limit',
       storage?.limits.records,
-      'Deletion markers do not count toward this writer-record cap.',
+      'Active writer-record cap; entire trashed and permanently deleted groups are exempt.',
     ],
     [
       'Assistant serialized storage unit limit',
       storage?.limits.serializedUnits,
-      'Application catalog cap in UTF-16 code units; distinct from browser disk quota.',
+      'Active catalog cap in UTF-16 code units; excludes Trash and deleted groups and is distinct from browser disk quota.',
     ],
     [
       'Assistant individual record unit limit',
@@ -2174,7 +2203,7 @@ function buildAssistantHistoryBlock(
               summary: 'Open the affected chat and follow its save warning before retrying.',
               steps: [
                 'Read the failure code and stage above. QUOTA_EXCEEDED means browser/device space; SYNC_FAILED means the sync checkpoint failed.',
-                'CHAT_LIMIT is the chat count cap; WRITER_LIMIT is per-chat writers; STORAGE_RECORD_LIMIT is total writer records; STORAGE_SIZE_LIMIT is serialized catalog size; RECORD_SIZE_LIMIT is one oversized record. Compare the usage and limits above. Trash retains history; permanent deletion removes writer bodies while retaining small deletion markers.',
+                'CHAT_LIMIT is the chat count cap; WRITER_LIMIT is per-chat writers; STORAGE_RECORD_LIMIT is total writer records; STORAGE_SIZE_LIMIT is serialized catalog size; RECORD_SIZE_LIMIT is one oversized record. Compare the usage and limits above. Trash and deleted groups are exempt from active budgets. Retained physical storage is reported separately; permanent cleanup removes writer bodies while retaining small deletion markers.',
                 'Keep the affected tab open while recovering. Its unsaved messages may exist only in memory. Retry saving after addressing the reported cause.',
               ],
               effort: BROWSER_SIDE,

@@ -1282,15 +1282,22 @@ it('keeps exact assistant failure and capacity evidence in the compact summary',
       deletedChats: 3,
       deletedResidualRecords: 7,
       writerRecords: 12,
+      budgetedWriterRecords: 5,
+      budgetedSerializedUnits: 16777216,
+      trashedSerializedUnits: 3000,
+      deletedSerializedUnits: 2000,
+      trashRetentionDays: 30,
       lifecycleRecords: 5,
       invalidRecords: 1,
-      serializedUnits: 16777216,
+      serializedUnits: 16782216,
       limits: { chats: 100, writersPerChat: 64, records: 512, serializedUnits: 16777216, recordUnits: 1048576 },
     },
   })
   const summary = buildDiagnosticsSummary(input({ sections: { ...models, browser } }))
   expect(summary).toContain('STORAGE_SIZE_LIMIT')
   expect(summary).toContain('Assistant active chats: 4')
-  expect(summary).toContain('Assistant serialized storage units: 16777216')
+  expect(summary).toContain('Assistant serialized storage units: 16782216')
+  expect(summary).toContain('Assistant active serialized storage units: 16777216')
+  expect(summary).toContain('Assistant trash retention days: 30')
   expect(summary).toContain('Assistant serialized storage unit limit: 16777216')
 })
