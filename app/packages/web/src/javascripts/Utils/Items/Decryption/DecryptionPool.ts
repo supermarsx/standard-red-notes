@@ -13,7 +13,7 @@
 // worker only when a decrypt call has more batches than live workers, capped at
 // `maxWorkers`. A small vault that only queues a couple batches therefore never
 // spins more than a couple workers (no 40x WASM init), while a big cold-load grows
-// the pool all the way to the cap and uses every core.
+// the pool up to a bounded automatic cap (or an explicit user ceiling).
 //
 // Worker construction MIRRORS ThreadedSearchIndex: worker-loader rewrites the
 // `*.worker.ts` import into a Worker constructor at build time (see the
@@ -73,6 +73,9 @@ const SATURATE_THRESHOLD = 2000
  */
 const INITIAL_WORKERS = 2
 
+/** Each worker owns a WASM runtime; leave browser/editor headroom on high-core devices. */
+const AUTO_MAX_WORKERS = 8
+
 /**
  * Per-batch response deadline. A worker that HANGS (an infinite WASM loop, a wedged
  * event loop) never fires onerror, so without this a hung worker would leave
@@ -110,11 +113,11 @@ interface PoolWorker {
 
 /**
  * Configuration for the pool's worker ceiling. `maxWorkers` of 0 (or omitted)
- * selects the auto policy: hardwareConcurrency - 1. A positive value is clamped to
+ * selects the auto policy: at most 8, leaving one logical core free where possible. A positive value is clamped to
  * [1, hardwareConcurrency], letting the user dedicate the full thread count.
  */
 export interface DecryptionPoolConfig {
-  /** Pref-driven ceiling. 0 == auto (hardwareConcurrency - 1). */
+  /** Pref-driven ceiling. 0 == auto: min(8, max(1, hardwareConcurrency - 1)). */
   maxWorkers?: number
 }
 
@@ -168,7 +171,7 @@ export class DecryptionPool implements PayloadDecryptionPoolInterface {
 
   /**
    * Translate the configured ceiling into an absolute worker count.
-   * - undefined / 0 -> auto: hardwareConcurrency - 1 (min 1).
+   * - undefined / 0 -> auto: hardwareConcurrency - 1, bounded to [1, 8].
    * - > 0           -> min(value, hardwareConcurrency) (the user may use every core).
    */
   private resolveMaxWorkers(configured?: number): number {
@@ -177,7 +180,7 @@ export class DecryptionPool implements PayloadDecryptionPoolInterface {
     if (configured && configured > 0) {
       return Math.min(configured, hardware)
     }
-    return Math.max(1, hardware - 1)
+    return Math.min(AUTO_MAX_WORKERS, Math.max(1, hardware - 1))
   }
 
   /**

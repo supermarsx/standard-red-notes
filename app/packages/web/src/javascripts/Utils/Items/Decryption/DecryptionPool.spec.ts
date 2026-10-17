@@ -3,7 +3,7 @@
 // Each pool worker compiles its OWN libsodium WASM on first use, so the pool must
 // spawn workers LAZILY: a small decrypt (a batch or two) must spin only the tiny
 // initial set (no 40x WASM init), while a big cold-load grows the pool up to the
-// configured/auto max so every core is used. These tests assert that growth policy
+// configured ceiling or bounded automatic cap. These tests assert that growth policy
 // against a fake Worker (jsdom has no real Worker), without touching real crypto.
 
 // A controllable fake Worker. Each instance echoes back a `decrypted` response for
@@ -138,27 +138,27 @@ describe('DecryptionPool lazy spawn', () => {
     pool.destroy()
   })
 
-  it('grows up to the auto max (hardwareConcurrency - 1) for a large job count', async () => {
+  it('caps automatic growth at eight workers on a 40-logical-core device', async () => {
     const pool = new DecryptionPool()
-    expect(pool.stats.maxWorkers).toBe(39)
-    // 100 batches worth of jobs, but growth is capped at maxWorkers (39).
+    expect(pool.stats.maxWorkers).toBe(8)
+    // 100 batches worth of jobs, but growth is capped at maxWorkers (8).
     await pool.decrypt(makeJobs(BATCH_SIZE * 100))
-    expect(pool.stats.spawned).toBe(39)
-    expect(constructedWorkers).toBe(39)
+    expect(pool.stats.spawned).toBe(8)
+    expect(constructedWorkers).toBe(8)
     pool.destroy()
   })
 
-  it('fans a mid-size bulk load across all cores, not just ceil(jobs / BATCH_SIZE) workers', async () => {
+  it('keeps a 5000-item cold-load within the automatic eight-worker budget', async () => {
     const pool = new DecryptionPool()
     // 5000 jobs = only 10 BATCH_SIZE batches, but it is a bulk cold-load batch:
-    // it must saturate up to maxWorkers (39) rather than idle 29 cores.
+    // it must stay at the automatic cap instead of starting 39 independent WASM runtimes.
     const results = await pool.decrypt(makeJobs(5000))
     expect(results).toHaveLength(5000)
-    expect(pool.stats.spawned).toBe(39)
-    expect(constructedWorkers).toBe(39)
+    expect(pool.stats.spawned).toBe(8)
+    expect(constructedWorkers).toBe(8)
     // No item is lost and every batch succeeded.
     expect(pool.stats.batchesFailed).toBe(0)
-    expect(pool.stats.batchesOk).toBeGreaterThanOrEqual(39)
+    expect(pool.stats.batchesOk).toBeGreaterThanOrEqual(8)
     pool.destroy()
   })
 
@@ -171,6 +171,30 @@ describe('DecryptionPool lazy spawn', () => {
     pool.destroy()
   })
 
+  it('allows an explicitly configured forty-worker bulk load on forty logical cores', async () => {
+    const pool = new DecryptionPool({ maxWorkers: 40 })
+    expect(constructedWorkers).toBe(2)
+    const results = await pool.decrypt(makeJobs(5000))
+    expect(results).toHaveLength(5000)
+    expect(pool.stats.maxWorkers).toBe(40)
+    expect(pool.stats.spawned).toBe(40)
+    expect(constructedWorkers).toBe(40)
+    pool.destroy()
+  })
+
+  it.each([
+    [1, 1],
+    [2, 1],
+    [4, 3],
+    [8, 7],
+    [40, 8],
+  ])('resolves automatic concurrency for %i logical cores to %i workers', (cores, expected) => {
+    Object.defineProperty(navigator, 'hardwareConcurrency', { value: cores, configurable: true })
+    const pool = new DecryptionPool({ maxWorkers: 0 })
+    expect(pool.stats.maxWorkers).toBe(expected)
+    pool.destroy()
+  })
+
   it('clamps an over-large explicit maxWorkers to hardwareConcurrency (full thread count)', () => {
     const pool = new DecryptionPool({ maxWorkers: 1000 })
     expect(pool.stats.maxWorkers).toBe(40)
@@ -180,7 +204,7 @@ describe('DecryptionPool lazy spawn', () => {
   it('setMaxWorkers lowers the ceiling and trims surplus workers', async () => {
     const pool = new DecryptionPool()
     await pool.decrypt(makeJobs(BATCH_SIZE * 100))
-    expect(pool.stats.spawned).toBe(39)
+    expect(pool.stats.spawned).toBe(8)
     pool.setMaxWorkers(3)
     expect(pool.stats.maxWorkers).toBe(3)
     expect(pool.stats.spawned).toBe(3)
