@@ -22,6 +22,7 @@ import { AssistantActionNotAllowedError } from '@/Assistant/AssistantActionNotAl
 import type { AssistantChatContextSnapshot } from '@/Assistant/assistantDirectiveContext'
 import AssistantComposer from './AssistantComposer'
 import AssistantModeSelector from './AssistantModeSelector'
+import AssistantTranscriptCopyButton from './AssistantTranscriptCopyButton'
 import type { AssistantConversationMode } from '@/Assistant/conversationModes'
 import { runConversationMode } from '@/Assistant/conversationModeRunner'
 import { ReactNode, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -2313,6 +2314,9 @@ function ConversationPanelImpl({
             }}
             disabled={isRunning}
           />
+          <div className="ml-auto">
+            <AssistantTranscriptCopyButton messages={messages} />
+          </div>
         </div>
         {!noticeDismissed && (
           <div className="text-warning mb-2 flex items-start gap-2 text-xs">
