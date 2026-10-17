@@ -3,7 +3,7 @@ import { assistantDirectiveContextMatches, AssistantChatContextSnapshot } from '
 import { forwardRef, ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { observer } from 'mobx-react-lite'
 import { classNames } from '@standardnotes/utils'
-import { ApplicationEvent } from '@standardnotes/snjs'
+import { ApplicationEvent, ButtonType } from '@standardnotes/snjs'
 import { WebApplication } from '@/Application/WebApplication'
 import Icon from '@/Components/Icon/Icon'
 import { useResponsiveAppPane } from '../Panes/ResponsivePaneProvider'
@@ -855,6 +855,9 @@ const AssistantView = forwardRef<HTMLDivElement, Props>((props, ref) => {
 
   const deleteChat = useCallback(
     async (tabId: string) => {
+      if (workspaceLockedRef.current || loadedChatAccountScope !== chatAccountScope) {
+        return false
+      }
       setMenu(null)
       const transition = sessionTransitionRef.current
       const activation = workspaceActivationRef.current
@@ -869,7 +872,7 @@ const AssistantView = forwardRef<HTMLDivElement, Props>((props, ref) => {
               'The chat could not be deleted from encrypted storage. Try again; its saved history was kept.',
             )
           }
-          return
+          return false
         }
       }
       let retainForCleanup = false
@@ -894,7 +897,7 @@ const AssistantView = forwardRef<HTMLDivElement, Props>((props, ref) => {
         workspaceLockedRef.current ||
         loadedChatAccountScope !== chatAccountScope
       ) {
-        return
+        return false
       }
       if (retainForCleanup) {
         setRetainedCleanupTabIds((current) => (current.includes(tabId) ? current : [...current, tabId]))
@@ -920,8 +923,41 @@ const AssistantView = forwardRef<HTMLDivElement, Props>((props, ref) => {
         }
         return next
       })
+      return !retainForCleanup
     },
     [activeTabId, application, closedTabIds, loadedChatAccountScope, chatAccountScope, workspacePersistence],
+  )
+
+  const deleteHistoryChats = useCallback(
+    async (ids: string[]): Promise<boolean> => {
+      const transition = sessionTransitionRef.current
+      const activation = workspaceActivationRef.current
+      const current = () =>
+        transition === sessionTransitionRef.current &&
+        activation === workspaceActivationRef.current &&
+        !workspaceLockedRef.current &&
+        loadedChatAccountScope === chatAccountScope
+      const targets = [...new Set(ids)].filter((id) => tabsRef.current.some((tab) => tab.id === id))
+      if (!current() || !targets.length) {
+        return false
+      }
+      const confirmed = await application.alerts.confirm(
+        `Permanently delete ${targets.length} conversation${targets.length === 1 ? '' : 's'} and their saved messages? This cannot be undone.`,
+        'Delete chat history?',
+        'Delete',
+        ButtonType.Danger,
+      )
+      if (!confirmed || !current()) {
+        return false
+      }
+      for (const id of targets) {
+        if (!current() || !(await deleteChat(id))) {
+          return false
+        }
+      }
+      return true
+    },
+    [application, chatAccountScope, loadedChatAccountScope, deleteChat],
   )
 
   // Auto-name from the first user message, but never clobber a user-chosen title.
@@ -1454,7 +1490,14 @@ const AssistantView = forwardRef<HTMLDivElement, Props>((props, ref) => {
       </div>
       {historyOpen && loadedChatAccountScope === chatAccountScope && !workspaceLocked && (
         <div className={classNames('min-h-0 flex-1', activeTabId !== historyTabId && 'hidden')}>
-          <AssistantHistoryPanel tabs={tabs} closedTabIds={closedTabIds} onResume={resumeTab} />
+          <AssistantHistoryPanel
+            key={`${chatAccountScope}:${keyEpoch}`}
+            tabs={tabs}
+            closedTabIds={closedTabIds}
+            onResume={resumeTab}
+            onRename={renameTab}
+            onDelete={deleteHistoryChats}
+          />
         </div>
       )}
       {children}

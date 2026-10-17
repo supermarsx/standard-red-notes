@@ -2,7 +2,7 @@
 
 import { act, createElement } from 'react'
 import { createRoot, Root } from 'react-dom/client'
-import { ApplicationEvent } from '@standardnotes/snjs'
+import { ApplicationEvent, ButtonType } from '@standardnotes/snjs'
 import { WebApplication } from '@/Application/WebApplication'
 import AssistantView from './AssistantView'
 const mockChatObservers = new Set<() => void>()
@@ -89,6 +89,7 @@ const createApplication = () => {
     protections: {
       isLocked: async () => locked,
     },
+    alerts: { confirm: jest.fn().mockResolvedValue(true) },
     storage: {
       getValue: (key: string) => values.get(key),
       setValue: (key: string, value: unknown) => {
@@ -272,5 +273,81 @@ describe('AssistantView shared conversation modes', () => {
     expect(container.querySelector('[role="tab"]')?.getAttribute('aria-selected')).toBe('true')
     expect(container.querySelector('[aria-label="Close history"]')).toBeNull()
     expect(container.querySelector('textarea')?.value).toBe('')
+  })
+
+  it('confirms bulk deletion in history, keeps cancelled chats and then deletes the selected history', async () => {
+    const { application, values } = createApplication()
+    values.set('test-synced-chats:account-a', [
+      { tab: { id: 'first', title: 'First', kind: 'chat', userRenamed: false } },
+      { tab: { id: 'second', title: 'Second', kind: 'research', userRenamed: false } },
+    ])
+    await renderAssistant(root, application)
+    click(container.querySelector('[aria-label="Chat history"]')!)
+    const history = container.querySelector('[aria-label="Assistant history"]')!
+    click([...history.querySelectorAll('button')].find((button) => button.textContent === 'Select all')!)
+    const remove = [...history.querySelectorAll('button')].find((button) =>
+      button.textContent?.includes('Delete selected'),
+    )!
+    jest.mocked(application.alerts.confirm).mockResolvedValueOnce(false)
+    await act(async () => remove.click())
+    expect(history.querySelectorAll('li')).toHaveLength(2)
+    expect(application.alerts.confirm).toHaveBeenCalledWith(
+      expect.stringContaining('2 conversations'),
+      expect.any(String),
+      'Delete',
+      ButtonType.Danger,
+    )
+    await act(async () => remove.click())
+    expect(values.get('test-synced-chats:account-a')).toEqual([])
+    expect(container.querySelector('[role="tab"][aria-label="New chat"]')?.getAttribute('aria-selected')).toBe('true')
+    expect(history.querySelector('[aria-label="Resume First"]')).toBeNull()
+    expect(history.querySelector('[aria-label="Resume Second"]')).toBeNull()
+  })
+
+  it('renames a chat from history and saves the explicit title to synced metadata', async () => {
+    const { application, values } = createApplication()
+    values.set('test-synced-chats:account-a', [
+      { tab: { id: 'first', title: 'First', kind: 'chat', userRenamed: false } },
+    ])
+    await renderAssistant(root, application)
+    click(container.querySelector('[aria-label="Chat history"]')!)
+    click(container.querySelector('[aria-label="Rename First"]')!)
+    const input = container.querySelector<HTMLInputElement>('[aria-label="Chat title"]')!
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'Renamed project')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () =>
+      input.closest('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })),
+    )
+    expect(container.querySelector('[aria-label="Resume Renamed project"]')).not.toBeNull()
+    expect(values.get('test-synced-chats:account-a')).toEqual([
+      expect.objectContaining({
+        tab: expect.objectContaining({ id: 'first', title: 'Renamed project', userRenamed: true }),
+      }),
+    ])
+  })
+
+  it('does not bulk delete after the account changes while confirmation is open', async () => {
+    const harness = createApplication()
+    harness.values.set('test-synced-chats:account-a', [
+      { tab: { id: 'first', title: 'First', kind: 'chat', userRenamed: false } },
+    ])
+    await renderAssistant(root, harness.application)
+    click(container.querySelector('[aria-label="Chat history"]')!)
+    let confirm!: (value: boolean) => void
+    jest.mocked(harness.application.alerts.confirm).mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          confirm = resolve
+        }),
+    )
+    click(container.querySelector('[aria-label="Delete First"]')!)
+    harness.setUserUuid('account-b')
+    await act(async () => harness.emit(ApplicationEvent.SignedIn))
+    await act(async () => confirm(true))
+    expect(harness.values.get('test-synced-chats:account-a')).toEqual([
+      { tab: { id: 'first', title: 'First', kind: 'chat', userRenamed: false } },
+    ])
   })
 })
