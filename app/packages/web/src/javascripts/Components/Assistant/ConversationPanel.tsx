@@ -2195,6 +2195,11 @@ function ConversationPanelImpl({
           <div className="border-border bg-contrast text-neutral mb-4 rounded border p-3 text-sm">
             {assistantAvailability.reason ||
               'The assistant is not configured yet. Open Preferences → Assistant to choose a connection.'}
+            <div className="mt-2">
+              <Button small onClick={() => application.preferencesController.openPreferences('assistant')}>
+                Open Assistant settings
+              </Button>
+            </div>
           </div>
         )}
         {messages.length === 0 && !preparingPrompt && isConfigured && (
