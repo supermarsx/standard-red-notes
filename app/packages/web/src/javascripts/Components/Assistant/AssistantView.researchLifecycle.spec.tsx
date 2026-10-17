@@ -14,9 +14,45 @@ jest.mock('@/Assistant/assistantSyncedChats', () => ({
     private key() {
       return `test-synced-chats:${this.application.sessions.getUser()?.uuid}`
     }
-    async read() {
-      return this.application.storage.getValue(this.key()) ?? []
+    async read(options?: { includeTrashed?: boolean }) {
+      const rows = (this.application.storage.getValue(this.key()) ?? []) as { tab: { id: string }; trashed?: boolean }[]
+      return options?.includeTrashed ? rows : rows.filter((row) => !row.trashed)
     }
+    async getStorageStats() {
+      return {
+        activeChats: 2,
+        trashedChats: 0,
+        deletedChats: 0,
+        deletedResidualRecords: 0,
+        writerRecords: 2,
+        lifecycleRecords: 0,
+        invalidRecords: 0,
+        serializedUnits: 100,
+        limits: { chats: 100, writersPerChat: 64, records: 512, serializedUnits: 10000, recordUnits: 1000 },
+      }
+    }
+    async trash(id: string) {
+      await mockDeleteWait(id)
+      this.application.storage.setValue(
+        this.key(),
+        (await this.read({ includeTrashed: true })).map((row) => (row.tab.id === id ? { ...row, trashed: true } : row)),
+      )
+      mockChatObservers.forEach((listener) => listener())
+    }
+    async restore(id: string) {
+      this.application.storage.setValue(
+        this.key(),
+        (await this.read({ includeTrashed: true })).map((row) => {
+          return row.tab.id === id ? { ...row, trashed: false } : row
+        }),
+      )
+      mockChatObservers.forEach((listener) => listener())
+    }
+    async emptyTrash() {
+      this.application.storage.setValue(this.key(), await this.read())
+      mockChatObservers.forEach((listener) => listener())
+    }
+
     subscribe(callback: () => void) {
       mockChatObservers.add(callback)
       return () => mockChatObservers.delete(callback)
@@ -28,11 +64,14 @@ jest.mock('@/Assistant/assistantSyncedChats', () => ({
       next.push({ tab } as never)
       this.application.storage.setValue(this.key(), next)
     }
+    async purgeTrashed(id: string) {
+      return this.delete(id)
+    }
     async delete(id: string) {
       await mockDeleteWait(id)
       this.application.storage.setValue(
         this.key(),
-        ((await this.read()) as { tab: { id: string } }[]).filter((row) => row.tab.id !== id),
+        ((await this.read({ includeTrashed: true })) as { tab: { id: string } }[]).filter((row) => row.tab.id !== id),
       )
     }
   },
@@ -289,7 +328,7 @@ describe('AssistantView shared conversation modes', () => {
     const history = container.querySelector('[aria-label="Assistant history"]')!
     click([...history.querySelectorAll('button')].find((button) => button.textContent === 'Select all')!)
     const remove = [...history.querySelectorAll('button')].find((button) =>
-      button.textContent?.includes('Delete selected'),
+      button.textContent?.includes('Move selected to trash'),
     )!
     jest.mocked(application.alerts.confirm).mockResolvedValueOnce(false)
     await act(async () => remove.click())
@@ -297,12 +336,15 @@ describe('AssistantView shared conversation modes', () => {
     expect(application.alerts.confirm).toHaveBeenCalledWith(
       expect.stringContaining('2 conversations'),
       expect.any(String),
-      'Delete',
+      'Move to trash',
       ButtonType.Danger,
     )
     await act(async () => remove.click())
-    expect(values.get('test-synced-chats:account-a')).toEqual([])
-    expect(container.querySelector('[role="tab"][aria-label="New chat"]')?.getAttribute('aria-selected')).toBe('true')
+    expect(values.get('test-synced-chats:account-a')).toEqual([
+      expect.objectContaining({ trashed: true }),
+      expect.objectContaining({ trashed: true }),
+    ])
+    expect(container.querySelector('[role="tab"][aria-label="History"]')?.getAttribute('aria-selected')).toBe('true')
     expect(history.querySelector('[aria-label="Resume First"]')).toBeNull()
     expect(history.querySelector('[aria-label="Resume Second"]')).toBeNull()
   })
@@ -335,7 +377,7 @@ describe('AssistantView shared conversation modes', () => {
       act(() => tab('First').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true })))
       click(
         [...container.querySelectorAll('[role="menuitem"]')].find(
-          (item) => item.textContent?.trim() === 'Delete chat',
+          (item) => item.textContent?.trim() === 'Move chat to trash',
         )!,
       )
       await act(async () => {
@@ -357,6 +399,33 @@ describe('AssistantView shared conversation modes', () => {
       }
     },
   )
+
+  it('restores from trash and requires confirmation before permanent cleanup', async () => {
+    const { application, values } = createApplication()
+    values.set('test-synced-chats:account-a', [
+      { tab: { id: 'trashed', title: 'Archived project', userRenamed: true }, trashed: true },
+    ])
+    await renderAssistant(root, application)
+    click(container.querySelector('[aria-label="Chat history"]')!)
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const trashButton = () =>
+      [...container.querySelectorAll('button')].find((button) => button.textContent?.startsWith('Trash ('))!
+    click(trashButton())
+    expect(container.textContent).toContain('Archived project')
+    jest.mocked(application.alerts.confirm).mockResolvedValueOnce(false)
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>('[aria-label="Permanently delete Archived project"]')!.click(),
+    )
+    expect(values.get('test-synced-chats:account-a') as unknown[]).toHaveLength(1)
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>('[aria-label="Restore Archived project"]')!.click(),
+    )
+    expect(values.get('test-synced-chats:account-a')).toEqual([expect.objectContaining({ trashed: false })])
+    expect(container.querySelector('[aria-label="Permanently delete Archived project"]')).toBeNull()
+  })
 
   it('renames a chat from history and saves the explicit title to synced metadata', async () => {
     const { application, values } = createApplication()
@@ -396,7 +465,7 @@ describe('AssistantView shared conversation modes', () => {
           confirm = resolve
         }),
     )
-    click(container.querySelector('[aria-label="Delete First"]')!)
+    click(container.querySelector('[aria-label="Move to trash: First"]')!)
     harness.setUserUuid('account-b')
     await act(async () => harness.emit(ApplicationEvent.SignedIn))
     await act(async () => confirm(true))

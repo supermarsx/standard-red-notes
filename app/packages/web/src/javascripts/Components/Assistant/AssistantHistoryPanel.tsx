@@ -1,3 +1,4 @@
+import type { AssistantSyncedChats } from '@/Assistant/assistantSyncedChats'
 import { assistantTabsByActivity, ChatTab, DEFAULT_TAB_TITLE } from '@/Assistant/chatTabs'
 import Icon from '@/Components/Icon/Icon'
 import { useMemo, useRef, useState } from 'react'
@@ -19,18 +20,33 @@ export function AssistantHistoryPanel({
   onResume,
   onRename,
   onDelete,
-}: Props & { onRename: (id: string, title: string) => void; onDelete: (ids: string[]) => Promise<boolean> }) {
+  trashedTabs,
+  storageStats,
+  onRestore,
+  onPurge,
+  onEmptyTrash,
+}: Props & {
+  onRename: (id: string, title: string) => void
+  onDelete: (ids: string[]) => Promise<boolean>
+  trashedTabs?: ChatTab[]
+  storageStats?: Awaited<ReturnType<AssistantSyncedChats['getStorageStats']>>
+  onRestore?: (ids: string[]) => Promise<boolean>
+  onPurge?: (ids: string[]) => Promise<boolean>
+  onEmptyTrash?: () => Promise<boolean>
+}) {
+  const [showTrash, setShowTrash] = useState(false)
+  const visibleTabs = useMemo(() => (showTrash ? (trashedTabs ?? []) : tabs), [showTrash, trashedTabs, tabs])
   const [selected, setSelected] = useState<string[]>([])
   const [editing, setEditing] = useState<{ id: string; title: string }>()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const busyRef = useRef(false)
-  const ordered = useMemo(() => assistantTabsByActivity(tabs), [tabs])
-  const tabIds = useMemo(() => new Set(tabs.map((tab) => tab.id)), [tabs])
+  const ordered = useMemo(() => assistantTabsByActivity(visibleTabs), [visibleTabs])
+  const tabIds = useMemo(() => new Set(visibleTabs.map((tab) => tab.id)), [visibleTabs])
   const selectedIds = selected.filter((id) => tabIds.has(id))
   const selectedSet = new Set(selectedIds)
   const control = 'border-border hover:bg-contrast rounded border px-2 py-1 text-xs disabled:opacity-50'
-  const remove = async (ids: string[]) => {
+  const perform = async (ids: string[], action: (ids: string[]) => Promise<boolean>) => {
     if (busyRef.current || !ids.length) {
       return
     }
@@ -38,19 +54,86 @@ export function AssistantHistoryPanel({
     setBusy(true)
     setError('')
     try {
-      if (await onDelete(ids)) {
+      if (await action(ids)) {
         setSelected((previous) => previous.filter((id) => !ids.includes(id)))
       }
     } catch {
-      setError('Chat deletion could not be completed. Your remaining history was kept; try again.')
+      setError('The history action could not be completed. Retry after checking storage and your connection.')
     } finally {
       busyRef.current = false
       setBusy(false)
     }
   }
+  const remove = (ids: string[]) => perform(ids, showTrash ? onPurge! : onDelete)
   return (
     <section aria-label="Assistant history" className="flex h-full min-h-0 flex-col overflow-y-auto p-4">
       <h2 className="text-base font-semibold">History</h2>
+      {trashedTabs && (
+        <div className="mt-2 flex items-center gap-2" role="group" aria-label="History view">
+          <button
+            type="button"
+            className={control}
+            disabled={busy}
+            aria-pressed={!showTrash}
+            onClick={() => {
+              setShowTrash(false)
+              setSelected([])
+              setEditing(undefined)
+            }}
+          >
+            Chats
+          </button>
+          <button
+            type="button"
+            className={control}
+            disabled={busy}
+            aria-pressed={showTrash}
+            onClick={() => {
+              setShowTrash(true)
+              setSelected([])
+              setEditing(undefined)
+            }}
+          >
+            Trash ({trashedTabs.length})
+          </button>
+        </div>
+      )}
+      {storageStats && (
+        <details className="text-passive-0 mt-2 text-xs">
+          <summary className="cursor-pointer">
+            Storage · {storageStats.activeChats} chats · {storageStats.trashedChats} trashed ·{' '}
+            {Math.round((storageStats.serializedUnits / storageStats.limits.serializedUnits) * 100)}% of chat budget
+          </summary>
+          <p>
+            {storageStats.activeChats + storageStats.trashedChats} / {storageStats.limits.chats} chat slots (including
+            trash); {storageStats.writerRecords} transcript records; writer record cap {storageStats.limits.records}; up
+            to {storageStats.limits.writersPerChat} writers per chat; single-record limit{' '}
+            {storageStats.limits.recordUnits.toLocaleString()} serialized units.
+          </p>
+          <p>
+            {storageStats.serializedUnits.toLocaleString()} / {storageStats.limits.serializedUnits.toLocaleString()}{' '}
+            serialized units; {storageStats.writerRecords} transcript records; {storageStats.lifecycleRecords} lifecycle
+            markers; {storageStats.deletedChats} deleted chat markers; {storageStats.deletedResidualRecords} retained
+            deleted records; {storageStats.invalidRecords} unreadable records.
+          </p>
+          <p>
+            Hidden chats still use storage. Trash retains messages until permanently deleted. Small deletion markers
+            remain to prevent stale devices restoring deleted chats. Permanent deletion frees chat slots. Trash is never
+            automatically purged. Serialized units count JSON UTF-16 code units before encryption, not device disk
+            space.
+          </p>
+        </details>
+      )}
+      {showTrash && onEmptyTrash && (
+        <button
+          type="button"
+          className={`${control} mt-2 self-start`}
+          disabled={busy || (!trashedTabs?.length && !storageStats?.deletedResidualRecords)}
+          onClick={() => void perform(['empty-trash'], () => onEmptyTrash())}
+        >
+          Empty trash and clean deleted history
+        </button>
+      )}
       <p className="text-passive-0 mt-1 text-xs">
         Open a conversation in this workspace. Research reports stay in their chat history. In-flight work continues
         while this app stays open; reloading does not restart a model request.
@@ -59,12 +142,12 @@ export function AssistantHistoryPanel({
         <button
           type="button"
           className={control}
-          disabled={busy || !tabs.length}
+          disabled={busy || !visibleTabs.length}
           onClick={() => {
-            setSelected(selectedIds.length === tabs.length ? [] : tabs.map((tab) => tab.id))
+            setSelected(selectedIds.length === visibleTabs.length ? [] : visibleTabs.map((tab) => tab.id))
           }}
         >
-          {selectedIds.length === tabs.length && tabs.length > 0 ? 'Deselect all' : 'Select all'}
+          {selectedIds.length === visibleTabs.length && visibleTabs.length > 0 ? 'Deselect all' : 'Select all'}
         </button>
         <span className="text-passive-0 text-xs" role="status">
           {selectedIds.length} selected
@@ -76,8 +159,24 @@ export function AssistantHistoryPanel({
           onClick={() => void remove(selectedIds)}
         >
           <Icon type="trash" size="small" className="mr-1 inline-block" />
-          {busy ? 'Deleting…' : 'Delete selected'}
+          {busy
+            ? 'Working…'
+            : showTrash
+              ? 'Permanently delete selected'
+              : trashedTabs
+                ? 'Move selected to trash'
+                : 'Delete selected'}
         </button>
+        {showTrash && onRestore && (
+          <button
+            type="button"
+            className={control}
+            disabled={busy || !selectedIds.length}
+            onClick={() => void perform(selectedIds, onRestore)}
+          >
+            Restore selected
+          </button>
+        )}
       </div>
       {error && (
         <p role="alert" className="text-danger mt-2 text-xs">
@@ -132,33 +231,35 @@ export function AssistantHistoryPanel({
               <>
                 <button
                   type="button"
-                  aria-label={`Resume ${tab.title}`}
-                  onClick={() => onResume(tab.id)}
+                  aria-label={`${showTrash ? 'Restore' : 'Resume'} ${tab.title}`}
+                  onClick={() => (showTrash && onRestore ? void perform([tab.id], onRestore) : onResume(tab.id))}
                   disabled={busy}
                   className="hover:bg-contrast focus-visible:ring-info flex min-w-0 flex-1 items-center gap-2 rounded px-1 py-2 text-left focus-visible:ring-2"
                 >
                   <Icon type={assistantWorkTabIcon(tab)} size="small" className="text-info shrink-0" />
                   <span className="min-w-0 flex-1 truncate text-sm">{tab.title}</span>
                   <span className="text-passive-1 shrink-0 text-xs">
-                    {closedTabIds.includes(tab.id) ? 'Hidden' : 'Open'}
+                    {showTrash ? 'Restore' : closedTabIds.includes(tab.id) ? 'Hidden' : 'Open'}
                   </span>
                 </button>
+                {!showTrash && (
+                  <button
+                    type="button"
+                    className={control}
+                    disabled={busy}
+                    aria-label={`Rename ${tab.title}`}
+                    title="Rename chat"
+                    onClick={() => setEditing({ id: tab.id, title: tab.title })}
+                  >
+                    <Icon type="pencil-filled" size="small" />
+                  </button>
+                )}
                 <button
                   type="button"
                   className={control}
                   disabled={busy}
-                  aria-label={`Rename ${tab.title}`}
-                  title="Rename chat"
-                  onClick={() => setEditing({ id: tab.id, title: tab.title })}
-                >
-                  <Icon type="pencil-filled" size="small" />
-                </button>
-                <button
-                  type="button"
-                  className={control}
-                  disabled={busy}
-                  aria-label={`Delete ${tab.title}`}
-                  title="Delete chat"
+                  aria-label={`${showTrash ? 'Permanently delete' : trashedTabs ? 'Move to trash:' : 'Delete'} ${tab.title}`}
+                  title={showTrash ? 'Permanently delete chat' : trashedTabs ? 'Move chat to trash' : 'Delete chat'}
                   onClick={() => void remove([tab.id])}
                 >
                   <Icon type="trash" size="small" />
@@ -168,7 +269,9 @@ export function AssistantHistoryPanel({
           </li>
         ))}
       </ul>
-      {tabs.length === 0 && <p className="text-passive-0 mt-3 text-sm">No conversations yet.</p>}
+      {visibleTabs.length === 0 && (
+        <p className="text-passive-0 mt-3 text-sm">{showTrash ? 'Trash is empty.' : 'No conversations yet.'}</p>
+      )}
     </section>
   )
 }

@@ -24,7 +24,12 @@ import {
   readPersistedTabsResult,
 } from '@/Assistant/chatTabs'
 import ConversationPanel from './ConversationPanel'
-import { AssistantSyncedChats, reconcileSyncedChatSnapshots, type SyncedChat } from '@/Assistant/assistantSyncedChats'
+import {
+  AssistantSyncedChats,
+  getAssistantChatStorageFailure,
+  reconcileSyncedChatSnapshots,
+  type SyncedChat,
+} from '@/Assistant/assistantSyncedChats'
 import { AssistantHistoryPanel, AssistantRecentChats, assistantWorkTabIcon } from './AssistantHistoryPanel'
 import {
   clearAssistantChatHistoryDeletionTombstone,
@@ -131,6 +136,10 @@ const AssistantView = forwardRef<HTMLDivElement, Props>((props, ref) => {
   // Empty ordinary chats are local drafts. Metadata follows real history (or
   // an explicit rename), rather than allocating a synced chat on every click.
   const seededChatIdsRef = useRef(new Set<string>())
+  const [trashedChats, setTrashedChats] = useState<SyncedChat[]>([])
+  const [chatStorageStats, setChatStorageStats] =
+    useState<Awaited<ReturnType<AssistantSyncedChats['getStorageStats']>>>()
+  const historyActionBusy = useRef(false)
   const [sharedChats, setSharedChats] = useState<SyncedChat[]>([])
   const [sharedReady, setSharedReady] = useState(false)
   const metadataTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>())
@@ -301,10 +310,11 @@ const AssistantView = forwardRef<HTMLDivElement, Props>((props, ref) => {
         sharedStoreRef.current = sharedStore
         try {
           let incompleteImports = 0
-          let remote = await sharedStore.read()
+          const catalogIncludingTrash = await sharedStore.read({ includeTrashed: true })
+          let remote = catalogIncludingTrash.filter((chat) => !chat.trashed)
           const local = readPersistedTabsResult(application.storage, chatAccountScope)
           if (local.status === 'found') {
-            const existing = new Set(remote.map((chat) => chat.tab.id))
+            const existing = new Set(catalogIncludingTrash.map((chat) => chat.tab.id))
             for (const tab of local.tabs) {
               if (existing.has(tab.id)) {
                 continue
@@ -356,7 +366,10 @@ const AssistantView = forwardRef<HTMLDivElement, Props>((props, ref) => {
               const added = next.filter((chat) => !known.has(chat.tab.id)).map((chat) => chat.tab.id)
               const visibleIds = new Set(tabsRef.current.map((tab) => tab.id))
               const replacement = removed.has(activeTabIdRef.current)
-                ? (tabsRef.current.find((tab) => !removed.has(tab.id)) ?? next[0]?.tab ?? createTab())
+                ? (tabsRef.current.find((tab) => !removed.has(tab.id) && !closedTabIdsRef.current.includes(tab.id)) ??
+                  tabsRef.current.find((tab) => !removed.has(tab.id)) ??
+                  next[0]?.tab ??
+                  createTab())
                 : undefined
               known = nextIds
               nextIds.forEach((chatId) => seededChatIdsRef.current.add(chatId))
@@ -853,6 +866,74 @@ const AssistantView = forwardRef<HTMLDivElement, Props>((props, ref) => {
     })
   }, [])
 
+  // Read the storage inventory only while History is open; coalesce sync notifications.
+  useEffect(() => {
+    setTrashedChats([])
+    setChatStorageStats(undefined)
+    const store = sharedStoreRef.current
+    if (
+      !historyOpen ||
+      activeTabId !== historyTabId ||
+      !sharedReady ||
+      !store ||
+      loadedChatAccountScope !== chatAccountScope ||
+      workspaceLocked
+    ) {
+      return
+    }
+    let cancelled = false
+    let running = false
+    let requested = false
+    const refresh = () => {
+      requested = true
+      if (running) {
+        return
+      }
+      running = true
+      void (async () => {
+        while (requested) {
+          if (cancelled) {
+            break
+          }
+          requested = false
+          try {
+            const [all, stats] = await Promise.all([store.read({ includeTrashed: true }), store.getStorageStats()])
+            if (cancelled || sharedStoreRef.current !== store || workspaceLockedRef.current) {
+              return
+            }
+            setTrashedChats(all.filter((chat) => chat.trashed))
+            setChatStorageStats(stats)
+          } catch (error) {
+            if (!cancelled && sharedStoreRef.current === store) {
+              setWorkspacePersistenceNotice(getAssistantChatStorageFailure(error).message)
+            }
+          }
+        }
+      })().finally(() => {
+        running = false
+        if (requested && !cancelled) {
+          refresh()
+        }
+      })
+    }
+    const unsubscribe = store.subscribe(refresh)
+    refresh()
+    return () => {
+      cancelled = true
+      unsubscribe()
+    }
+  }, [
+    application,
+    workspaceRevision,
+    historyOpen,
+    activeTabId,
+    historyTabId,
+    sharedReady,
+    loadedChatAccountScope,
+    chatAccountScope,
+    workspaceLocked,
+  ])
+
   const deleteChat = useCallback(
     async (tabId: string) => {
       if (workspaceLockedRef.current || loadedChatAccountScope !== chatAccountScope) {
@@ -865,12 +946,10 @@ const AssistantView = forwardRef<HTMLDivElement, Props>((props, ref) => {
       const sharedStore = sharedStoreRef.current
       if (sharedStore) {
         try {
-          await sharedStore.delete(tabId)
-        } catch {
+          await sharedStore.trash(tabId)
+        } catch (error) {
           if (sharedStoreRef.current === sharedStore && !workspaceLockedRef.current) {
-            setWorkspacePersistenceNotice(
-              'The chat could not be deleted from encrypted storage. Try again; its saved history was kept.',
-            )
+            setWorkspacePersistenceNotice(getAssistantChatStorageFailure(error).message)
           }
           return false
         }
@@ -932,6 +1011,9 @@ const AssistantView = forwardRef<HTMLDivElement, Props>((props, ref) => {
 
   const deleteHistoryChats = useCallback(
     async (ids: string[]): Promise<boolean> => {
+      if (historyActionBusy.current) {
+        return false
+      }
       const transition = sessionTransitionRef.current
       const activation = workspaceActivationRef.current
       const current = () =>
@@ -943,23 +1025,91 @@ const AssistantView = forwardRef<HTMLDivElement, Props>((props, ref) => {
       if (!current() || !targets.length) {
         return false
       }
-      const confirmed = await application.alerts.confirm(
-        `Permanently delete ${targets.length} conversation${targets.length === 1 ? '' : 's'} and their saved messages? This cannot be undone.`,
-        'Delete chat history?',
-        'Delete',
-        ButtonType.Danger,
-      )
-      if (!confirmed || !current()) {
-        return false
-      }
-      for (const id of targets) {
-        if (!current() || !(await deleteChat(id))) {
+      historyActionBusy.current = true
+      try {
+        const confirmed = await application.alerts.confirm(
+          sharedStoreRef.current
+            ? `Move ${targets.length} conversation${targets.length === 1 ? '' : 's'} to trash? Any running replies in these chats will stop. Messages remain encrypted and can be restored; space is reclaimed only after permanent deletion.`
+            : `Permanently delete ${targets.length} conversation${targets.length === 1 ? '' : 's'} and their saved messages? Any running replies will stop. This cannot be undone.`,
+          sharedStoreRef.current ? 'Move chats to trash?' : 'Delete chat history?',
+          sharedStoreRef.current ? 'Move to trash' : 'Delete',
+          ButtonType.Danger,
+        )
+        if (!confirmed || !current()) {
           return false
         }
+        for (const id of targets) {
+          if (!current() || !(await deleteChat(id))) {
+            return false
+          }
+        }
+        return true
+      } finally {
+        historyActionBusy.current = false
       }
-      return true
     },
     [application, chatAccountScope, loadedChatAccountScope, deleteChat],
+  )
+
+  const manageTrash = useCallback(
+    async (operation: 'restore' | 'purge' | 'empty', ids: string[] = []): Promise<boolean> => {
+      const store = sharedStoreRef.current
+      const transition = sessionTransitionRef.current
+      const activation = workspaceActivationRef.current
+      const current = () =>
+        store &&
+        sharedStoreRef.current === store &&
+        transition === sessionTransitionRef.current &&
+        activation === workspaceActivationRef.current &&
+        !workspaceLockedRef.current &&
+        loadedChatAccountScope === chatAccountScope
+      if (!current() || historyActionBusy.current) {
+        return false
+      }
+      historyActionBusy.current = true
+      try {
+        const targets = [...new Set(ids)].filter((id) => trashedChats.some((chat) => chat.tab.id === id))
+        if (operation !== 'empty' && !targets.length) {
+          return false
+        }
+        if (operation !== 'restore') {
+          const confirmed = await application.alerts.confirm(
+            operation === 'empty'
+              ? 'Permanently delete every trashed conversation and clean retained transcript records from already deleted chats? This cannot be undone. Small deletion markers remain to prevent stale devices restoring deleted chats.'
+              : `Permanently delete ${targets.length} trashed conversation${targets.length === 1 ? '' : 's'} and their messages? This cannot be undone.`,
+            'Permanently delete chat history?',
+            'Delete permanently',
+            ButtonType.Danger,
+          )
+          if (!confirmed || !current()) {
+            return false
+          }
+        }
+        if (operation === 'empty') {
+          await store!.emptyTrash()
+        } else {
+          for (const target of targets) {
+            if (!current()) {
+              return false
+            }
+            if (operation === 'restore') {
+              await store!.restore(target)
+            } else {
+              await store!.delete(target)
+            }
+          }
+        }
+        return !!current()
+      } catch (error) {
+        if (current()) {
+          setWorkspacePersistenceNotice(getAssistantChatStorageFailure(error).message)
+        }
+        return false
+      } finally {
+        historyActionBusy.current = false
+      }
+    },
+    [application, chatAccountScope, loadedChatAccountScope, trashedChats],
   )
 
   // Auto-name from the first user message, but never clobber a user-chosen title.
@@ -1326,10 +1476,10 @@ const AssistantView = forwardRef<HTMLDivElement, Props>((props, ref) => {
           <button
             role="menuitem"
             className="text-danger hover:bg-contrast flex w-full items-center gap-2 px-3 py-1.5 text-left"
-            onClick={() => deleteChat(menu.tabId)}
+            onClick={() => void deleteHistoryChats([menu.tabId])}
           >
             <Icon type="trash" size="small" />
-            Delete chat
+            {sharedStoreRef.current ? 'Move chat to trash' : 'Delete chat'}
           </button>
           {visibleTabs.length > 1 && (
             <button
@@ -1499,6 +1649,11 @@ const AssistantView = forwardRef<HTMLDivElement, Props>((props, ref) => {
             onResume={resumeTab}
             onRename={renameTab}
             onDelete={deleteHistoryChats}
+            trashedTabs={sharedStoreRef.current ? trashedChats.map((chat) => chat.tab) : undefined}
+            storageStats={chatStorageStats}
+            onRestore={(ids) => manageTrash('restore', ids)}
+            onPurge={(ids) => manageTrash('purge', ids)}
+            onEmptyTrash={() => manageTrash('empty')}
           />
         </div>
       )}

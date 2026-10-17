@@ -15,9 +15,35 @@ const mockRead = jest.fn()
 jest.mock('@/Assistant/assistantSyncedChats', () => ({
   ...jest.requireActual('@/Assistant/assistantSyncedChats'),
   AssistantSyncedChats: class {
-    async read() {
-      return mockRead() ?? mockRows
+    async read(options?: { includeTrashed?: boolean }) {
+      const rows = (await mockRead()) ?? mockRows
+      return options?.includeTrashed ? rows : rows.filter((row: SyncedChat) => !row.trashed)
     }
+    async getStorageStats() {
+      return {
+        activeChats: mockRows.filter((row) => !row.trashed).length,
+        trashedChats: mockRows.filter((row) => row.trashed).length,
+        deletedChats: 0,
+        writerRecords: mockRows.length,
+        lifecycleRecords: 0,
+        invalidRecords: 0,
+        serializedUnits: 100,
+        limits: { chats: 100, writersPerChat: 64, records: 512, serializedUnits: 10000, recordUnits: 1000 },
+      }
+    }
+    async trash(id: string) {
+      mockRows = mockRows.map((row) => (row.tab.id === id ? { ...row, trashed: true } : row))
+      mockListeners.forEach((listener) => listener())
+    }
+    async restore(id: string) {
+      mockRows = mockRows.map((row) => (row.tab.id === id ? { ...row, trashed: false } : row))
+      mockListeners.forEach((listener) => listener())
+    }
+    async emptyTrash() {
+      mockRows = mockRows.filter((row) => !row.trashed)
+      mockListeners.forEach((listener) => listener())
+    }
+
     subscribe(listener: () => void) {
       mockListeners.add(listener)
       return () => mockListeners.delete(listener)
@@ -28,6 +54,9 @@ jest.mock('@/Assistant/assistantSyncedChats', () => ({
     }
     async updateMetadata(tab: SyncedChat['tab']) {
       await mockMetadata(tab)
+    }
+    async purgeTrashed(id: string) {
+      return this.delete(id)
     }
     async delete(id: string) {
       mockRows = mockRows.filter((row) => row.tab.id !== id)
@@ -64,6 +93,7 @@ it('follows remote chat updates without stealing focus, supports middle-click hi
   const observers = new Set<(event: ApplicationEvent) => Promise<void>>()
   const application = {
     identifier: 'sync-host',
+    alerts: { confirm: jest.fn(async () => true) },
     sessions: { getUser: () => user },
     protections: { isLocked: async () => false },
     storage: { getValue: () => undefined },
@@ -102,10 +132,11 @@ it('follows remote chat updates without stealing focus, supports middle-click hi
     )
     await act(async () =>
       [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
-        .find((button) => button.textContent?.includes('Delete'))!
+        .find((button) => button.textContent?.includes('Move chat to trash'))!
         .click(),
     )
-    expect(mockRows.map((row) => row.tab.id)).not.toContain('first')
+    expect(mockRows.find((row) => row.tab.id === 'first')?.trashed).toBe(true)
+    expect(application.alerts.confirm).toHaveBeenCalled()
     user = undefined
     await act(async () => {
       await Promise.all([...observers].map((observer) => observer(ApplicationEvent.SignedOut)))
