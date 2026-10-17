@@ -7,8 +7,6 @@ import {
   CreateAnyKeyParams,
   encryptedInputParametersFromPayload,
   ErrorDecryptingParameters,
-  FindPayloadInDecryptionSplit,
-  FindPayloadInEncryptionSplit,
   isErrorDecryptingParameters,
   ItemAuthenticatedData,
   KeyedDecryptionSplit,
@@ -73,6 +71,22 @@ import { EncryptionProviderInterface } from './EncryptionProviderInterface'
 import { KeyMode } from '../RootKeyManager/KeyMode'
 import { ContentType } from '@standardnotes/domain-core'
 import { DecryptErroredTypeAPayloads } from './UseCase/TypeA/DecryptErroredPayloads'
+
+/** Preserve first-match lookup precedence without scanning every split for every result. */
+function indexOriginalPayloads<P extends { readonly uuid: string }>(
+  groups: readonly ({ readonly items: readonly P[] } | undefined)[],
+): Map<string, P> {
+  const originals = new Map<string, P>()
+  for (const group of groups) {
+    for (const payload of group?.items ?? []) {
+      const uuid = payload.uuid
+      if (!originals.has(uuid)) {
+        originals.set(uuid, payload)
+      }
+    }
+  }
+  return originals
+}
 
 /**
  * The encryption service is responsible for the encryption and decryption of payloads, and
@@ -357,8 +371,21 @@ export class EncryptionService
       extendArray(allEncryptedParams, itemsKeyEncrypted)
     }
 
+    // This order matches FindPayloadInEncryptionSplit, including first wins
+    // for duplicate UUIDs within and across key groups.
+    const originals = indexOriginalPayloads([
+      split.usesItemsKey,
+      split.usesRootKey,
+      split.usesKeySystemRootKey,
+      split.usesItemsKeyWithKeyLookup,
+      split.usesRootKeyWithKeyLookup,
+      split.usesKeySystemRootKeyWithKeyLookup,
+    ])
     const packagedEncrypted = allEncryptedParams.map((encryptedParams) => {
-      const original = FindPayloadInEncryptionSplit(encryptedParams.uuid, split)
+      const original = originals.get(encryptedParams.uuid)
+      if (!original) {
+        throw Error('Cannot find payload in encryption split')
+      }
       return new EncryptedPayload({
         ...original,
         ...encryptedParams,
@@ -430,8 +457,20 @@ export class EncryptionService
       extendArray(resultParams, itemsKeyDecrypted)
     }
 
+    // Decryption uses the same first-match order as its exported split finder.
+    const originals = indexOriginalPayloads([
+      split.usesItemsKey,
+      split.usesRootKey,
+      split.usesKeySystemRootKey,
+      split.usesItemsKeyWithKeyLookup,
+      split.usesRootKeyWithKeyLookup,
+      split.usesKeySystemRootKeyWithKeyLookup,
+    ])
     const packagedResults = resultParams.map((params) => {
-      const original = FindPayloadInDecryptionSplit(params.uuid, split)
+      const original = originals.get(params.uuid)
+      if (!original) {
+        throw Error('Cannot find payload in encryption split')
+      }
 
       if (isErrorDecryptingParameters(params)) {
         return new EncryptedPayload({
