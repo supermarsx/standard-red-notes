@@ -476,3 +476,11 @@ The largest evidence gap is deliberate and important: no test fixture or CI job
 in this repository proves current original-client ↔ fork-server or
 fork-client ↔ original-server interoperability. Until that matrix exists,
 mixed deployments remain conditional or unverified.
+
+The 17 October 2026 follow-up reviewed the original-payload indexing change in
+`EncryptionService` against the previously audited implementation and its split
+finder helpers. It preserves all six key-group precedence rules, first duplicate
+selection, missing-original exceptions, result ordering and failed-decryption
+bytes/metadata. It changes lookup cost, not encrypted payload formats or key
+selection. All 17 encryption-service tests passed before updating the fork audit
+hash; the upstream parity pins remain unchanged.
