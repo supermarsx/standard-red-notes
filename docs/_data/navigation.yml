@@ -1080,6 +1080,8 @@
           url: /concurrency-performance-audit.html#collaboration-responder-recovery
         - title: Evening Firefox profile
           url: /concurrency-performance-audit.html#evening-firefox-profile
+        - title: Chat save failure observability
+          url: /concurrency-performance-audit.html#chat-save-failure-observability
     - title: Dependency upgrade audit
       items:
         - title: Audit overview
