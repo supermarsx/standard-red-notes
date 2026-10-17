@@ -2,7 +2,7 @@
 import { AssistantChatStorageError, type AssistantSharedChatBinding } from '@/Assistant/assistantSyncedChats'
 import { act, type RefObject, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { ApplicationEvent } from '@standardnotes/snjs'
+import { ApplicationEvent, PrefKey } from '@standardnotes/snjs'
 import { runConversationMode } from '@/Assistant/conversationModeRunner'
 import { type AgentResult } from '@/Assistant/agent'
 import ConversationPanel from './ConversationPanel'
@@ -161,6 +161,57 @@ describe('Assistant immediate send feedback and preflight fences', () => {
   afterEach(() => {
     act(() => root.unmount())
     container.remove()
+  })
+
+  it('reports an unapplied permission write and restores the persisted policy', async () => {
+    application.setPreference.mockResolvedValue(undefined)
+    await act(async () => {
+      render(false)
+      await flush()
+    })
+    const select = container.querySelector('select[aria-label="Assistant tool permissions"]') as HTMLSelectElement
+    await act(async () => {
+      select.value = 'allow-safe'
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+      await flush()
+    })
+    expect(select.value).toBe('allow-read')
+    expect(select.disabled).toBe(false)
+    expect(container.textContent).toContain('Tool permissions could not be saved. Please try again.')
+    application.setPreference.mockReset()
+  })
+
+  it('keeps a selected permission visible through delayed preference writes and unrelated refreshes', async () => {
+    const gate = deferred<void>()
+    let savedMode = 'allow-read'
+    const original = application.getPreference
+    application.getPreference = (key, fallback) => (key === PrefKey.AssistantToolPermissionMode ? savedMode : fallback)
+    application.setPreference.mockImplementation(async (key, value) => {
+      await gate.promise
+      if (key === PrefKey.AssistantToolPermissionMode) savedMode = value
+    })
+    try {
+      await act(async () => {
+        render(false)
+        await flush()
+      })
+      const select = container.querySelector('select[aria-label="Assistant tool permissions"]') as HTMLSelectElement
+      await act(async () => {
+        select.value = 'allow-safe'
+        select.dispatchEvent(new Event('change', { bubbles: true }))
+        await eventObserver(ApplicationEvent.PreferencesChanged)
+      })
+      expect(select.value).toBe('allow-safe')
+      expect(select.disabled).toBe(true)
+      await act(async () => {
+        gate.resolve()
+        await flush()
+      })
+      expect(select.value).toBe('allow-safe')
+    } finally {
+      application.getPreference = original
+      application.setPreference.mockReset()
+    }
   })
 
   it('shows the submitted bubble and Stop before editor saving completes, without checkpointing an unprepared turn', async () => {

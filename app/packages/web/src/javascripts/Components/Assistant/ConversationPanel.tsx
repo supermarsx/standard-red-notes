@@ -434,6 +434,10 @@ function ConversationPanelImpl({
   const toolPermissionModeRef = useRef<AssistantToolPermissionMode>(
     application.getPreference(PrefKey.AssistantToolPermissionMode, 'allow-read'),
   )
+  const [permissionError, setPermissionError] = useState('')
+  const [pendingToolPermissionMode, setPendingToolPermissionMode] = useState<AssistantToolPermissionMode | null>(null)
+  const permissionWriteRevision = useRef(0)
+  const pendingPermissionWrite = useRef(false)
   const historyCheckpointRef = useRef<AssistantChatHistoryCheckpoint | null>(null)
   const historyWriterRef = useRef<() => Promise<void>>(async () => undefined)
   const mountedRef = useRef(true)
@@ -1073,11 +1077,18 @@ function ConversationPanelImpl({
           event === ApplicationEvent.SignedOut ||
           event === ApplicationEvent.KeyStatusChanged
         ) {
-          toolPermissionModeRef.current = application.getPreference(PrefKey.AssistantToolPermissionMode, 'allow-read')
+          if (!pendingPermissionWrite.current) {
+            toolPermissionModeRef.current = application.getPreference(PrefKey.AssistantToolPermissionMode, 'allow-read')
+          }
           const nextPrincipal = captureAssistantSessionPrincipal(application.sessions)
           const accountChanged = !assistantSessionPrincipalMatches(observedPrincipalRef.current, nextPrincipal)
           observedPrincipalRef.current = nextPrincipal
           if (event === ApplicationEvent.KeyStatusChanged || accountChanged) {
+            permissionWriteRevision.current += 1
+            pendingPermissionWrite.current = false
+            setPendingToolPermissionMode(null)
+            setPermissionError('')
+            toolPermissionModeRef.current = application.getPreference(PrefKey.AssistantToolPermissionMode, 'allow-read')
             setChatTokenUsage(EMPTY_CHAT_TOKEN_USAGE)
             setTokenWindows(null)
             // Account changes and root-key changes are hard privacy boundaries.
@@ -1177,8 +1188,9 @@ function ConversationPanelImpl({
       }
     }
   }
-  const toolPermissionMode = application.getPreference(PrefKey.AssistantToolPermissionMode, 'allow-read')
-  toolPermissionModeRef.current = toolPermissionMode
+  const toolPermissionMode =
+    pendingToolPermissionMode ?? application.getPreference(PrefKey.AssistantToolPermissionMode, 'allow-read')
+  toolPermissionModeRef.current = application.getPreference(PrefKey.AssistantToolPermissionMode, 'allow-read')
   const previousToolPermissionModeRef = useRef(toolPermissionMode)
   const assistantAvailability = getSelectionAIAvailability(application)
 
@@ -2149,6 +2161,11 @@ function ConversationPanelImpl({
 
       <div ref={scrollRef} onScroll={onMessageScroll} className="min-h-0 flex-grow overflow-y-auto px-3 py-3">
         {messages.length === 0 && !preparingPrompt && recentChats}
+        {permissionError && (
+          <div role="alert" className="text-danger mb-2 text-xs">
+            {permissionError}
+          </div>
+        )}
         {!noticeDismissed && (
           <div className="border-warning bg-warning-faded mb-4 rounded border border-solid p-3">
             <div className="flex items-start justify-between gap-2">
@@ -2238,17 +2255,45 @@ function ConversationPanelImpl({
               className="border-border bg-default text-text w-28 max-w-full min-w-0 rounded border px-1.5 py-0.5 text-[11px]"
               title="Choose whether tools ask first, allow reads, allow safe changes, review every action, or bypass confirmations."
               value={toolPermissionMode}
+              disabled={pendingToolPermissionMode !== null}
               onChange={(event) => {
                 const next = event.target.value as typeof toolPermissionMode
                 sessionToolDecisionsRef.current.clear()
                 historyCheckpointRef.current?.schedule()
-                toolPermissionModeRef.current = next
+                setPermissionError('')
+                setPendingToolPermissionMode(next)
+                pendingPermissionWrite.current = true
+                const revision = ++permissionWriteRevision.current
                 void Promise.all([
                   application.setPreference(PrefKey.AssistantToolPermissionMode, next),
                   // Every richer mode fails safe on older clients, which understand
                   // only the legacy ask-before-write boolean.
                   application.setPreference(PrefKey.AssistantConfirmBeforeWrite, legacyConfirmBeforeWriteForMode(next)),
                 ])
+                  .then(() => {
+                    if (
+                      mountedRef.current &&
+                      permissionWriteRevision.current === revision &&
+                      application.getPreference(PrefKey.AssistantToolPermissionMode, 'allow-read') !== next
+                    ) {
+                      throw new Error('Tool permission preference was not applied')
+                    }
+                  })
+                  .catch(() => {
+                    if (mountedRef.current && permissionWriteRevision.current === revision) {
+                      setPermissionError('Tool permissions could not be saved. Please try again.')
+                    }
+                  })
+                  .finally(() => {
+                    if (mountedRef.current && permissionWriteRevision.current === revision) {
+                      pendingPermissionWrite.current = false
+                      setPendingToolPermissionMode(null)
+                      toolPermissionModeRef.current = application.getPreference(
+                        PrefKey.AssistantToolPermissionMode,
+                        'allow-read',
+                      )
+                    }
+                  })
               }}
               aria-label="Assistant tool permissions"
             >

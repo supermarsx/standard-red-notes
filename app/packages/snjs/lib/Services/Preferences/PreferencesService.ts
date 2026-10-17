@@ -48,6 +48,7 @@ export class PreferencesService
   private reloading = false
   private reloadPromise?: Promise<void>
   private preferences?: SNUserPrefs
+  private preferenceWriteQueue: Promise<void> = Promise.resolve()
   private localPreferences: { [key in LocalPrefKey]?: LocalPrefValue[key] } = {}
   private removeItemObserver?: () => void
   private removeSyncObserver?: () => void
@@ -226,9 +227,23 @@ export class PreferencesService
       return
     }
 
-    this.preferences = (await this.mutator.changeItem<UserPrefsMutator>(this.preferences, (m) => {
-      m.setPref(key, value)
-    })) as SNUserPrefs
+    const preferenceUuid = this.preferences.uuid
+    const write = this.preferenceWriteQueue.then(async () => {
+      if (this.deinitialized || this.preferences?.uuid !== preferenceUuid) {
+        return
+      }
+      // Every preference lives in the same immutable item. Concurrent mutations
+      // otherwise read the same snapshot and the last emission loses other keys.
+      const updated = (await this.mutator.changeItem<UserPrefsMutator>(this.preferences, (m) => {
+        m.setPref(key, value)
+      })) as SNUserPrefs
+      if (!this.deinitialized && this.preferences?.uuid === preferenceUuid) {
+        this.preferences = updated
+      }
+    })
+    // A failed write is reported to its caller without poisoning later changes.
+    this.preferenceWriteQueue = write.catch(() => undefined)
+    await write
   }
 
   private async reload(): Promise<void> {

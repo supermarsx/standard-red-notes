@@ -143,6 +143,53 @@ function createHarness(
   }
 }
 
+describe('PreferencesService concurrent immutable item writes', () => {
+  async function ready() {
+    const harness = createHarness({}, new Map())
+    await harness.service.handleEvent(stageEvent(ApplicationStage.StorageDecrypted_09))
+    await harness.service.handleEvent(stageEvent(ApplicationStage.LoadedDatabase_12))
+    await flushAsyncWork()
+    return harness
+  }
+
+  it('keeps the selected tool mode when its legacy preference is written concurrently', async () => {
+    const harness = await ready()
+    let snapshot = new Map<PrefKey, unknown>()
+    harness.mutator.changeItem.mockImplementation(async (_item, mutate) => {
+      // Match MutatorService: capture an immutable snapshot, then await hydration.
+      const next = new Map(snapshot)
+      await Promise.resolve()
+      mutate?.({ setPref: (key: PrefKey, value: unknown) => next.set(key, value) } as never)
+      snapshot = next
+      return { uuid: 'user-preferences', getPref: (key: PrefKey) => snapshot.get(key) } as never
+    })
+    await Promise.all([
+      harness.service.setValue(PrefKey.AssistantToolPermissionMode, 'allow-safe'),
+      harness.service.setValue(PrefKey.AssistantConfirmBeforeWrite, true),
+    ])
+    expect(snapshot.get(PrefKey.AssistantToolPermissionMode)).toBe('allow-safe')
+    expect(snapshot.get(PrefKey.AssistantConfirmBeforeWrite)).toBe(true)
+  })
+
+  it('does not poison subsequent preferences after one mutation fails', async () => {
+    const harness = await ready()
+    harness.mutator.changeItem.mockRejectedValueOnce(new Error('write failed'))
+    const failed = harness.service.setValue(PrefKey.AssistantToolPermissionMode, 'allow-safe')
+    const next = harness.service.setValue(PrefKey.AssistantToolPermissionMode, 'ask')
+    await expect(failed).rejects.toThrow('write failed')
+    await next
+    expect(harness.synced.get(PrefKey.AssistantToolPermissionMode)).toBe('ask')
+  })
+
+  it('does not start queued mutations after teardown', async () => {
+    const harness = await ready()
+    const write = harness.service.setValue(PrefKey.AssistantToolPermissionMode, 'allow-safe')
+    harness.service.deinit()
+    await write
+    expect(harness.mutator.changeItem).not.toHaveBeenCalled()
+  })
+})
+
 describe('PreferencesService with no preferences item yet', () => {
   /**
    * A signed-out app, a new account, the first sign-in on a device: nothing is in
