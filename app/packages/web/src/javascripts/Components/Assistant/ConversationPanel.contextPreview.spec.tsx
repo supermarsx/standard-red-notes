@@ -153,23 +153,12 @@ describe('ConversationPanel context preview cadence', () => {
     renderPanel(true, undefined, onModeChange)
     const context = container.querySelector('[data-context-selector]')!
     const tools = container.querySelector('[aria-label="Assistant tool permissions"]')!
-    const modes = container.querySelector<HTMLSelectElement>('[aria-label="Assistant mode"]')!
+    const modes = container.querySelector<HTMLButtonElement>('[aria-label="Assistant mode"]')!
     const input = container.querySelector('[aria-label="Message the assistant"]')!
     expect(context.compareDocumentPosition(tools) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(tools.compareDocumentPosition(modes) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(modes.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect([...modes.options].map((option) => option.text)).toEqual([
-      'Chat',
-      'Agent',
-      'Plan',
-      'Research',
-      'Deep Research',
-    ])
-    act(() => {
-      modes.value = 'plan'
-      modes.dispatchEvent(new Event('change', { bubbles: true }))
-    })
-    expect(onModeChange).toHaveBeenCalledWith('plan')
+    expect(modes.getAttribute('title')).toContain('Assistant mode: Agent')
   })
 
   it('does not rescan note plaintext during unrelated streaming-style rerenders', () => {

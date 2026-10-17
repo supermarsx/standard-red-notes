@@ -177,13 +177,15 @@ describe('Assistant immediate send feedback and preflight fences', () => {
       render(false)
       await flush()
     })
-    const select = container.querySelector('select[aria-label="Assistant tool permissions"]') as HTMLSelectElement
+    const select = container.querySelector('button[aria-label="Assistant tool permissions"]') as HTMLButtonElement
+    await act(async () => select.click())
     await act(async () => {
-      select.value = 'allow-safe'
-      select.dispatchEvent(new Event('change', { bubbles: true }))
+      Array.from(document.querySelectorAll<HTMLElement>('[role="option"]'))
+        .find((option) => option.textContent?.startsWith('Safe changes'))!
+        .click()
       await flush()
     })
-    expect(select.value).toBe('allow-read')
+    expect(select.textContent).toBe('Read')
     expect(select.disabled).toBe(false)
     expect(container.textContent).toContain('Tool permissions could not be saved. Please try again.')
     application.setPreference.mockReset()
@@ -203,19 +205,21 @@ describe('Assistant immediate send feedback and preflight fences', () => {
         render(false)
         await flush()
       })
-      const select = container.querySelector('select[aria-label="Assistant tool permissions"]') as HTMLSelectElement
+      const select = container.querySelector('button[aria-label="Assistant tool permissions"]') as HTMLButtonElement
+      await act(async () => select.click())
       await act(async () => {
-        select.value = 'allow-safe'
-        select.dispatchEvent(new Event('change', { bubbles: true }))
+        Array.from(document.querySelectorAll<HTMLElement>('[role="option"]'))
+          .find((option) => option.textContent?.startsWith('Safe changes'))!
+          .click()
         await eventObserver(ApplicationEvent.PreferencesChanged)
       })
-      expect(select.value).toBe('allow-safe')
+      expect(select.textContent).toBe('Safe')
       expect(select.disabled).toBe(true)
       await act(async () => {
         gate.resolve()
         await flush()
       })
-      expect(select.value).toBe('allow-safe')
+      expect(select.textContent).toBe('Safe')
     } finally {
       application.getPreference = original
       application.setPreference.mockReset()
