@@ -863,3 +863,145 @@ it('uses the effective writer-record budget without blocking edits to an existin
   await a.save(tab, [message('one', 'updated')])
   expect((await a.read())[0].messages).toEqual([message('one', 'updated')])
 })
+
+it('does not charge trash or deleted residual records against active admission and checks restore', async () => {
+  const h = harness(),
+    store = new AssistantSyncedChats(h.application, 'a', { chats: 1, records: 1, serializedUnits: 1500 })
+  await store.save({ id: 'old', title: 'Old', userRenamed: false }, [message('old', 'x'.repeat(800))])
+  await store.trash('old')
+  await store.save({ id: 'new', title: 'New', userRenamed: false }, [message('new')])
+  await expect(store.restore('old')).rejects.toMatchObject({ code: 'CHAT_LIMIT' })
+  await store.delete('old')
+  h.values.set('ghost', {
+    uuid: 'ghost',
+    content: writer('ghost', [{ ...entry('ghost', null), message: message('ghost', 'x'.repeat(8000)) }], {
+      chatId: 'old',
+    }),
+  })
+  await store.save({ id: 'new', title: 'New', userRenamed: false }, [message('new', 'still writable')])
+  const stats = await store.getStorageStats()
+  expect(stats.budgetedWriterRecords).toBe(1)
+  expect(stats.budgetedSerializedUnits).toBeLessThan(stats.limits.serializedUnits)
+  expect(stats.serializedUnits).toBeGreaterThan(stats.limits.serializedUnits)
+  expect(stats.deletedSerializedUnits).toBeGreaterThan(8000)
+})
+
+it('expires only acknowledged trash older than 30 days and retains a terminal marker', async () => {
+  const h = harness(),
+    store = new AssistantSyncedChats(h.application, 'a')
+  const now = Date.UTC(2026, 9, 17),
+    day = 24 * 60 * 60 * 1000
+  const clock = jest.spyOn(Date, 'now').mockReturnValue(now)
+  try {
+    h.values.set('body', { uuid: 'body', content: writer('a', [entry('secret', null)]) })
+    const trash = writer('a', [], { kind: 'lifecycle', state: 'trashed', updatedAt: now - 31 * day })
+    h.values.set('trash', {
+      uuid: 'trash',
+      content: trash,
+      dirty: true,
+      serverUpdatedAtTimestamp: now - 31 * day,
+    } as never)
+    await store.pruneExpiredTrash()
+    expect(h.values.has('body')).toBe(true)
+    h.values.set('trash', { uuid: 'trash', content: trash, dirty: false, serverUpdatedAtTimestamp: now - day } as never)
+    await store.pruneExpiredTrash()
+    expect(h.values.has('body')).toBe(true)
+    h.values.set('trash', {
+      uuid: 'trash',
+      content: trash,
+      dirty: false,
+      serverUpdatedAtTimestamp: now - 31 * day,
+    } as never)
+    const syncCalls = h.raw.sync.sync.mock.calls.length
+    await store.pruneExpiredTrash()
+    expect(h.values.has('body')).toBe(false)
+    expect([...h.values.values()].map((item) => (item.content as SyncedChatRecord).kind)).toEqual(['deleted'])
+    expect(h.raw.sync.sync).toHaveBeenCalledTimes(syncCalls + 1)
+    h.values.set('late', { uuid: 'late', content: writer('late', [entry('late', null)]) })
+    expect(await store.read()).toEqual([])
+    await store.pruneExpiredTrash()
+    expect(h.values.has('late')).toBe(false)
+  } finally {
+    clock.mockRestore()
+  }
+})
+
+it('rechecks restored or freshly re-trashed lifecycle state before queued expiry', async () => {
+  const h = harness(),
+    store = new AssistantSyncedChats(h.application, 'a')
+  const now = Date.UTC(2026, 9, 17),
+    old = now - 31 * 24 * 60 * 60 * 1000
+  const clock = jest.spyOn(Date, 'now').mockReturnValue(now)
+  try {
+    h.values.set('body', { uuid: 'body', content: writer('a', [entry('keep', null)]) })
+    h.values.set('trash', {
+      uuid: 'trash',
+      content: writer('a', [], { kind: 'lifecycle', state: 'trashed', updatedAt: old }),
+      dirty: false,
+      serverUpdatedAtTimestamp: old,
+    } as never)
+    const cleanup = store.pruneExpiredTrash()
+    const restore = store.restore('chat')
+    await Promise.all([cleanup, restore])
+    expect(await store.read()).toHaveLength(1)
+    await store.trash('chat')
+    await store.pruneExpiredTrash()
+    expect((await store.read({ includeTrashed: true }))[0].messages).toEqual([message('keep')])
+  } finally {
+    clock.mockRestore()
+  }
+})
+
+it('uses cached serialized lengths for unrelated transcripts during checkpoint admission and statistics', async () => {
+  const h = harness(),
+    store = new AssistantSyncedChats(h.application, 'a')
+  h.values.set('own', { uuid: 'own', content: writer('a', [entry('own', null)]) })
+  h.values.set('unrelated', { uuid: 'unrelated', content: writer('b', [entry('other', null)], { chatId: 'other' }) })
+  await store.read()
+  const stringify = jest.spyOn(JSON, 'stringify')
+  try {
+    await store.save({ id: 'chat', title: 'Chat', userRenamed: false }, [message('own', 'updated')])
+    await store.getStorageStats()
+    expect(
+      stringify.mock.calls.filter(([value]) => value?.uuid === 'unrelated' || value?.chatId === 'other'),
+    ).toHaveLength(0)
+  } finally {
+    stringify.mockRestore()
+  }
+})
+
+it('bounds retention maintenance to 25 rooms and one sync while deferring unacknowledged trash', async () => {
+  const h = harness(),
+    store = new AssistantSyncedChats(h.application, 'a')
+  const now = Date.UTC(2026, 9, 17),
+    old = now - 31 * 24 * 60 * 60 * 1000
+  const clock = jest.spyOn(Date, 'now').mockReturnValue(now)
+  try {
+    for (let i = 0; i < 26; i++) {
+      const chatId = 'old-' + i
+      h.values.set('body-' + i, { uuid: 'body-' + i, content: writer('a', [entry('m-' + i, null)], { chatId }) })
+      h.values.set('trash-' + i, {
+        uuid: 'trash-' + i,
+        content: writer('a', [], { chatId, kind: 'lifecycle', state: 'trashed', updatedAt: old }),
+        dirty: false,
+        serverUpdatedAtTimestamp: old,
+      } as never)
+    }
+    h.values.set('missing-body', { uuid: 'missing-body', content: writer('a', [], { chatId: 'missing' }) })
+    h.values.set('missing-trash', {
+      uuid: 'missing-trash',
+      content: writer('a', [], { chatId: 'missing', kind: 'lifecycle', state: 'trashed', updatedAt: old }),
+    })
+    await store.pruneExpiredTrash()
+    expect((await store.getStorageStats()).deletedChats).toBe(25)
+    expect(h.raw.sync.sync).toHaveBeenCalledTimes(1)
+    await store.pruneExpiredTrash()
+    expect((await store.getStorageStats()).deletedChats).toBe(26)
+    expect(h.raw.sync.sync).toHaveBeenCalledTimes(2)
+    expect(h.values.has('missing-body')).toBe(true)
+    await store.pruneExpiredTrash()
+    expect(h.raw.sync.sync).toHaveBeenCalledTimes(2)
+  } finally {
+    clock.mockRestore()
+  }
+})

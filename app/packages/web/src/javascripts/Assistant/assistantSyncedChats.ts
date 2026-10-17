@@ -21,7 +21,7 @@ export const ASSISTANT_CHAT_STORAGE_MESSAGES = {
   READ_ONLY: 'This session cannot save synced chats.',
   CHAT_TRASHED: 'This chat is in the trash. Restore it before continuing.',
   CHAT_DELETED: 'This chat was deleted on another device.',
-  CHAT_LIMIT: 'The chat count limit includes Trash. Permanently delete an older chat from History to free a slot.',
+  CHAT_LIMIT: 'The active chat limit has been reached. Move an older chat to Trash to free a slot.',
   WRITER_LIMIT: 'This chat has reached its writer limit. Start a new chat to continue.',
   RECORD_SIZE_LIMIT: 'This encrypted chat record is too large. Shorten the chat or start a new one.',
   STORAGE_RECORD_LIMIT: 'Encrypted chat storage has reached its record limit. Purge older chats to free space.',
@@ -113,6 +113,8 @@ function storageFailure(error: unknown, stage: AssistantChatStorageFailureStage)
 }
 
 export const ASSISTANT_CHAT_CONTENT_TYPE = 'SN|AssistantChat'
+export const ASSISTANT_CHAT_TRASH_RETENTION_DAYS = 30
+const MAX_TRASH_PRUNE_ROOMS = 25
 export const MAX_SYNCED_CHATS = 1000
 export const MAX_CHAT_WRITERS = 64
 export const MAX_SYNCED_CHAT_RECORDS = 8192
@@ -349,7 +351,7 @@ const selectConversationMode = (writers: Parsed[]): SyncedChatRecord | undefined
 }
 
 /** Writer-owned entries merge by stable message ID; tombstones dominate every late checkpoint. */
-function isChatTrashed(group: Parsed[]): boolean {
+function latestChatLifecycle(group: Parsed[]): Parsed | undefined {
   const latest = group
     .filter(({ record }) => record.kind === 'lifecycle')
     .sort(
@@ -359,7 +361,31 @@ function isChatTrashed(group: Parsed[]): boolean {
         rank(a, b),
     )
     .at(-1)
-  return latest?.record.state === 'trashed'
+  return latest
+}
+function isChatTrashed(group: Parsed[]): boolean {
+  return latestChatLifecycle(group)?.record.state === 'trashed'
+}
+function activeBudgetRecords(records: Parsed[]): Parsed[] {
+  const inactive = new Set(records.filter(({ record }) => record.kind === 'deleted').map(({ record }) => record.chatId))
+  const groups = new Map<string, Parsed[]>()
+  for (const parsed of records) {
+    const group = groups.get(parsed.record.chatId) ?? []
+    group.push(parsed)
+    groups.set(parsed.record.chatId, group)
+  }
+  for (const [chatId, group] of groups) {
+    if (isChatTrashed(group)) {
+      inactive.add(chatId)
+    }
+  }
+  return records.filter(({ record }) => !inactive.has(record.chatId))
+}
+function serializedRecordUnits(
+  records: Parsed[],
+  measure: (record: Parsed) => number = (record) => JSON.stringify(record).length,
+): number {
+  return 2 + Math.max(0, records.length - 1) + records.reduce((sum, record) => sum + measure(record), 0)
 }
 export function mergeSyncedChats(records: Parsed[], includeTrashed = false): SyncedChat[] {
   const groups = new Map<string, Parsed[]>()
@@ -736,7 +762,7 @@ export class AssistantSyncedChats {
       }
       if (
         !group.some(({ record }) => record.kind === 'writer') &&
-        mergeSyncedChats(records, true).length >= this.budget.chats
+        mergeSyncedChats(records).length >= this.budget.chats
       ) {
         throw new AssistantChatStorageError('CHAT_LIMIT', 'validate')
       }
@@ -883,19 +909,33 @@ export class AssistantSyncedChats {
       await this.write(own?.uuid, record)
     })
   }
+  private measureRecord = (parsed: Parsed): number => {
+    const cached = this.parsedRecords.get(parsed.uuid)
+    return cached?.parsed === parsed ? cached.serializedLength : JSON.stringify(parsed).length
+  }
   private assertProjectedBudget(records: Parsed[], uuid: string | undefined, record: SyncedChatRecord): void {
-    const previous = records.find((item) => item.uuid === uuid)
-    const writerCount = records.filter(({ record }) => record.kind === 'writer').length
-    const projectedCount = writerCount + (previous ? 0 : 1)
+    const before = activeBudgetRecords(records)
+    const after = activeBudgetRecords([
+      ...records.filter((item) => item.uuid !== uuid),
+      { uuid: uuid ?? '00000000-0000-0000-0000-000000000000', record },
+    ])
+    const previousChats = new Set(
+      before.filter(({ record }) => record.kind === 'writer').map(({ record }) => record.chatId),
+    ).size
+    const projectedChats = new Set(
+      after.filter(({ record }) => record.kind === 'writer').map(({ record }) => record.chatId),
+    ).size
+    if (projectedChats > this.budget.chats && projectedChats > previousChats) {
+      throw new AssistantChatStorageError('CHAT_LIMIT', 'validate')
+    }
+    const writerCount = before.filter(({ record }) => record.kind === 'writer').length
+    const projectedCount = after.filter(({ record }) => record.kind === 'writer').length
     if (projectedCount > this.budget.records && projectedCount > writerCount) {
       throw new AssistantChatStorageError('STORAGE_RECORD_LIMIT', 'validate')
     }
-    const projectedUnits =
-      this.catalogSerializedLength -
-      (previous ? JSON.stringify(previous).length : 0) +
-      JSON.stringify({ uuid: uuid ?? '00000000-0000-0000-0000-000000000000', record }).length +
-      (!previous && records.length ? 1 : 0)
-    if (projectedUnits > this.budget.serializedUnits && projectedUnits > this.catalogSerializedLength) {
+    const previousUnits = serializedRecordUnits(before, this.measureRecord),
+      projectedUnits = serializedRecordUnits(after, this.measureRecord)
+    if (projectedUnits > this.budget.serializedUnits && projectedUnits > previousUnits) {
       throw new AssistantChatStorageError('STORAGE_SIZE_LIMIT', 'validate')
     }
   }
@@ -908,6 +948,8 @@ export class AssistantSyncedChats {
       group.push(item)
       groups.set(item.record.chatId, group)
     }
+    let deletedSerializedUnits = 0,
+      trashedSerializedUnits = 0
     let deletedResidualRecords = 0
     let activeChats = 0,
       trashedChats = 0,
@@ -915,15 +957,22 @@ export class AssistantSyncedChats {
     for (const group of groups.values()) {
       if (group.some(({ record }) => record.kind === 'deleted')) {
         deletedChats++
+        deletedSerializedUnits += serializedRecordUnits(group, this.measureRecord) - 2
         deletedResidualRecords += group.filter(({ record }) => record.kind !== 'deleted').length
       } else if (isChatTrashed(group)) {
         trashedChats++
+        trashedSerializedUnits += serializedRecordUnits(group, this.measureRecord) - 2
       } else if (group.some(({ record }) => record.kind === 'writer')) {
         activeChats++
       }
     }
     return {
       activeChats,
+      budgetedWriterRecords: activeBudgetRecords(records).filter(({ record }) => record.kind === 'writer').length,
+      budgetedSerializedUnits: serializedRecordUnits(activeBudgetRecords(records), this.measureRecord),
+      deletedSerializedUnits,
+      trashedSerializedUnits,
+      trashRetentionDays: ASSISTANT_CHAT_TRASH_RETENTION_DAYS,
       deletedResidualRecords,
       trashedChats,
       deletedChats,
@@ -973,7 +1022,7 @@ export class AssistantSyncedChats {
         .sort(rank)
         .at(-1)
       // Tiny content-free control records are admitted even over budget so users can recover.
-      await this.write(own?.uuid, {
+      const control: SyncedChatRecord = {
         version: 1,
         ownerUuid: this.ownerUuid,
         chatId,
@@ -982,8 +1031,68 @@ export class AssistantSyncedChats {
         writerId: this.writerId,
         revision,
         updatedAt: Date.now(),
-      })
+      }
+      if (state === 'active') {
+        this.assertProjectedBudget(this.records(), own?.uuid, control)
+      }
+      await this.write(own?.uuid, control)
     })
+  }
+  private isExpiredTrash(group: Parsed[], cutoff: number): boolean {
+    const winner = latestChatLifecycle(group)
+    if (winner?.record.state !== 'trashed') {
+      return false
+    }
+    const item = this.application.items.findItem<DecryptedItemInterface>(winner.uuid)
+    const serverTime = item?.serverUpdatedAtTimestamp
+    return Boolean(
+      item &&
+      !item.dirty &&
+      typeof serverTime === 'number' &&
+      Number.isFinite(serverTime) &&
+      serverTime > 0 &&
+      Math.max(winner.record.updatedAt, serverTime) <= cutoff,
+    )
+  }
+  /** Explicit bounded maintenance; reads and diagnostics never delete history. */
+  async pruneExpiredTrash(): Promise<void> {
+    await this.assertAvailable()
+    const cutoff = Date.now() - ASSISTANT_CHAT_TRASH_RETENTION_DAYS * 24 * 60 * 60 * 1000
+    const groups = new Map<string, Parsed[]>()
+    for (const parsed of this.records()) {
+      const group = groups.get(parsed.record.chatId) ?? []
+      group.push(parsed)
+      groups.set(parsed.record.chatId, group)
+    }
+    const eligible = [...groups]
+      .filter(
+        ([, group]) =>
+          this.isExpiredTrash(group, cutoff) ||
+          (group.some(({ record }) => record.kind === 'deleted') &&
+            group.some(({ record }) => record.kind !== 'deleted')),
+      )
+      .slice(0, MAX_TRASH_PRUNE_ROOMS)
+    if (!eligible.length) {
+      return
+    }
+    let failure: unknown
+    try {
+      for (const [chatId] of eligible) {
+        await this.purge(chatId, true, cutoff, true)
+      }
+    } catch (error) {
+      failure = error
+    }
+    if (this.current()) {
+      try {
+        await this.application.sync.sync({ sourceDescription: 'Assistant expired trash cleanup' })
+      } catch (error) {
+        failure ??= storageFailure(error, 'checkpoint')
+      }
+    }
+    if (failure) {
+      throw failure
+    }
   }
   async emptyTrash(): Promise<void> {
     await this.assertAvailable()
@@ -1012,7 +1121,7 @@ export class AssistantSyncedChats {
   delete(chatId: string): Promise<void> {
     return this.purge(chatId, false)
   }
-  private purge(chatId: string, onlyTrashed: boolean): Promise<void> {
+  private purge(chatId: string, onlyTrashed: boolean, expiryCutoff?: number, deferSync = false): Promise<void> {
     return this.enqueue(async () => {
       await this.assertAvailable()
       if (!id(chatId) || this.application.sessions.isCurrentSessionReadOnly()) {
@@ -1023,16 +1132,23 @@ export class AssistantSyncedChats {
       if (onlyTrashed && !marker && !isChatTrashed(group)) {
         return
       }
+      if (!marker && expiryCutoff !== undefined && !this.isExpiredTrash(group, expiryCutoff)) {
+        return
+      }
       if (!marker) {
-        await this.write(undefined, {
-          version: 1,
-          ownerUuid: this.ownerUuid,
-          chatId,
-          kind: 'deleted',
-          writerId: this.writerId,
-          revision: 1,
-          updatedAt: Date.now(),
-        })
+        await this.write(
+          undefined,
+          {
+            version: 1,
+            ownerUuid: this.ownerUuid,
+            chatId,
+            kind: 'deleted',
+            writerId: this.writerId,
+            revision: 1,
+            updatedAt: Date.now(),
+          },
+          !deferSync,
+        )
       }
       // Tombstone remains encrypted and content-free. Delete transcript-bearing records.
       for (const { uuid, record } of group) {
@@ -1051,7 +1167,7 @@ export class AssistantSyncedChats {
           }
         }
       }
-      if (this.current()) {
+      if (this.current() && !deferSync) {
         try {
           await this.application.sync.sync({ sourceDescription: 'Assistant chat deletion' })
         } catch (error) {
@@ -1060,7 +1176,7 @@ export class AssistantSyncedChats {
       }
     })
   }
-  private async write(uuid: string | undefined, record: SyncedChatRecord): Promise<void> {
+  private async write(uuid: string | undefined, record: SyncedChatRecord, sync = true): Promise<void> {
     if (!this.current()) {
       throw new AssistantChatStorageError('SESSION_CHANGED', 'write')
     }
@@ -1086,6 +1202,9 @@ export class AssistantSyncedChats {
     if (!this.current()) {
       throw new AssistantChatStorageError('SESSION_CHANGED', 'write')
     }
+    if (!sync) {
+      return
+    }
     try {
       await this.application.sync.sync({ sourceDescription: 'Assistant encrypted chat checkpoint' })
     } catch (error) {
@@ -1095,6 +1214,11 @@ export class AssistantSyncedChats {
 }
 
 export type AssistantChatStorageStats = {
+  budgetedWriterRecords: number
+  budgetedSerializedUnits: number
+  deletedSerializedUnits: number
+  trashedSerializedUnits: number
+  trashRetentionDays: number
   deletedResidualRecords: number
   activeChats: number
   trashedChats: number
