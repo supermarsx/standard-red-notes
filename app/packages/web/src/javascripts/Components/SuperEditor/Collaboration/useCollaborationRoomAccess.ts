@@ -623,8 +623,9 @@ async function establishEditorAccess(
   application: WebApplication,
   initialNote: SNNote,
   expectedIdentity?: ExpectedEditorIdentity,
+  signal?: AbortSignal,
 ): Promise<EstablishedEditorAccess | LeaseFailure> {
-  const first = await attemptEditorAccess(application, initialNote, expectedIdentity)
+  const first = await attemptEditorAccess(application, initialNote, expectedIdentity, signal)
   if (!('reason' in first) || first.denial?.reason !== 'epoch-mismatch') {
     return first
   }
@@ -642,6 +643,7 @@ async function establishEditorAccess(
     expectedIdentity && adoptedRoomEpoch !== undefined
       ? { ...expectedIdentity, roomEpoch: adoptedRoomEpoch }
       : expectedIdentity,
+    signal,
   )
   if ('reason' in second && second.denial?.reason === 'epoch-mismatch') {
     return {
@@ -656,13 +658,20 @@ async function attemptEditorAccess(
   application: WebApplication,
   initialNote: SNNote,
   expectedIdentity?: ExpectedEditorIdentity,
+  signal?: AbortSignal,
 ): Promise<EstablishedEditorAccess | LeaseFailure> {
   for (let attempt = 0; attempt < MAX_BOOTSTRAP_REVISION_ATTEMPTS; attempt += 1) {
+    if (signal?.aborted) {
+      return { reason: 'The editor lease was cancelled.' }
+    }
     const requestId = createCollaborationRequestId()
     const beforeReservation = await prepareSynchronizedEditorAccess(application, initialNote, {
       leaseRequestId: requestId,
       expectedRoomEpoch: expectedIdentity?.roomEpoch,
     })
+    if (signal?.aborted) {
+      return { reason: 'The editor lease was cancelled.' }
+    }
     if (!beforeReservation.available) {
       return {
         reason: beforeReservation.reason,
@@ -693,96 +702,119 @@ async function attemptEditorAccess(
       EDITOR_LEASE_TIMEOUT_MS,
       requestId,
     )
-    const reservation = await transaction.promise
-    if ('reason' in reservation) {
-      return reservation
+    // A reservation participates in bootstrap election before it becomes an active
+    // tracked lease. Release it immediately when its editor is abandoned, including
+    // while activation authorization is still pending.
+    const cancelReservation = (): void => transaction.cancel()
+    signal?.addEventListener('abort', cancelReservation, { once: true })
+    if (signal?.aborted) {
+      cancelReservation()
     }
-    if (reservation.roomEpoch !== beforeReservation.roomEpoch) {
-      transaction.cancel()
-      return { reason: 'The collaboration room epoch changed while the editor lease was reserved.' }
-    }
+    let handedOff = false
+    try {
+      const reservation = await transaction.promise
+      if (signal?.aborted) {
+        return { reason: 'The editor lease was cancelled.' }
+      }
+      if ('reason' in reservation) {
+        return reservation
+      }
+      if (reservation.roomEpoch !== beforeReservation.roomEpoch) {
+        transaction.cancel()
+        return { reason: 'The collaboration room epoch changed while the editor lease was reserved.' }
+      }
 
-    const liveAfterReservation = application.items.findItem<SNNote>(initialNote.uuid)
-    if (!liveAfterReservation) {
-      transaction.cancel()
-      return { reason: 'Live collaboration stopped because the note no longer exists.' }
-    }
+      const liveAfterReservation = application.items.findItem<SNNote>(initialNote.uuid)
+      if (!liveAfterReservation) {
+        transaction.cancel()
+        return { reason: 'Live collaboration stopped because the note no longer exists.' }
+      }
 
-    // The challenge-bound authorization happens while the unique Redis reservation is held:
-    // it is the bootstrap election linearization point, so no elected client can seed from a
-    // pre-election revision. R30/C3: only this one round trip and a synchronous revision
-    // check run here — the awaited multi-sync barrier already ran above, before the gateway
-    // started counting down the reservation's activation TTL.
-    const activationAccess = await prepareCollaborationAccess(application, liveAfterReservation, {
-      leaseRequestId: requestId,
-      bootstrapChallenge: reservation.bootstrapChallenge,
-      expectedRoomEpoch: reservation.roomEpoch,
-    })
-    if (
-      !activationAccess.available ||
-      !matchesExpectedEditorIdentity(activationAccess, activationAccess.noteUuid, beforeReservation)
-    ) {
-      transaction.cancel()
+      // The challenge-bound authorization happens while the unique Redis reservation is held:
+      // it is the bootstrap election linearization point, so no elected client can seed from a
+      // pre-election revision. R30/C3: only this one round trip and a synchronous revision
+      // check run here — the awaited multi-sync barrier already ran above, before the gateway
+      // started counting down the reservation's activation TTL.
+      const activationAccess = await prepareCollaborationAccess(application, liveAfterReservation, {
+        leaseRequestId: requestId,
+        bootstrapChallenge: reservation.bootstrapChallenge,
+        expectedRoomEpoch: reservation.roomEpoch,
+      })
+      if (signal?.aborted) {
+        return { reason: 'The editor lease was cancelled.' }
+      }
+      if (
+        !activationAccess.available ||
+        !matchesExpectedEditorIdentity(activationAccess, activationAccess.noteUuid, beforeReservation)
+      ) {
+        transaction.cancel()
+        return {
+          reason: activationAccess.available
+            ? 'The note encryption key changed before collaboration activation.'
+            : activationAccess.reason,
+          ...(!activationAccess.available ? { recovery: activationAccess.recovery } : {}),
+          ...(!activationAccess.available && activationAccess.authorizationFailure === 'rate-limited'
+            ? { denial: { reason: 'rate-limited' as const, retryAfterMs: activationAccess.retryAfterMs } }
+            : {}),
+          ...(!activationAccess.available && activationAccess.authorizationFailure === 'epoch-mismatch'
+            ? { requiresRemount: true as const }
+            : {}),
+        }
+      }
+      const expectedRevision = {
+        noteUuid: initialNote.uuid,
+        sourceId: activationAccess.sourceId,
+        userUuid: activationAccess.userUuid,
+        sessionUser: activationAccess.sessionUser,
+        serverUpdatedAtTimestamp: activationAccess.serverUpdatedAtTimestamp,
+      }
+      const preActivationRevision = confirmCanonicalRevision(application, expectedRevision)
+      if (!preActivationRevision.confirmed) {
+        transaction.cancel()
+        if (!preActivationRevision.staleRevision) {
+          return { reason: preActivationRevision.reason }
+        }
+        // A durable revision landed between the barrier and the reservation. Give the
+        // reservation back and repeat the whole barrier rather than syncing under the TTL.
+        continue
+      }
+      if (transaction.isActivationBudgetSpent()) {
+        transaction.cancel()
+        continue
+      }
+
+      const lease = await transaction.activate(activationAccess.capability)
+      if ('reason' in lease) {
+        return lease
+      }
+      if (lease.roomEpoch !== activationAccess.roomEpoch) {
+        lease.release()
+        return { reason: 'The collaboration room epoch changed while the editor lease was activated.' }
+      }
+
+      // The gateway activation is acknowledged before Lexical mounts. Re-run the exact revision
+      // check while the active lease is silent; if a durable R+1 landed during activation,
+      // release and retry instead of seeding stale text. This one is synchronous by
+      // construction (R30): an authorize or a sync here would reopen the window it closes.
+      const postAckRevision = confirmCanonicalRevision(application, expectedRevision)
+      if (!postAckRevision.confirmed) {
+        lease.release()
+        if (!postAckRevision.staleRevision) {
+          return { reason: postAckRevision.reason }
+        }
+        continue
+      }
+
+      handedOff = true
       return {
-        reason: activationAccess.available
-          ? 'The note encryption key changed before collaboration activation.'
-          : activationAccess.reason,
-        ...(!activationAccess.available ? { recovery: activationAccess.recovery } : {}),
-        ...(!activationAccess.available && activationAccess.authorizationFailure === 'rate-limited'
-          ? { denial: { reason: 'rate-limited' as const, retryAfterMs: activationAccess.retryAfterMs } }
-          : {}),
-        ...(!activationAccess.available && activationAccess.authorizationFailure === 'epoch-mismatch'
-          ? { requiresRemount: true as const }
-          : {}),
+        access: { ...activationAccess, initialEditorState: postAckRevision.initialEditorState },
+        lease,
       }
-    }
-    const expectedRevision = {
-      noteUuid: initialNote.uuid,
-      sourceId: activationAccess.sourceId,
-      userUuid: activationAccess.userUuid,
-      sessionUser: activationAccess.sessionUser,
-      serverUpdatedAtTimestamp: activationAccess.serverUpdatedAtTimestamp,
-    }
-    const preActivationRevision = confirmCanonicalRevision(application, expectedRevision)
-    if (!preActivationRevision.confirmed) {
-      transaction.cancel()
-      if (!preActivationRevision.staleRevision) {
-        return { reason: preActivationRevision.reason }
+    } finally {
+      signal?.removeEventListener('abort', cancelReservation)
+      if (!handedOff) {
+        transaction.cancel()
       }
-      // A durable revision landed between the barrier and the reservation. Give the
-      // reservation back and repeat the whole barrier rather than syncing under the TTL.
-      continue
-    }
-    if (transaction.isActivationBudgetSpent()) {
-      transaction.cancel()
-      continue
-    }
-
-    const lease = await transaction.activate(activationAccess.capability)
-    if ('reason' in lease) {
-      return lease
-    }
-    if (lease.roomEpoch !== activationAccess.roomEpoch) {
-      lease.release()
-      return { reason: 'The collaboration room epoch changed while the editor lease was activated.' }
-    }
-
-    // The gateway activation is acknowledged before Lexical mounts. Re-run the exact revision
-    // check while the active lease is silent; if a durable R+1 landed during activation,
-    // release and retry instead of seeding stale text. This one is synchronous by
-    // construction (R30): an authorize or a sync here would reopen the window it closes.
-    const postAckRevision = confirmCanonicalRevision(application, expectedRevision)
-    if (!postAckRevision.confirmed) {
-      lease.release()
-      if (!postAckRevision.staleRevision) {
-        return { reason: postAckRevision.reason }
-      }
-      continue
-    }
-
-    return {
-      access: { ...activationAccess, initialEditorState: postAckRevision.initialEditorState },
-      lease,
     }
   }
 
@@ -1011,6 +1043,7 @@ export function useCollaborationRoomAccess(
 
   useEffect(() => {
     let cancelled = false
+    const preparationController = new AbortController()
     canonicalEditorSnapshot.current = undefined
     const liveLeases = new Set<ActiveEditorCollaborationLease>()
     const trackLease = (lease: ActiveEditorCollaborationLease): ActiveEditorCollaborationLease => {
@@ -1131,12 +1164,17 @@ export function useCollaborationRoomAccess(
       const activeNote = committed.note
       activePreparations.current += 1
       const preparation = electEditorBootstrap
-        ? establishEditorAccess(application, activeNote, {
-            noteUuid,
-            sourceId,
-            userUuid: sourceUserUuid!,
-            sessionUser: sourceSessionUser!,
-          }).then((result) => ({ editor: true as const, result }))
+        ? establishEditorAccess(
+            application,
+            activeNote,
+            {
+              noteUuid,
+              sourceId,
+              userUuid: sourceUserUuid!,
+              sessionUser: sourceSessionUser!,
+            },
+            preparationController.signal,
+          ).then((result) => ({ editor: true as const, result }))
         : prepareCollaborationAccess(application, activeNote).then((result) => ({ editor: false as const, result }))
       void preparation
         .then((preparedResult): void => {
@@ -1225,6 +1263,7 @@ export function useCollaborationRoomAccess(
                 return
               }
               invalidated = true
+              preparationController.abort()
               providerOwnsCanonicalState = false
               setProviderOwnsCanonicalState(false)
               if (canonicalEditorSnapshot.current === snapshot) {
@@ -1271,18 +1310,26 @@ export function useCollaborationRoomAccess(
               }
             },
             reactivate: async () => {
+              if (cancelled || invalidated) {
+                return { reason: 'The editor lease was cancelled.' }
+              }
               const current = application.items.findItem<SNNote>(noteUuid)
               if (!current) {
                 return { reason: 'Live collaboration stopped because the note no longer exists.' }
               }
-              const reactivated = await establishEditorAccess(application, current, snapshot)
+              const reactivated = await establishEditorAccess(
+                application,
+                current,
+                snapshot,
+                preparationController.signal,
+              )
               if ('reason' in reactivated) {
                 if (reactivated.requiresRemount) {
                   snapshot.invalidate()
                 }
                 return reactivated
               }
-              if (cancelled) {
+              if (cancelled || invalidated) {
                 reactivated.lease.release()
                 return { reason: 'The editor lease was cancelled.' }
               }
@@ -1328,6 +1375,7 @@ export function useCollaborationRoomAccess(
 
     return () => {
       cancelled = true
+      preparationController.abort()
       if (rateLimitedRetryTimer !== undefined) {
         clearTimeout(rateLimitedRetryTimer)
         rateLimitedRetryTimer = undefined

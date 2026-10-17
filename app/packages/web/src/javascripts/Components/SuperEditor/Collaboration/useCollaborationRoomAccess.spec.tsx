@@ -1546,6 +1546,60 @@ describe('useCollaborationRoomAccess security transitions', () => {
     })
   })
 
+  it.each(['sync barrier', 'activation authorization'])(
+    'cancels an abandoned bootstrap while waiting for %s',
+    async (pendingPhase) => {
+      const sent: CollabFrame[] = []
+      mockedCreateChannel.mockImplementation(() => createAutoLeaseChannel(sent).channel)
+      const note = { uuid: 'note-1', dirty: false, serverUpdatedAtTimestamp: 100, text: 'persisted' } as never
+      let resume!: () => void
+      const pending = new Promise<void>((resolve) => {
+        resume = resolve
+      })
+      const prepare = mockedPrepare.getMockImplementation()!
+      if (pendingPhase === 'activation authorization') {
+        mockedPrepare.mockImplementation(async (...args) => {
+          if (args[2]?.bootstrapChallenge) {
+            await pending
+          }
+          return prepare(...args)
+        })
+      }
+      const application = {
+        items: { streamItems: () => jest.fn(), findItem: () => note },
+        sync: {
+          sync: jest.fn().mockImplementation(() => (pendingPhase === 'sync barrier' ? pending : Promise.resolve())),
+        },
+        vaultLocks: { addEventObserver: () => jest.fn() },
+        sockets: { addEventObserver: () => jest.fn() },
+        addEventObserver: () => jest.fn(),
+      } as never
+      const View = () => {
+        latestAccess = useCollaborationRoomAccess(application, note, true)
+        return null
+      }
+      await act(async () => {
+        root.render(createElement(View))
+        await flushMicrotasks(30)
+      })
+      const reservation = sent.find((frame) => frame.t === 'room-reserve')
+      expect(Boolean(reservation)).toBe(pendingPhase === 'activation authorization')
+      await act(async () => {
+        root.render(null)
+        await flushMicrotasks()
+      })
+      if (reservation?.t === 'room-reserve') {
+        expect(sent).toContainEqual({ t: 'room-leave', room: 'note-1', requestId: reservation.requestId })
+      }
+      await act(async () => {
+        resume()
+        await flushMicrotasks(30)
+      })
+      expect(sent.filter((frame) => frame.t === 'room-join')).toHaveLength(0)
+      expect(sent.filter((frame) => frame.t === 'room-reserve')).toHaveLength(reservation ? 1 : 0)
+    },
+  )
+
   it('falls back to disabled when editor reservation subscription setup throws', async () => {
     mockedCreateChannel.mockReturnValue({
       isConnected: () => true,
@@ -1977,11 +2031,12 @@ describe('useCollaborationRoomAccess security transitions', () => {
 
   it('releases an attached lease when the current item enters trash even if the mounted note prop is stale', async () => {
     const sent: CollabFrame[] = []
-    let activeSourceId = 'vault-1:note-1:root-version-1'
+    const activeSourceId = 'vault-1:note-1:root-version-1'
     mockedCreateChannel.mockImplementation(() => createAutoLeaseChannel(sent).channel)
     mockedResolve.mockImplementation(() => {
-      if (currentNote?.trashed)
+      if (currentNote?.trashed) {
         return { available: false, reason: 'Live collaboration is disabled for notes in Trash.' } as never
+      }
       return {
         available: true,
         noteUuid: 'note-1',
