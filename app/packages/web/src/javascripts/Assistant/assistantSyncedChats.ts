@@ -19,11 +19,16 @@ export const ASSISTANT_CHAT_STORAGE_MESSAGES = {
   SYNC_FAILED:
     'The encrypted chat checkpoint could not complete syncing. Your current messages remain in this tab. Check your connection and retry.',
   READ_ONLY: 'This session cannot save synced chats.',
+  CHAT_TRASHED: 'This chat is in the trash. Restore it before continuing.',
   CHAT_DELETED: 'This chat was deleted on another device.',
-  CHAT_LIMIT: 'Synced chat storage is full. Delete an older chat first.',
+  CHAT_LIMIT: 'The chat count limit includes Trash. Permanently delete an older chat from History to free a slot.',
   WRITER_LIMIT: 'This chat has reached its writer limit. Start a new chat to continue.',
+  RECORD_SIZE_LIMIT: 'This encrypted chat record is too large. Shorten the chat or start a new one.',
+  STORAGE_RECORD_LIMIT: 'Encrypted chat storage has reached its record limit. Purge older chats to free space.',
+  STORAGE_SIZE_LIMIT:
+    'Encrypted chat storage has reached its size limit. Purge older chats or shorten this chat to free space.',
   STORAGE_BUDGET:
-    'The encrypted chat storage budget is full, including retained deletion markers. Export or start with a different account before adding more history.',
+    'The encrypted chat storage budget is full. Open History to inspect storage usage and permanently delete unwanted chats or clean deleted records.',
   INVALID_CHAT: 'Invalid synced chat identity.',
   WRITER_UNAVAILABLE: 'This browser cannot coordinate encrypted chat writers safely.',
   CHECKPOINT_MISSING: 'The chat checkpoint disappeared before saving.',
@@ -108,14 +113,35 @@ function storageFailure(error: unknown, stage: AssistantChatStorageFailureStage)
 }
 
 export const ASSISTANT_CHAT_CONTENT_TYPE = 'SN|AssistantChat'
-export const MAX_SYNCED_CHATS = 100
+export const MAX_SYNCED_CHATS = 1000
 export const MAX_CHAT_WRITERS = 64
-export const MAX_SYNCED_CHAT_RECORDS = 512
-export const MAX_SYNCED_CHAT_BYTES = 16 * 1024 * 1024
+export const MAX_SYNCED_CHAT_RECORDS = 8192
+export const MAX_SYNCED_CHAT_BYTES = 256 * 1024 * 1024
 /** Raw JSON fingerprints are optional acceleration, never a limit on readable history. */
 export const MAX_SYNCED_CHAT_FINGERPRINT_BYTES = 16 * 1024 * 1024
 const MAX_RECORD_BYTES = 1024 * 1024
 const MAX_ENTRIES = 80
+/** Programmatic admission budget; values may be lowered without hiding existing history. */
+export type AssistantChatStorageBudget = { chats: number; records: number; serializedUnits: number }
+export const DEFAULT_ASSISTANT_CHAT_STORAGE_BUDGET: Readonly<AssistantChatStorageBudget> = Object.freeze({
+  chats: MAX_SYNCED_CHATS,
+  records: MAX_SYNCED_CHAT_RECORDS,
+  serializedUnits: MAX_SYNCED_CHAT_BYTES,
+})
+function validateStorageBudget(overrides: Partial<AssistantChatStorageBudget>): Readonly<AssistantChatStorageBudget> {
+  const budget = { ...DEFAULT_ASSISTANT_CHAT_STORAGE_BUDGET, ...overrides }
+  for (const key of Object.keys(DEFAULT_ASSISTANT_CHAT_STORAGE_BUDGET) as Array<keyof AssistantChatStorageBudget>) {
+    if (
+      !Number.isSafeInteger(budget[key]) ||
+      budget[key] <= 0 ||
+      budget[key] > DEFAULT_ASSISTANT_CHAT_STORAGE_BUDGET[key]
+    ) {
+      throw new RangeError('Invalid assistant chat storage budget.')
+    }
+  }
+  return Object.freeze(budget)
+}
+
 const id = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value)
 const counter = (value: unknown): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
@@ -129,7 +155,8 @@ export type SyncedChatRecord = {
   version: 1
   ownerUuid: string
   chatId: string
-  kind: 'writer' | 'deleted'
+  kind: 'writer' | 'deleted' | 'lifecycle'
+  state?: 'active' | 'trashed'
   writerId: string
   revision: number
   updatedAt: number
@@ -144,7 +171,12 @@ export type SyncedChatRecord = {
   deniedToolNames?: string[]
   removedMessageIds?: string[]
 }
-export type SyncedChat = { tab: ChatTab; messages: PersistedAssistantMessage[]; deniedToolNames: string[] }
+export type SyncedChat = {
+  trashed?: boolean
+  tab: ChatTab
+  messages: PersistedAssistantMessage[]
+  deniedToolNames: string[]
+}
 const snapshotFingerprints = new WeakMap<SyncedChat, string>()
 const snapshotFingerprint = (chat: SyncedChat): string => {
   let fingerprint = snapshotFingerprints.get(chat)
@@ -203,7 +235,7 @@ function normalizeSerializedChatContent(value: unknown, ownerUuid: string): Sync
     !id(raw.writerId) ||
     !counter(raw.revision) ||
     !counter(raw.updatedAt) ||
-    !['writer', 'deleted'].includes(raw.kind ?? '')
+    !['writer', 'deleted', 'lifecycle'].includes(raw.kind ?? '')
   ) {
     return undefined
   }
@@ -214,6 +246,11 @@ function normalizeSerializedChatContent(value: unknown, ownerUuid: string): Sync
     writerId: raw.writerId,
     revision: raw.revision,
     updatedAt: raw.updatedAt,
+  }
+  if (raw.kind === 'lifecycle') {
+    return raw.state === 'active' || raw.state === 'trashed'
+      ? { ...base, kind: 'lifecycle', state: raw.state }
+      : undefined
   }
   if (raw.kind === 'deleted') {
     return { ...base, kind: 'deleted' }
@@ -289,6 +326,7 @@ const rank = (left: Parsed, right: Parsed): number =>
   left.uuid.localeCompare(right.uuid)
 
 const selectMetadata = (writers: Parsed[]): Parsed | undefined => {
+  writers = writers.filter(({ record }) => record.kind === 'writer')
   const manual = writers.filter(({ record }) => record.userRenamed)
   return [...(manual.length ? manual : writers)]
     .sort(
@@ -311,7 +349,19 @@ const selectConversationMode = (writers: Parsed[]): SyncedChatRecord | undefined
 }
 
 /** Writer-owned entries merge by stable message ID; tombstones dominate every late checkpoint. */
-export function mergeSyncedChats(records: Parsed[]): SyncedChat[] {
+function isChatTrashed(group: Parsed[]): boolean {
+  const latest = group
+    .filter(({ record }) => record.kind === 'lifecycle')
+    .sort(
+      (a, b) =>
+        a.record.revision - b.record.revision ||
+        Number(a.record.state === 'trashed') - Number(b.record.state === 'trashed') ||
+        rank(a, b),
+    )
+    .at(-1)
+  return latest?.record.state === 'trashed'
+}
+export function mergeSyncedChats(records: Parsed[], includeTrashed = false): SyncedChat[] {
   const groups = new Map<string, Parsed[]>()
   for (const entry of records) {
     const list = groups.get(entry.record.chatId) ?? []
@@ -321,6 +371,10 @@ export function mergeSyncedChats(records: Parsed[]): SyncedChat[] {
   const chats: SyncedChat[] = []
   for (const [chatId, group] of groups) {
     if (group.some(({ record }) => record.kind === 'deleted')) {
+      continue
+    }
+    const trashed = isChatTrashed(group)
+    if (trashed && !includeTrashed) {
       continue
     }
     const byWriter = new Map<string, Parsed>()
@@ -380,6 +434,7 @@ export function mergeSyncedChats(records: Parsed[]): SyncedChat[] {
       emitted.add(entry.message.id)
     }
     chats.push({
+      ...(trashed ? { trashed: true } : {}),
       tab: {
         id: chatId,
         title: metadata.title ?? 'New chat',
@@ -398,9 +453,7 @@ export function mergeSyncedChats(records: Parsed[]): SyncedChat[] {
       deniedToolNames: [...new Set(writers.flatMap(({ record }) => record.deniedToolNames ?? []))].sort().slice(0, 64),
     })
   }
-  return chats
-    .sort((a, b) => (b.tab.lastActiveAt ?? 0) - (a.tab.lastActiveAt ?? 0) || a.tab.id.localeCompare(b.tab.id))
-    .slice(0, MAX_SYNCED_CHATS)
+  return chats.sort((a, b) => (b.tab.lastActiveAt ?? 0) - (a.tab.lastActiveAt ?? 0) || a.tab.id.localeCompare(b.tab.id))
 }
 
 /** A concrete store has one writer identity; other documents never replace its entries. */
@@ -431,8 +484,10 @@ export class AssistantSyncedChats {
   private previousRecords: Parsed[] = []
   private fingerprintBytes = 0
   private previousChats: SyncedChat[] = []
+  private previousActiveChats: SyncedChat[] = []
   private mergedGroups = new Map<string, { records: Parsed[]; chat: SyncedChat | undefined }>()
   private catalogSerializedLength = 2
+  private readonly budget: Readonly<AssistantChatStorageBudget>
   private readonly ownerUuid: string
   private _writerId: string
   private identityClaimed: boolean
@@ -443,7 +498,9 @@ export class AssistantSyncedChats {
   constructor(
     private readonly application: WebApplication,
     writerId?: string,
+    budget: Partial<AssistantChatStorageBudget> = {},
   ) {
+    this.budget = validateStorageBudget(budget)
     this.ownerUuid = application.sessions.getUser()?.uuid ?? ''
     this._writerId = writerId ?? getAssistantChatWriterId(this.ownerUuid)
     this.identityClaimed = writerId !== undefined
@@ -461,6 +518,7 @@ export class AssistantSyncedChats {
     this.fingerprintBytes = 0
     this.previousRecords = []
     this.previousChats = []
+    this.previousActiveChats = []
     this.mergedGroups.clear()
     this.catalogSerializedLength = 2
   }
@@ -593,7 +651,7 @@ export class AssistantSyncedChats {
       records.reduce((sum, parsed) => sum + this.parsedRecords.get(parsed.uuid)!.serializedLength, 0)
     return records
   }
-  async read(): Promise<SyncedChat[]> {
+  async read(options?: { includeTrashed?: boolean }): Promise<SyncedChat[]> {
     await this.assertAvailable()
     const records = this.records()
     if (
@@ -616,7 +674,7 @@ export class AssistantSyncedChats {
           cached.records.length !== group.length ||
           group.some((record, index) => record !== cached!.records[index])
         ) {
-          cached = { records: group, chat: mergeSyncedChats(group)[0] }
+          cached = { records: group, chat: mergeSyncedChats(group, true)[0] }
         }
         mergedGroups.set(chatId, cached)
         if (cached.chat) {
@@ -624,11 +682,15 @@ export class AssistantSyncedChats {
         }
       }
       this.mergedGroups = mergedGroups
-      this.previousChats = chats
-        .sort((a, b) => (b.tab.lastActiveAt ?? 0) - (a.tab.lastActiveAt ?? 0) || a.tab.id.localeCompare(b.tab.id))
-        .slice(0, MAX_SYNCED_CHATS)
+      this.previousChats = chats.sort(
+        (a, b) => (b.tab.lastActiveAt ?? 0) - (a.tab.lastActiveAt ?? 0) || a.tab.id.localeCompare(b.tab.id),
+      )
     }
-    return this.previousChats
+    this.previousActiveChats = reconcileSyncedChatSnapshots(
+      this.previousActiveChats,
+      this.previousChats.filter((chat) => !chat.trashed),
+    )
+    return options?.includeTrashed ? this.previousChats : this.previousActiveChats
   }
   subscribe(listener: () => void): () => void {
     return this.application.items.addObserver(ASSISTANT_CHAT_CONTENT_TYPE, () => {
@@ -658,21 +720,25 @@ export class AssistantSyncedChats {
       if (group.some(({ record }) => record.kind === 'deleted')) {
         throw new AssistantChatStorageError('CHAT_DELETED', 'validate')
       }
+      if (isChatTrashed(group)) {
+        throw new AssistantChatStorageError('CHAT_TRASHED', 'validate')
+      }
       const own = group
-        .filter(({ record }) => record.writerId === this.writerId)
+        .filter(({ record }) => record.kind === 'writer' && record.writerId === this.writerId)
         .sort((a, b) => a.record.revision - b.record.revision || rank(a, b))
         .at(-1)
-      if (!own && new Set(group.map(({ record }) => record.writerId)).size >= MAX_CHAT_WRITERS) {
+      if (
+        !own &&
+        new Set(group.filter(({ record }) => record.kind === 'writer').map(({ record }) => record.writerId)).size >=
+          MAX_CHAT_WRITERS
+      ) {
         throw new AssistantChatStorageError('WRITER_LIMIT', 'validate')
       }
-      if (!group.length && mergeSyncedChats(records).length >= MAX_SYNCED_CHATS) {
-        throw new AssistantChatStorageError('CHAT_LIMIT', 'validate')
-      }
       if (
-        (!own && records.filter(({ record }) => record.kind === 'writer').length >= MAX_SYNCED_CHAT_RECORDS) ||
-        this.catalogSerializedLength >= MAX_SYNCED_CHAT_BYTES
+        !group.some(({ record }) => record.kind === 'writer') &&
+        mergeSyncedChats(records, true).length >= this.budget.chats
       ) {
-        throw new AssistantChatStorageError('STORAGE_BUDGET', 'validate')
+        throw new AssistantChatStorageError('CHAT_LIMIT', 'validate')
       }
       const revision = (own?.record.revision ?? 0) + 1,
         updatedAt = Date.now()
@@ -719,41 +785,43 @@ export class AssistantSyncedChats {
               kind: inheritedMetadata.tabKind,
             }
           : tab
-      const record = normalizeSyncedChatRecord(
-        {
-          version: 1,
-          ownerUuid: this.ownerUuid,
-          chatId: tab.id,
-          kind: 'writer',
-          removedMessageIds: own?.record.removedMessageIds ?? [],
-          writerId: this.writerId,
-          revision,
-          updatedAt,
-          metadataUpdatedAt: metadataChanged
-            ? updatedAt
-            : (inheritedMetadata?.metadataUpdatedAt ?? inheritedMetadata?.updatedAt ?? updatedAt),
-          title: metadata.title.slice(0, 40),
-          userRenamed: metadata.userRenamed,
-          tabKind: metadata.kind ?? 'chat',
-          ...(conversationMode !== undefined
-            ? {
-                conversationMode,
-                conversationModeUpdatedAt: modeChanged
-                  ? Math.max(tab.conversationModeUpdatedAt ?? updatedAt, inheritedModeClock + 1)
-                  : (inheritedMode?.conversationModeUpdatedAt ??
-                    inheritedMode?.metadataUpdatedAt ??
-                    inheritedMode?.updatedAt ??
-                    updatedAt),
-              }
-            : {}),
-          entries,
-          deniedToolNames: messages === undefined ? (own?.record.deniedToolNames ?? deniedToolNames) : deniedToolNames,
-        },
-        this.ownerUuid,
-      )
+      const candidate = {
+        version: 1,
+        ownerUuid: this.ownerUuid,
+        chatId: tab.id,
+        kind: 'writer',
+        removedMessageIds: own?.record.removedMessageIds ?? [],
+        writerId: this.writerId,
+        revision,
+        updatedAt,
+        metadataUpdatedAt: metadataChanged
+          ? updatedAt
+          : (inheritedMetadata?.metadataUpdatedAt ?? inheritedMetadata?.updatedAt ?? updatedAt),
+        title: metadata.title.slice(0, 40),
+        userRenamed: metadata.userRenamed,
+        tabKind: metadata.kind ?? 'chat',
+        ...(conversationMode !== undefined
+          ? {
+              conversationMode,
+              conversationModeUpdatedAt: modeChanged
+                ? Math.max(tab.conversationModeUpdatedAt ?? updatedAt, inheritedModeClock + 1)
+                : (inheritedMode?.conversationModeUpdatedAt ??
+                  inheritedMode?.metadataUpdatedAt ??
+                  inheritedMode?.updatedAt ??
+                  updatedAt),
+            }
+          : {}),
+        entries,
+        deniedToolNames: messages === undefined ? (own?.record.deniedToolNames ?? deniedToolNames) : deniedToolNames,
+      }
+      if (JSON.stringify(candidate).length > MAX_RECORD_BYTES) {
+        throw new AssistantChatStorageError('RECORD_SIZE_LIMIT', 'validate')
+      }
+      const record = normalizeSerializedChatContent(candidate, this.ownerUuid)
       if (!record) {
         throw new AssistantChatStorageError('HISTORY_INVALID', 'validate')
       }
+      this.assertProjectedBudget(this.records(), own?.uuid, record)
       await this.write(own?.uuid, record)
     })
   }
@@ -768,12 +836,15 @@ export class AssistantSyncedChats {
       if (group.some(({ record }) => record.kind === 'deleted')) {
         throw new AssistantChatStorageError('CHAT_DELETED', 'validate')
       }
+      if (isChatTrashed(group)) {
+        throw new AssistantChatStorageError('CHAT_TRASHED', 'validate')
+      }
       const merged = mergeSyncedChats(group)[0]
       if (!merged) {
         return
       }
       const own = group
-        .filter(({ record }) => record.writerId === this.writerId)
+        .filter(({ record }) => record.kind === 'writer' && record.writerId === this.writerId)
         .sort((a, b) => a.record.revision - b.record.revision || rank(a, b))
         .at(-1)
       const removedMessageIds = [...new Set([...(own?.record.removedMessageIds ?? []), messageId])]
@@ -808,43 +879,184 @@ export class AssistantSyncedChats {
       if (!record) {
         throw new Error('This chat has reached its deletion limit. Delete the chat to remove its remaining messages.')
       }
+      this.assertProjectedBudget(this.records(), own?.uuid, record)
       await this.write(own?.uuid, record)
     })
+  }
+  private assertProjectedBudget(records: Parsed[], uuid: string | undefined, record: SyncedChatRecord): void {
+    const previous = records.find((item) => item.uuid === uuid)
+    const writerCount = records.filter(({ record }) => record.kind === 'writer').length
+    const projectedCount = writerCount + (previous ? 0 : 1)
+    if (projectedCount > this.budget.records && projectedCount > writerCount) {
+      throw new AssistantChatStorageError('STORAGE_RECORD_LIMIT', 'validate')
+    }
+    const projectedUnits =
+      this.catalogSerializedLength -
+      (previous ? JSON.stringify(previous).length : 0) +
+      JSON.stringify({ uuid: uuid ?? '00000000-0000-0000-0000-000000000000', record }).length +
+      (!previous && records.length ? 1 : 0)
+    if (projectedUnits > this.budget.serializedUnits && projectedUnits > this.catalogSerializedLength) {
+      throw new AssistantChatStorageError('STORAGE_SIZE_LIMIT', 'validate')
+    }
+  }
+  async getStorageStats(): Promise<AssistantChatStorageStats> {
+    await this.assertAvailable()
+    const records = this.records()
+    const groups = new Map<string, Parsed[]>()
+    for (const item of records) {
+      const group = groups.get(item.record.chatId) ?? []
+      group.push(item)
+      groups.set(item.record.chatId, group)
+    }
+    let deletedResidualRecords = 0
+    let activeChats = 0,
+      trashedChats = 0,
+      deletedChats = 0
+    for (const group of groups.values()) {
+      if (group.some(({ record }) => record.kind === 'deleted')) {
+        deletedChats++
+        deletedResidualRecords += group.filter(({ record }) => record.kind !== 'deleted').length
+      } else if (isChatTrashed(group)) {
+        trashedChats++
+      } else if (group.some(({ record }) => record.kind === 'writer')) {
+        activeChats++
+      }
+    }
+    return {
+      activeChats,
+      deletedResidualRecords,
+      trashedChats,
+      deletedChats,
+      writerRecords: records.filter(({ record }) => record.kind === 'writer').length,
+      lifecycleRecords: records.filter(({ record }) => record.kind === 'lifecycle').length,
+      invalidRecords: [...this.parsedRecords.values()].filter((value) => !value.parsed).length,
+      serializedUnits: this.catalogSerializedLength,
+      limits: {
+        chats: this.budget.chats,
+        writersPerChat: MAX_CHAT_WRITERS,
+        records: this.budget.records,
+        serializedUnits: this.budget.serializedUnits,
+        recordUnits: MAX_RECORD_BYTES,
+      },
+    }
+  }
+  trash(chatId: string): Promise<void> {
+    return this.setTrashState(chatId, 'trashed')
+  }
+  restore(chatId: string): Promise<void> {
+    return this.setTrashState(chatId, 'active')
+  }
+  private setTrashState(chatId: string, state: 'active' | 'trashed'): Promise<void> {
+    return this.enqueue(async () => {
+      await this.assertAvailable()
+      await this.claimIdentity()
+      if (this.application.sessions.isCurrentSessionReadOnly()) {
+        throw new AssistantChatStorageError('READ_ONLY', 'validate')
+      }
+      if (!id(chatId)) {
+        throw new AssistantChatStorageError('INVALID_CHAT', 'validate')
+      }
+      const group = this.records().filter(({ record }) => record.chatId === chatId)
+      if (group.some(({ record }) => record.kind === 'deleted')) {
+        throw new AssistantChatStorageError('CHAT_DELETED', 'validate')
+      }
+      if (!group.some(({ record }) => record.kind === 'writer') || isChatTrashed(group) === (state === 'trashed')) {
+        return
+      }
+      const lifecycle = group.filter(({ record }) => record.kind === 'lifecycle')
+      const revision = Math.max(0, ...lifecycle.map(({ record }) => record.revision)) + 1
+      if (!counter(revision)) {
+        throw new AssistantChatStorageError('HISTORY_INVALID', 'validate')
+      }
+      const own = lifecycle
+        .filter(({ record }) => record.writerId === this.writerId)
+        .sort(rank)
+        .at(-1)
+      // Tiny content-free control records are admitted even over budget so users can recover.
+      await this.write(own?.uuid, {
+        version: 1,
+        ownerUuid: this.ownerUuid,
+        chatId,
+        kind: 'lifecycle',
+        state,
+        writerId: this.writerId,
+        revision,
+        updatedAt: Date.now(),
+      })
+    })
+  }
+  async emptyTrash(): Promise<void> {
+    await this.assertAvailable()
+    const records = this.records()
+    const groups = new Map<string, Parsed[]>()
+    for (const parsed of records) {
+      const group = groups.get(parsed.record.chatId) ?? []
+      group.push(parsed)
+      groups.set(parsed.record.chatId, group)
+    }
+    for (const [chatId, group] of groups) {
+      if (
+        isChatTrashed(group) ||
+        (group.some(({ record }) => record.kind === 'deleted') && group.some(({ record }) => record.kind !== 'deleted'))
+      ) {
+        await this.purge(chatId, true)
+      }
+    }
   }
   updateMetadata(tab: ChatTab): Promise<void> {
     return this.save(tab, undefined)
   }
+  purgeTrashed(chatId: string): Promise<void> {
+    return this.purge(chatId, true)
+  }
   delete(chatId: string): Promise<void> {
+    return this.purge(chatId, false)
+  }
+  private purge(chatId: string, onlyTrashed: boolean): Promise<void> {
     return this.enqueue(async () => {
       await this.assertAvailable()
       if (!id(chatId) || this.application.sessions.isCurrentSessionReadOnly()) {
         throw new Error('This chat cannot be deleted in the current session.')
       }
       const group = this.records().filter(({ record }) => record.chatId === chatId)
-      if (group.some(({ record }) => record.kind === 'deleted')) {
+      const marker = group.find(({ record }) => record.kind === 'deleted')
+      if (onlyTrashed && !marker && !isChatTrashed(group)) {
         return
       }
-      await this.write(undefined, {
-        version: 1,
-        ownerUuid: this.ownerUuid,
-        chatId,
-        kind: 'deleted',
-        writerId: this.writerId,
-        revision: 1,
-        updatedAt: Date.now(),
-      })
+      if (!marker) {
+        await this.write(undefined, {
+          version: 1,
+          ownerUuid: this.ownerUuid,
+          chatId,
+          kind: 'deleted',
+          writerId: this.writerId,
+          revision: 1,
+          updatedAt: Date.now(),
+        })
+      }
       // Tombstone remains encrypted and content-free. Delete transcript-bearing records.
-      for (const { uuid } of group) {
+      for (const { uuid, record } of group) {
+        if (record.kind === 'deleted') {
+          continue
+        }
         if (!this.current()) {
           return
         }
         const item = this.application.items.findItem(uuid)
         if (item) {
-          await this.application.mutator.deleteItem(item)
+          try {
+            await this.application.mutator.deleteItem(item)
+          } catch (error) {
+            throw storageFailure(error, 'write')
+          }
         }
       }
       if (this.current()) {
-        await this.application.sync.sync({ sourceDescription: 'Assistant chat deletion' })
+        try {
+          await this.application.sync.sync({ sourceDescription: 'Assistant chat deletion' })
+        } catch (error) {
+          throw storageFailure(error, 'checkpoint')
+        }
       }
     })
   }
@@ -879,5 +1091,35 @@ export class AssistantSyncedChats {
     } catch (error) {
       throw storageFailure(error, 'checkpoint')
     }
+  }
+}
+
+export type AssistantChatStorageStats = {
+  deletedResidualRecords: number
+  activeChats: number
+  trashedChats: number
+  deletedChats: number
+  writerRecords: number
+  lifecycleRecords: number
+  invalidRecords: number
+  serializedUnits: number
+  limits: { chats: number; writersPerChat: number; records: number; serializedUnits: number; recordUnits: number }
+}
+/** Account-gated aggregate only; never returns identifiers or transcript content. */
+export async function readAssistantChatStorageStats(
+  application: WebApplication,
+  accountScope: string,
+): Promise<AssistantChatStorageStats | undefined> {
+  const userUuid = application.sessions.getUser()?.uuid
+  if (!userUuid || `account:${userUuid}` !== accountScope) {
+    return undefined
+  }
+  const store = new AssistantSyncedChats(application, 'storage-diagnostics')
+  try {
+    return await store.getStorageStats()
+  } catch {
+    return undefined
+  } finally {
+    store.dispose()
   }
 }

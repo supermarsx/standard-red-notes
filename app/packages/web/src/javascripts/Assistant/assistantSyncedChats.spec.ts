@@ -13,6 +13,8 @@ import {
   AssistantSyncedChats,
   AssistantChatStorageError,
   getAssistantChatStorageFailure,
+  DEFAULT_ASSISTANT_CHAT_STORAGE_BUDGET,
+  readAssistantChatStorageStats,
   MAX_SYNCED_CHAT_FINGERPRINT_BYTES,
   mergeSyncedChats,
   normalizeSyncedChatRecord,
@@ -691,3 +693,173 @@ it.each(['TypeError', 'InvalidStateError', 'AbortError', 'SecurityError'] as con
     })
   },
 )
+
+it('trashes and restores encrypted history without letting stale writers undo trash', async () => {
+  const h = harness(),
+    a = new AssistantSyncedChats(h.application, 'a'),
+    b = new AssistantSyncedChats(h.application, 'b')
+  const tab = { id: 'chat', title: 'Keep title', userRenamed: true }
+  await a.save(tab, [message('question')])
+  await b.trash('chat')
+  expect(await a.read()).toEqual([])
+  expect((await a.read({ includeTrashed: true }))[0]).toMatchObject({
+    trashed: true,
+    tab,
+    messages: [message('question')],
+  })
+  await expect(a.save(tab, [message('late')])).rejects.toMatchObject({ code: 'CHAT_TRASHED' })
+  h.values.set('late-writer', {
+    uuid: 'late-writer',
+    content: writer('late', [entry('late', null)], { revision: 999 }),
+  })
+  expect(await a.read()).toEqual([])
+  await a.restore('chat')
+  expect((await b.read())[0].messages.map((m) => m.id)).toEqual(expect.arrayContaining(['question', 'late']))
+  expect((await b.read())[0].tab.title).toBe('Keep title')
+  await a.delete('chat')
+  await expect(b.restore('chat')).rejects.toMatchObject({ code: 'CHAT_DELETED' })
+})
+
+it('resolves concurrent lifecycle clocks deterministically with trash winning ties', () => {
+  const content = record(writer('a', [entry('one', null)]))
+  const trash = record(writer('trash', [], { kind: 'lifecycle', state: 'trashed', revision: 3 }))
+  const restore = record(writer('restore', [], { kind: 'lifecycle', state: 'active', revision: 3, updatedAt: 9999 }))
+  expect(mergeSyncedChats([content, trash, restore])).toEqual([])
+  expect(mergeSyncedChats([restore, content, trash], true)[0].trashed).toBe(true)
+  restore.record.revision = 4
+  expect(mergeSyncedChats([content, trash, restore])[0].messages).toEqual([message('one')])
+})
+
+it('retries partially failed purge and cleans late payloads while retaining content-free tombstones', async () => {
+  const h = harness(),
+    store = new AssistantSyncedChats(h.application, 'a')
+  await store.save({ id: 'chat', title: 'Private', userRenamed: false }, [message('secret')])
+  h.raw.mutator.deleteItem.mockRejectedValueOnce(new Error('delete failed'))
+  await expect(store.delete('chat')).rejects.toMatchObject({ code: 'WRITE_FAILED', stage: 'write' })
+  expect(await store.read()).toEqual([])
+  await store.delete('chat')
+  expect([...h.values.values()].map((item) => (item.content as SyncedChatRecord).kind)).toEqual(['deleted'])
+  h.values.set('late', { uuid: 'late', content: writer('late', [entry('secret-late', null)]) })
+  await store.emptyTrash()
+  expect([...h.values.values()].map((item) => (item.content as SyncedChatRecord).kind)).toEqual(['deleted'])
+  expect(JSON.stringify([...h.values.values()])).not.toContain('secret')
+})
+
+it('reports all active, trashed, hidden deleted and invalid storage records without a 100-chat read cap', async () => {
+  const h = harness(),
+    store = new AssistantSyncedChats(h.application, 'a')
+  for (let i = 0; i < 105; i++)
+    h.values.set('chat-' + i, { uuid: 'chat-' + i, content: writer('a', [], { chatId: 'chat-' + i }) })
+  h.values.set('invalid', { uuid: 'invalid', content: { version: 99 } })
+  await store.trash('chat-0')
+  await store.delete('chat-1')
+  expect(await store.read()).toHaveLength(103)
+  expect(await store.read({ includeTrashed: true })).toHaveLength(104)
+  const stats = await store.getStorageStats()
+  expect(stats).toMatchObject({
+    activeChats: 103,
+    trashedChats: 1,
+    deletedChats: 1,
+    writerRecords: 104,
+    lifecycleRecords: 1,
+    invalidRecords: 1,
+  })
+  expect(stats.serializedUnits).toBeGreaterThan(0)
+  expect(await readAssistantChatStorageStats(h.application, 'account:other')).toBeUndefined()
+  expect(await readAssistantChatStorageStats(h.application, 'account:account')).toEqual(stats)
+  h.setLocked(true)
+  expect(await readAssistantChatStorageStats(h.application, 'account:account')).toBeUndefined()
+})
+
+it('allows a shrinking replacement over the size budget but rejects projected growth', async () => {
+  const h = harness(),
+    store = new AssistantSyncedChats(h.application, 'a', { serializedUnits: 3000 })
+  for (let i = 0; i < 3; i++) {
+    const entries = Array.from({ length: 1 }, (_, j) => ({
+      ...entry('m-' + i + '-' + j, null),
+      message: message('m-' + i + '-' + j, 'x'.repeat(2000)),
+    }))
+    h.values.set('large-' + i, { uuid: 'large-' + i, content: writer(i === 0 ? 'a' : 'writer-' + i, entries) })
+  }
+  const before = await store.getStorageStats()
+  expect(before.serializedUnits).toBeGreaterThan(before.limits.serializedUnits)
+  await store.save({ id: 'chat', title: 'Shorter', userRenamed: false }, [])
+  const after = await store.getStorageStats()
+  expect(after.serializedUnits).toBeLessThan(before.serializedUnits)
+  await expect(
+    store.save({ id: 'chat', title: 'Shorter', userRenamed: false }, [message('new', 'x'.repeat(2000))]),
+  ).rejects.toMatchObject({ code: 'STORAGE_SIZE_LIMIT' })
+  await store.trash('chat')
+  await store.emptyTrash()
+  expect((await store.getStorageStats()).writerRecords).toBe(0)
+})
+
+it('does not purge a chat restored before queued trash cleanup, or sync clean tombstones repeatedly', async () => {
+  const h = harness(),
+    store = new AssistantSyncedChats(h.application, 'a')
+  await store.save({ id: 'chat', title: 'Keep', userRenamed: false }, [message('keep')])
+  await store.trash('chat')
+  const cleanup = store.emptyTrash()
+  const restore = store.restore('chat')
+  await Promise.all([cleanup, restore])
+  expect(await store.read()).toHaveLength(1)
+  await store.purgeTrashed('chat')
+  expect(await store.read()).toHaveLength(1)
+  await store.delete('chat')
+  const calls = h.raw.sync.sync.mock.calls.length
+  await store.emptyTrash()
+  expect(h.raw.sync.sync).toHaveBeenCalledTimes(calls)
+  h.values.set('late', { uuid: 'late', content: writer('late', [entry('late', null)]) })
+  expect((await store.getStorageStats()).deletedResidualRecords).toBe(1)
+  await store.emptyTrash()
+  expect((await store.getStorageStats()).deletedResidualRecords).toBe(0)
+})
+
+it('rejects new writes whose projected size crosses the budget from below', async () => {
+  const h = harness(),
+    store = new AssistantSyncedChats(h.application, 'a', { serializedUnits: 3000 })
+  h.values.set('existing', {
+    uuid: 'existing',
+    content: writer('a', [{ ...entry('one', null), message: message('one', 'x'.repeat(2000)) }]),
+  })
+  const stats = await store.getStorageStats()
+  expect(stats.serializedUnits).toBeLessThan(stats.limits.serializedUnits)
+  await expect(
+    store.save({ id: 'new', title: 'New', userRenamed: false }, [message('new', 'x'.repeat(2000))]),
+  ).rejects.toMatchObject({ code: 'STORAGE_SIZE_LIMIT' })
+  expect(h.raw.mutator.createItem).not.toHaveBeenCalled()
+})
+
+it('uses generous defaults and reports validated per-store admission limits', async () => {
+  expect(DEFAULT_ASSISTANT_CHAT_STORAGE_BUDGET).toEqual({
+    chats: 1000,
+    records: 8192,
+    serializedUnits: 256 * 1024 * 1024,
+  })
+  const h = harness(),
+    store = new AssistantSyncedChats(h.application, 'a', { chats: 1, records: 2, serializedUnits: 4096 })
+  expect((await store.getStorageStats()).limits).toMatchObject({
+    chats: 1,
+    records: 2,
+    serializedUnits: 4096,
+    recordUnits: 1024 * 1024,
+    writersPerChat: 64,
+  })
+  await store.save({ id: 'one', title: 'One', userRenamed: false }, [])
+  await expect(store.save({ id: 'two', title: 'Two', userRenamed: false }, [])).rejects.toMatchObject({
+    code: 'CHAT_LIMIT',
+  })
+  for (const value of [0, -1, NaN, Infinity, 1.5, 1001])
+    expect(() => new AssistantSyncedChats(h.application, 'b', { chats: value })).toThrow(RangeError)
+})
+
+it('uses the effective writer-record budget without blocking edits to an existing record', async () => {
+  const h = harness(),
+    a = new AssistantSyncedChats(h.application, 'a', { records: 1 }),
+    b = new AssistantSyncedChats(h.application, 'b', { records: 1 })
+  const tab = { id: 'chat', title: 'Chat', userRenamed: false }
+  await a.save(tab, [message('one')])
+  await expect(b.save(tab, [message('two')])).rejects.toMatchObject({ code: 'STORAGE_RECORD_LIMIT' })
+  await a.save(tab, [message('one', 'updated')])
+  expect((await a.read())[0].messages).toEqual([message('one', 'updated')])
+})
