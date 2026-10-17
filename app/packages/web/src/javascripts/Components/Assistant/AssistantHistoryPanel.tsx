@@ -1,4 +1,4 @@
-import type { AssistantSyncedChats } from '@/Assistant/assistantSyncedChats'
+import { ASSISTANT_CHAT_TRASH_RETENTION_DAYS, type AssistantSyncedChats } from '@/Assistant/assistantSyncedChats'
 import { assistantTabsByActivity, ChatTab, DEFAULT_TAB_TITLE } from '@/Assistant/chatTabs'
 import Icon from '@/Components/Icon/Icon'
 import { useMemo, useRef, useState } from 'react'
@@ -102,25 +102,31 @@ export function AssistantHistoryPanel({
         <details className="text-passive-0 mt-2 text-xs">
           <summary className="cursor-pointer">
             Storage · {storageStats.activeChats} chats · {storageStats.trashedChats} trashed ·{' '}
-            {Math.round((storageStats.serializedUnits / storageStats.limits.serializedUnits) * 100)}% of chat budget
+            {Math.round((storageStats.budgetedSerializedUnits / storageStats.limits.serializedUnits) * 100)}% of chat
+            budget
           </summary>
           <p>
-            {storageStats.activeChats + storageStats.trashedChats} / {storageStats.limits.chats} chat slots (including
-            trash); {storageStats.writerRecords} transcript records; writer record cap {storageStats.limits.records}; up
-            to {storageStats.limits.writersPerChat} writers per chat; single-record limit{' '}
-            {storageStats.limits.recordUnits.toLocaleString()} serialized units.
+            {storageStats.activeChats} / {storageStats.limits.chats} active chat slots;{' '}
+            {storageStats.budgetedWriterRecords} active transcript records; writer record cap{' '}
+            {storageStats.limits.records}; up to {storageStats.limits.writersPerChat} writers per chat; single-record
+            limit {storageStats.limits.recordUnits.toLocaleString()} serialized units.
           </p>
           <p>
-            {storageStats.serializedUnits.toLocaleString()} / {storageStats.limits.serializedUnits.toLocaleString()}{' '}
-            serialized units; {storageStats.writerRecords} transcript records; {storageStats.lifecycleRecords} lifecycle
-            markers; {storageStats.deletedChats} deleted chat markers; {storageStats.deletedResidualRecords} retained
-            deleted records; {storageStats.invalidRecords} unreadable records.
+            {storageStats.budgetedSerializedUnits.toLocaleString()} /{' '}
+            {storageStats.limits.serializedUnits.toLocaleString()} active serialized units;{' '}
+            {storageStats.serializedUnits.toLocaleString()} total retained units;{' '}
+            {storageStats.trashedSerializedUnits.toLocaleString()} trashed units;{' '}
+            {storageStats.deletedSerializedUnits.toLocaleString()} deleted units; {storageStats.writerRecords}{' '}
+            transcript records; {storageStats.lifecycleRecords} lifecycle markers; {storageStats.deletedChats} deleted
+            chat markers; {storageStats.deletedResidualRecords} retained deleted records; {storageStats.invalidRecords}{' '}
+            unreadable records.
           </p>
           <p>
-            Hidden chats still use storage. Trash retains messages until permanently deleted. Small deletion markers
-            remain to prevent stale devices restoring deleted chats. Permanent deletion frees chat slots. Trash is never
-            automatically purged. Serialized units count JSON UTF-16 code units before encryption, not device disk
-            space.
+            Hidden chats still use storage. Trashed chats can be restored for {ASSISTANT_CHAT_TRASH_RETENTION_DAYS}{' '}
+            days, then are permanently deleted. Small deletion markers remain to prevent stale devices restoring deleted
+            chats. Trash and deleted records do not count toward active chat limits. Restoring a chat requires room in
+            the active budget. Expired trash is cleaned when the Assistant opens and periodically while it is running.
+            Serialized units count JSON UTF-16 code units before encryption, not device disk space.
           </p>
         </details>
       )}

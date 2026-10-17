@@ -26,6 +26,7 @@ import {
 import ConversationPanel from './ConversationPanel'
 import {
   AssistantSyncedChats,
+  ASSISTANT_CHAT_TRASH_RETENTION_DAYS,
   getAssistantChatStorageFailure,
   reconcileSyncedChatSnapshots,
   type SyncedChat,
@@ -934,6 +935,73 @@ const AssistantView = forwardRef<HTMLDivElement, Props>((props, ref) => {
     workspaceLocked,
   ])
 
+  useEffect(() => {
+    const store = sharedStoreRef.current
+    if (!sharedReady || !store || workspaceLocked || loadedChatAccountScope !== chatAccountScope) {
+      return
+    }
+    const userUuid = application.sessions.getUser()?.uuid
+    if (!userUuid) {
+      return
+    }
+    let disposed = false
+    let running = false
+    let lastAttempt: number | undefined
+    const intervalMs = 60 * 60 * 1000
+    const current = () =>
+      !disposed &&
+      sharedStoreRef.current === store &&
+      !workspaceLockedRef.current &&
+      application.sessions.getUser()?.uuid === userUuid
+    const maintain = () => {
+      const now = Date.now()
+      if (
+        !current() ||
+        application.sessions.isCurrentSessionReadOnly?.() ||
+        running ||
+        (lastAttempt !== undefined && now >= lastAttempt && now - lastAttempt < intervalMs)
+      ) {
+        return
+      }
+      lastAttempt = now
+      running = true
+      void store
+        .pruneExpiredTrash()
+        .then(() => {
+          if (current()) {
+            setWorkspacePersistenceNotice((notice) => {
+              return notice.startsWith('Automatic chat trash cleanup could not complete.') ? '' : notice
+            })
+          }
+        })
+        .catch((error: unknown) => {
+          if (current()) {
+            setWorkspacePersistenceNotice(
+              `Automatic chat trash cleanup could not complete. ${getAssistantChatStorageFailure(error).message}`,
+            )
+          }
+        })
+        .finally(() => {
+          running = false
+        })
+    }
+    const wake = () => {
+      if (document.visibilityState === 'visible') {
+        maintain()
+      }
+    }
+    maintain()
+    const timer = window.setInterval(maintain, intervalMs)
+    document.addEventListener('visibilitychange', wake)
+    window.addEventListener('focus', wake)
+    return () => {
+      disposed = true
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', wake)
+      window.removeEventListener('focus', wake)
+    }
+  }, [application, workspaceRevision, sharedReady, workspaceLocked, loadedChatAccountScope, chatAccountScope])
+
   const deleteChat = useCallback(
     async (tabId: string) => {
       if (workspaceLockedRef.current || loadedChatAccountScope !== chatAccountScope) {
@@ -1029,7 +1097,7 @@ const AssistantView = forwardRef<HTMLDivElement, Props>((props, ref) => {
       try {
         const confirmed = await application.alerts.confirm(
           sharedStoreRef.current
-            ? `Move ${targets.length} conversation${targets.length === 1 ? '' : 's'} to trash? Any running replies in these chats will stop. Messages remain encrypted and can be restored; space is reclaimed only after permanent deletion.`
+            ? `Move ${targets.length} conversation${targets.length === 1 ? '' : 's'} to trash? Any running replies in these chats will stop. Messages remain encrypted and can be restored for ${ASSISTANT_CHAT_TRASH_RETENTION_DAYS} days, then are permanently deleted. You can empty trash earlier to reclaim space.`
             : `Permanently delete ${targets.length} conversation${targets.length === 1 ? '' : 's'} and their saved messages? Any running replies will stop. This cannot be undone.`,
           sharedStoreRef.current ? 'Move chats to trash?' : 'Delete chat history?',
           sharedStoreRef.current ? 'Move to trash' : 'Delete',

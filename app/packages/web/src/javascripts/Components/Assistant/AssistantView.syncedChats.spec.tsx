@@ -28,6 +28,11 @@ jest.mock('@/Assistant/assistantSyncedChats', () => ({
         lifecycleRecords: 0,
         invalidRecords: 0,
         serializedUnits: 100,
+        budgetedSerializedUnits: 100,
+        budgetedWriterRecords: 2,
+        trashedSerializedUnits: 0,
+        deletedSerializedUnits: 0,
+        trashRetentionDays: 30,
         limits: { chats: 100, writersPerChat: 64, records: 512, serializedUnits: 10000, recordUnits: 1000 },
       }
     }
@@ -49,6 +54,7 @@ jest.mock('@/Assistant/assistantSyncedChats', () => ({
       return () => mockListeners.delete(listener)
     }
     dispose() {}
+    async pruneExpiredTrash() {}
     async save(tab: SyncedChat['tab'], messages: SyncedChat['messages'], deniedToolNames: string[]) {
       await mockCheckpoint(tab, messages, deniedToolNames)
     }

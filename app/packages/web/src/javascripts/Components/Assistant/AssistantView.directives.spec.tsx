@@ -18,6 +18,7 @@ jest.mock('@/Assistant/assistantSyncedChats', () => ({
       return () => {}
     }
     dispose() {}
+    async pruneExpiredTrash() {}
     async updateMetadata() {}
   },
 }))

@@ -6,6 +6,7 @@ import { ApplicationEvent, ButtonType } from '@standardnotes/snjs'
 import { WebApplication } from '@/Application/WebApplication'
 import AssistantView from './AssistantView'
 const mockChatObservers = new Set<() => void>()
+const mockPruneExpiredTrash = jest.fn<Promise<void>, []>()
 const mockDeleteWait = jest.fn<Promise<void>, [string]>()
 jest.mock('@/Assistant/assistantSyncedChats', () => ({
   ...jest.requireActual('@/Assistant/assistantSyncedChats'),
@@ -28,6 +29,11 @@ jest.mock('@/Assistant/assistantSyncedChats', () => ({
         lifecycleRecords: 0,
         invalidRecords: 0,
         serializedUnits: 100,
+        budgetedSerializedUnits: 100,
+        budgetedWriterRecords: 2,
+        trashedSerializedUnits: 0,
+        deletedSerializedUnits: 0,
+        trashRetentionDays: 30,
         limits: { chats: 100, writersPerChat: 64, records: 512, serializedUnits: 10000, recordUnits: 1000 },
       }
     }
@@ -58,6 +64,9 @@ jest.mock('@/Assistant/assistantSyncedChats', () => ({
       return () => mockChatObservers.delete(callback)
     }
     dispose() {}
+    async pruneExpiredTrash() {
+      await mockPruneExpiredTrash()
+    }
     async updateMetadata(tab: unknown) {
       const rows = (await this.read()) as { tab: { id: string } }[]
       const next = rows.filter((row) => row.tab.id !== (tab as { id: string }).id)
@@ -125,6 +134,7 @@ const createApplication = () => {
     identifier: 'test-app',
     sessions: {
       isSignedIn: () => true,
+      isCurrentSessionReadOnly: jest.fn(() => false),
       getUser: () => ({ uuid: userUuid }),
     },
     protections: {
@@ -187,6 +197,7 @@ describe('AssistantView shared conversation modes', () => {
   let root: Root
   beforeEach(() => {
     mockChatObservers.clear()
+    mockPruneExpiredTrash.mockReset().mockResolvedValue(undefined)
     mockDeleteWait.mockResolvedValue(undefined)
     localStorage.clear()
     container = document.createElement('div')
@@ -196,7 +207,71 @@ describe('AssistantView shared conversation modes', () => {
   afterEach(() => {
     act(() => root.unmount())
     container.remove()
+    jest.useRealTimers()
   })
+  it('maintains trash on activation and hourly wake without overlapping or following an old account', async () => {
+    jest.useFakeTimers({
+      doNotFake: ['setTimeout', 'clearTimeout', 'setImmediate', 'clearImmediate', 'queueMicrotask', 'nextTick'],
+    })
+    jest.setSystemTime(10000)
+    const harness = createApplication()
+    await renderAssistant(root, harness.application)
+    expect(mockPruneExpiredTrash).toHaveBeenCalledTimes(1)
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'))
+      await Promise.resolve()
+    })
+    expect(mockPruneExpiredTrash).toHaveBeenCalledTimes(1)
+    let finish!: () => void
+    mockPruneExpiredTrash.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve
+        }),
+    )
+    await act(async () => {
+      jest.advanceTimersByTime(3600000)
+      await Promise.resolve()
+    })
+    expect(mockPruneExpiredTrash).toHaveBeenCalledTimes(2)
+    await act(async () => {
+      jest.advanceTimersByTime(3600000)
+      await Promise.resolve()
+    })
+    expect(mockPruneExpiredTrash).toHaveBeenCalledTimes(2)
+    harness.setUserUuid('account-b')
+    await act(async () => harness.emit(ApplicationEvent.SignedIn))
+    expect(mockPruneExpiredTrash).toHaveBeenCalledTimes(3)
+    await act(async () => finish())
+    expect(mockPruneExpiredTrash).toHaveBeenCalledTimes(3)
+  })
+
+  it('surfaces a failed automatic cleanup and clears its own warning after a clock-reset focus retry', async () => {
+    jest.useFakeTimers({
+      doNotFake: ['setTimeout', 'clearTimeout', 'setImmediate', 'clearImmediate', 'queueMicrotask', 'nextTick'],
+    })
+    jest.setSystemTime(10000)
+    const harness = createApplication()
+    mockPruneExpiredTrash.mockRejectedValueOnce(new Error('PRIVATE server detail'))
+    await renderAssistant(root, harness.application)
+    expect(container.textContent).toContain('Automatic chat trash cleanup could not complete')
+    expect(container.textContent).not.toContain('PRIVATE server detail')
+    jest.setSystemTime(5000)
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'))
+      await Promise.resolve()
+    })
+    expect(mockPruneExpiredTrash).toHaveBeenCalledTimes(2)
+    expect(container.textContent).not.toContain('Automatic chat trash cleanup could not complete')
+  })
+
+  it('does not automatically prune a read-only session', async () => {
+    const harness = createApplication()
+    jest.mocked(harness.application.sessions.isCurrentSessionReadOnly).mockReturnValue(true)
+    await renderAssistant(root, harness.application)
+    expect(mockPruneExpiredTrash).not.toHaveBeenCalled()
+  })
+
   it('switches all five modes without replacing the mounted draft or creating another tab', async () => {
     const { application } = createApplication()
     await renderAssistant(root, application)
