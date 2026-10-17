@@ -8,6 +8,13 @@ import { type AgentResult } from '@/Assistant/agent'
 import ConversationPanel from './ConversationPanel'
 import { flushAssistantNoteEditors } from '@/Assistant/assistantNoteChanges'
 import { acquireAssistantChatRun } from '@/Assistant/assistantChatRunLease'
+import { prepareAssistantAttachment } from '@/Assistant/attachments'
+import { TextEncoder } from 'util'
+
+jest.mock('@/Assistant/attachments', () => ({
+  ...jest.requireActual('@/Assistant/attachments'),
+  prepareAssistantAttachment: jest.fn(),
+}))
 
 jest.mock('@/Assistant/conversationModeRunner', () => ({ runConversationMode: jest.fn() }))
 jest.mock('@/Assistant/agent', () => ({ run: jest.fn() }))
@@ -56,6 +63,7 @@ jest.mock('@/Components/Button/Button', () => ({
 }))
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+globalThis.TextEncoder ??= TextEncoder
 HTMLElement.prototype.scrollTo = jest.fn()
 
 jest.mock('@/Assistant/assistantNoteChanges', () => ({
@@ -264,6 +272,132 @@ describe('Assistant immediate send feedback and preflight fences', () => {
     })
     expect(runConversationMode).toHaveBeenCalledTimes(1)
     expect(container.textContent?.match(/Visible request/g)).toHaveLength(1)
+  })
+
+  const typeDraft = (text: string) => {
+    const input = container.querySelector('textarea')!
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(input, text)
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+  }
+  const sendDraft = async () => {
+    await act(async () => {
+      Array.from(container.querySelectorAll('button'))
+        .find((button) => button.textContent === 'Send')!
+        .click()
+      await flush()
+    })
+  }
+
+  it.each(['throw', 'result'] as const)(
+    'restores a failed provider submission (%s) without duplicating the retry',
+    async (failure) => {
+      jest.mocked(runConversationMode).mockImplementationOnce(async () => {
+        if (failure === 'throw') {
+          throw new Error('Provider unavailable')
+        }
+        return { finalText: 'Provider unavailable', stopReason: 'error' } as AgentResult
+      })
+      await act(async () => {
+        render(false)
+        await flush()
+      })
+      typeDraft('Please summarize')
+      await sendDraft()
+      expect(container.querySelector('textarea')!.value).toBe('Please summarize')
+      expect(container.textContent).toContain('Provider unavailable')
+      await sendDraft()
+      const history = jest.mocked(runConversationMode).mock.calls[1][1]
+      expect(history.filter((message) => message.role === 'user')).toEqual([
+        { role: 'user', content: 'Please summarize' },
+      ])
+    },
+  )
+
+  it('restores a submission refused by encrypted history storage', async () => {
+    const shared = {
+      ready: true,
+      refresh: jest.fn(async () => undefined),
+      checkpoint: jest.fn(async () => {
+        throw new Error('Storage unavailable')
+      }),
+    }
+    await act(async () => {
+      render(false, shared)
+      await flush()
+    })
+    typeDraft('Keep this message')
+    await sendDraft()
+    expect(container.querySelector('textarea')!.value).toBe('Keep this message')
+    expect(runConversationMode).not.toHaveBeenCalled()
+    expect(container.textContent).toContain('message was not sent')
+  })
+
+  it('does not overwrite a newer draft when the provider fails', async () => {
+    const response = deferred<AgentResult>()
+    jest.mocked(runConversationMode).mockReturnValueOnce(response.promise)
+    await act(async () => {
+      render(false)
+      await flush()
+    })
+    typeDraft('Original message')
+    await sendDraft()
+    typeDraft('New draft')
+    await act(async () => {
+      response.reject(new Error('Provider unavailable'))
+      await flush()
+    })
+    expect(container.querySelector('textarea')!.value).toBe('New draft')
+    expect(container.textContent).toContain('Original message')
+  })
+
+  it('restores attachments together with a failed submission', async () => {
+    jest.mocked(runConversationMode).mockRejectedValueOnce(new Error('Provider unavailable'))
+    jest.mocked(prepareAssistantAttachment).mockResolvedValueOnce({
+      kind: 'text',
+      name: 'context.txt',
+      text: 'Attached content',
+    })
+    await act(async () => {
+      render(false)
+      await flush()
+    })
+    const file = new File(['Attached content'], 'context.txt', { type: 'text/plain' })
+    const picker = container.querySelector<HTMLInputElement>('input[type="file"]')!
+    Object.defineProperty(picker, 'files', { value: [file] })
+    await act(async () => {
+      picker.dispatchEvent(new Event('change', { bubbles: true }))
+      await flush()
+    })
+    expect(container.querySelector('[aria-label="Remove context.txt"]')).not.toBeNull()
+    typeDraft('Read this file')
+    await sendDraft()
+    expect(container.querySelector('textarea')!.value).toBe('Read this file')
+    expect(container.querySelector('[aria-label="Remove context.txt"]')).not.toBeNull()
+    await sendDraft()
+    const history = jest.mocked(runConversationMode).mock.calls[1][1]
+    expect(JSON.stringify(history)).toContain('Attached content')
+    expect(history.filter((message) => message.role === 'user')).toHaveLength(1)
+  })
+
+  it.each(['text', 'tool'] as const)('does not restore a run after %s output', async (progress) => {
+    jest.mocked(runConversationMode).mockImplementationOnce(async (_mode, _history, options) => {
+      if (progress === 'text') {
+        options.onTextDelta?.('Partial answer')
+      } else {
+        options.onToolCall?.({ id: 'read', name: 'notes.read', args: {} })
+      }
+      throw new Error('Interrupted')
+    })
+    await act(async () => {
+      render(false)
+      await flush()
+    })
+    typeDraft('Original message')
+    await sendDraft()
+    expect(container.querySelector('textarea')!.value).toBe('')
+    expect(container.textContent).toContain('Original message')
   })
 
   it('clears a failed preflight and permits the next explicit request', async () => {

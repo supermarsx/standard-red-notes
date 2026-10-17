@@ -320,7 +320,12 @@ function ConversationPanelImpl({
   const [messages, setMessages] = useState<UIMessage[]>(() =>
     hydrateAssistantHistory(initialHistoryRead.status === 'found' ? initialHistoryRead.messages : []),
   )
-  const [input, setInput] = useState('')
+  const [input, setInputState] = useState('')
+  const inputRef = useRef('')
+  const setInput = useCallback((value: string) => {
+    inputRef.current = value
+    setInputState(value)
+  }, [])
   const [isRunning, setIsRunning] = useState(false)
   const [isStopping, setIsStopping] = useState(false)
   // Local presentation only: unleased prompts must never enter synced history.
@@ -1244,6 +1249,27 @@ function ConversationPanelImpl({
 
   const runPrompt = useCallback(
     async (request: ConversationPrompt) => {
+      const draftEpoch = sessionEpochRef.current
+      const draftPrincipal = captureAssistantSessionPrincipal(application.sessions)
+      const restoreSubmission = (turnIds: string[] = []) => {
+        if (
+          request.directive ||
+          !mountedRef.current ||
+          draftEpoch !== sessionEpochRef.current ||
+          !assistantSessionPrincipalMatches(draftPrincipal, captureAssistantSessionPrincipal(application.sessions)) ||
+          inputRef.current ||
+          attachmentsRef.current.length
+        ) {
+          return
+        }
+        setInput(request.providerPrompt)
+        attachmentsRef.current = request.attachments ?? []
+        setAttachments(attachmentsRef.current)
+        // A retry must not include an unsent turn twice in the model history.
+        if (turnIds.length) {
+          setMessagesSynced((current) => current.filter((message) => !turnIds.includes(message.id)))
+        }
+      }
       if (request.attachments?.length) {
         try {
           const currentProfile = resolveActiveProfileOverrides(application)
@@ -1269,10 +1295,7 @@ function ConversationPanelImpl({
               text: error instanceof Error ? error.message : 'Attachment validation failed.',
             },
           ])
-          if (!attachmentsRef.current.length) {
-            attachmentsRef.current = request.attachments
-            setAttachments(request.attachments)
-          }
+          restoreSubmission()
           return
         }
       }
@@ -1303,6 +1326,7 @@ function ConversationPanelImpl({
           ...prev,
           { kind: 'error', id: newId(), text: 'The assistant could not verify the active account for this request.' },
         ])
+        restoreSubmission()
         return
       }
       const assistantSettingsScope = getAssistantAccountScope(application)
@@ -1311,6 +1335,7 @@ function ConversationPanelImpl({
           ...prev,
           { kind: 'error', id: newId(), text: 'The assistant could not isolate settings for the active account.' },
         ])
+        restoreSubmission()
         return
       }
       const runPersona = getPersona(assistantSettingsScope)
@@ -1321,6 +1346,7 @@ function ConversationPanelImpl({
           ...prev,
           { kind: 'error', id: newId(), text: availability.reason || 'The assistant is not configured.' },
         ])
+        restoreSubmission()
         return
       }
 
@@ -1507,11 +1533,7 @@ function ConversationPanelImpl({
             if (mountedRef.current) {
               setIsRunning(false)
               if (isSessionCurrent() && !request.directive) {
-                setInput((draft) => draft || promptText)
-                if (!attachmentsRef.current.length && request.attachments?.length) {
-                  attachmentsRef.current = request.attachments
-                  setAttachments(request.attachments)
-                }
+                restoreSubmission()
               }
             }
           }
@@ -1569,6 +1591,7 @@ function ConversationPanelImpl({
         abortRef.current !== controller
       ) {
         if (!initiallyPersisted && isSessionCurrent() && !controller.signal.aborted) {
+          restoreSubmission([pendingUserMessage.id, assistantId])
           setMessagesSynced((current) => [
             ...current.map((message) => {
               return message.id === assistantId && message.kind === 'assistant'
@@ -1596,6 +1619,7 @@ function ConversationPanelImpl({
       let activeAssistantId = assistantId
       let hasActiveText = false
       let hasRunText = false
+      let hasRunTool = false
       let textAfterTools = false
       let actionDenied = false
       let waitingForSteeredResponse = false
@@ -1825,6 +1849,7 @@ function ConversationPanelImpl({
               if (!isSessionCurrent()) {
                 return
               }
+              hasRunTool = true
               waitingForSteeredResponse = false
               textDeltas.flush()
               textAfterTools = true
@@ -1904,6 +1929,9 @@ function ConversationPanelImpl({
         finishRunActivities()
 
         if (!controller.signal.aborted && result.stopReason === 'error') {
+          if (!hasRunText && !hasRunTool) {
+            restoreSubmission([pendingUserMessage.id, assistantId])
+          }
           setMessagesSynced((prev) => [
             ...prev,
             { kind: 'error', id: newId(), text: result.finalText || 'The assistant encountered an error.' },
@@ -1914,6 +1942,9 @@ function ConversationPanelImpl({
         if (canFinalizeSession()) {
           finishRunActivities()
           if (!controller.signal.aborted) {
+            if (!hasRunText && !hasRunTool) {
+              restoreSubmission([pendingUserMessage.id, assistantId])
+            }
             setMessagesSynced((prev) => [
               ...prev,
               { kind: 'error', id: newId(), text: error instanceof Error ? error.message : String(error) },
@@ -1962,6 +1993,7 @@ function ConversationPanelImpl({
       requestConfirmation,
       recordToolAuthorization,
       setMessagesSynced,
+      setInput,
       shouldRequestConfirmation,
     ],
   )
@@ -2025,7 +2057,7 @@ function ConversationPanelImpl({
     attachmentsRef.current = []
     setAttachments([])
     void runPrompt({ providerPrompt: trimmed, attachments: sent })
-  }, [input, attachments, attachmentsBusy, isRunning, notifyFirstMessage, runPrompt])
+  }, [input, attachments, attachmentsBusy, isRunning, notifyFirstMessage, runPrompt, setInput])
 
   // Steer: inject guidance into the in-flight run without restarting it.
   const handleSteer = useCallback(() => {
@@ -2037,7 +2069,7 @@ function ConversationPanelImpl({
     runIntentRef.current = trimmed
     setMessagesSynced((prev) => [...prev, { kind: 'user', id: newId(), text: trimmed, steered: true }])
     setInput('')
-  }, [input, isRunning, setMessagesSynced])
+  }, [input, isRunning, setMessagesSynced, setInput])
 
   // Queue: line up a follow-up prompt to run after the current one finishes.
   const handleQueue = useCallback(() => {
@@ -2055,7 +2087,7 @@ function ConversationPanelImpl({
     ]
     setQueue(queueRef.current)
     setInput('')
-  }, [input, attachments, attachmentsBusy, notifyFirstMessage])
+  }, [input, attachments, attachmentsBusy, notifyFirstMessage, setInput])
 
   const dismissNotice = useCallback(
     (choice: NoticeDismissalChoice) => {
