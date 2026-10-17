@@ -71,18 +71,26 @@ export type AssistantSharedChatBinding = {
 }
 type Parsed = { uuid: string; record: SyncedChatRecord }
 
-/** Closed schema; no provider credentials, arbitrary tool arguments or results cross this boundary. */
-export function normalizeSyncedChatRecord(value: unknown, ownerUuid: string): SyncedChatRecord | undefined {
+/** Keep an exact, bounded fingerprint; record clocks alone cannot prove content equality. */
+function serializeSyncedChatContent(value: unknown): string | undefined {
   if (!value || typeof value !== 'object') {
     return undefined
   }
   try {
-    if (JSON.stringify(value).length > MAX_RECORD_BYTES) {
-      return undefined
-    }
+    const serialized = JSON.stringify(value)
+    return serialized.length <= MAX_RECORD_BYTES ? serialized : undefined
   } catch {
     return undefined
   }
+}
+
+/** Closed schema; no provider credentials, arbitrary tool arguments or results cross this boundary. */
+export function normalizeSyncedChatRecord(value: unknown, ownerUuid: string): SyncedChatRecord | undefined {
+  return serializeSyncedChatContent(value) === undefined ? undefined : normalizeSerializedChatContent(value, ownerUuid)
+}
+
+/** Called only after the raw content passed the bounded JSON serialization check. */
+function normalizeSerializedChatContent(value: unknown, ownerUuid: string): SyncedChatRecord | undefined {
   const raw = value as Partial<SyncedChatRecord>
   if (
     raw.version !== 1 ||
@@ -314,7 +322,7 @@ export class AssistantSyncedChats {
   private queue = Promise.resolve()
   private readonly parsedRecords = new Map<
     string,
-    { content: unknown; parsed: Parsed | undefined; serializedLength: number }
+    { content: unknown; serializedContent: string | undefined; parsed: Parsed | undefined; serializedLength: number }
   >()
   private previousRecords: Parsed[] = []
   private previousChats: SyncedChat[] = []
@@ -423,11 +431,23 @@ export class AssistantSyncedChats {
         seen.add(item.uuid)
         let cached = this.parsedRecords.get(item.uuid)
         if (!cached || cached.content !== item.content) {
-          // DecryptedItemMutator copies content into a replacement payload. Content
-          // identity therefore invalidates this cache for both local and remote edits.
-          const record = normalizeSyncedChatRecord(item.content, this.ownerUuid)
-          const parsed = record ? { uuid: item.uuid, record } : undefined
-          cached = { content: item.content, parsed, serializedLength: parsed ? JSON.stringify(parsed).length : 0 }
+          // Sync acknowledgements also reconstruct payloads and copy content.
+          // Equal raw content can reuse its validated transcript; equal revision
+          // clocks cannot, since a remote writer may send different contents.
+          const serializedContent = serializeSyncedChatContent(item.content)
+          if (cached && cached.serializedContent === serializedContent) {
+            cached.content = item.content
+          } else {
+            const record =
+              serializedContent === undefined ? undefined : normalizeSerializedChatContent(item.content, this.ownerUuid)
+            const parsed = record ? { uuid: item.uuid, record } : undefined
+            cached = {
+              content: item.content,
+              serializedContent,
+              parsed,
+              serializedLength: parsed ? JSON.stringify(parsed).length : 0,
+            }
+          }
           this.parsedRecords.set(item.uuid, cached)
         }
         return cached.parsed ? [cached.parsed] : []

@@ -218,6 +218,31 @@ it('reuses unchanged normalized records and merged chats without repeating trans
   }
 })
 
+it('reuses parsed transcripts across content-identical replacement payloads from sync acknowledgements', async () => {
+  const h = harness()
+  const content = writer('a', [entry('one', null), entry('two', 'one')])
+  h.values.set('item', { uuid: 'item', content })
+  const store = new AssistantSyncedChats(h.application, 'a')
+  const first = await store.read()
+  const sanitize = jest.spyOn(chatHistory, 'sanitizeAssistantChatMessages')
+  try {
+    for (let acknowledgement = 0; acknowledgement < 10; acknowledgement += 1) {
+      // DecryptedPayload.copy reconstructs and deep-copies content even when
+      // only dirty/sync metadata outside content changed.
+      h.values.set('item', { uuid: 'item', content: JSON.parse(JSON.stringify(content)) })
+      expect(await store.read()).toBe(first)
+    }
+    expect(sanitize).not.toHaveBeenCalled()
+    // Revision counters are not trusted as a content fingerprint: a different
+    // body with identical record counters must still replace the snapshot.
+    h.values.set('item', { uuid: 'item', content: writer('a', [entry('replacement', null)]) })
+    expect((await store.read())[0].messages).toEqual([message('replacement')])
+    expect(sanitize).toHaveBeenCalled()
+  } finally {
+    sanitize.mockRestore()
+  }
+})
+
 it('rechecks authorization and sharing before cache access and evicts removed or inadmissible records', async () => {
   const h = harness()
   const content = writer('a', [entry('private', null)])
