@@ -1,3 +1,10 @@
+import { base64Url, sha256, utf8Bytes } from '@/DavSync/hash/sha256'
+import {
+  ASSISTANT_COMPOSER_FIELDS,
+  normalizeAssistantChatComposerState,
+  type AssistantChatComposerPatch,
+  type AssistantChatComposerState,
+} from './assistantChatComposerState'
 /** Account-private chat records travel through the ordinary E2E encrypted item/socket sync pipeline. */
 import { DecryptedItemInterface, DecryptedItemMutator, ItemContent } from '@standardnotes/snjs'
 import { WebApplication } from '@/Application/WebApplication'
@@ -162,6 +169,7 @@ export type SyncedChatRecord = {
   writerId: string
   revision: number
   updatedAt: number
+  composer?: AssistantChatComposerState
   metadataUpdatedAt?: number
   title?: string
   userRenamed?: boolean
@@ -174,6 +182,7 @@ export type SyncedChatRecord = {
   removedMessageIds?: string[]
 }
 export type SyncedChat = {
+  composer?: AssistantChatComposerState
   trashed?: boolean
   tab: ChatTab
   messages: PersistedAssistantMessage[]
@@ -204,6 +213,7 @@ export type AssistantSharedChatBinding = {
   ready: boolean
   history?: SyncedChat
   refresh(): Promise<SyncedChat | undefined>
+  checkpointComposer?(patch: AssistantChatComposerPatch): Promise<SyncedChat | void>
   removeMessage?(messageId: string): Promise<void>
   checkpoint(messages: PersistedAssistantMessage[], deniedToolNames: string[]): Promise<SyncedChat | void>
 }
@@ -268,6 +278,10 @@ function normalizeSerializedChatContent(value: unknown, ownerUuid: string): Sync
   ) {
     return undefined
   }
+  const composer = raw.composer === undefined ? undefined : normalizeAssistantChatComposerState(raw.composer)
+  if (raw.composer !== undefined && !composer) {
+    return undefined
+  }
   const entries: SyncedChatEntry[] = []
   const seen = new Set<string>()
   for (const candidate of raw.entries) {
@@ -305,6 +319,7 @@ function normalizeSerializedChatContent(value: unknown, ownerUuid: string): Sync
   return {
     ...base,
     kind: 'writer',
+    ...(composer ? { composer } : {}),
     metadataUpdatedAt: counter(raw.metadataUpdatedAt) ? raw.metadataUpdatedAt : raw.updatedAt,
     title: raw.title.trim() || 'New chat',
     userRenamed: raw.userRenamed === true,
@@ -387,6 +402,25 @@ function serializedRecordUnits(
 ): number {
   return 2 + Math.max(0, records.length - 1) + records.reduce((sum, record) => sum + measure(record), 0)
 }
+function mergeComposer(records: Parsed[]): AssistantChatComposerState {
+  const composer: AssistantChatComposerState = {}
+  for (const field of ASSISTANT_COMPOSER_FIELDS) {
+    const winner = records
+      .filter(({ record }) => record.kind === 'writer' && record.composer?.[field])
+      .sort(
+        (a, b) =>
+          a.record.composer![field]!.updatedAt - b.record.composer![field]!.updatedAt ||
+          a.record.writerId.localeCompare(b.record.writerId) ||
+          a.uuid.localeCompare(b.uuid),
+      )
+      .at(-1)
+    if (winner) {
+      Object.assign(composer, { [field]: winner.record.composer![field] })
+    }
+  }
+  return composer
+}
+
 export function mergeSyncedChats(records: Parsed[], includeTrashed = false): SyncedChat[] {
   const groups = new Map<string, Parsed[]>()
   for (const entry of records) {
@@ -459,7 +493,9 @@ export function mergeSyncedChats(records: Parsed[], includeTrashed = false): Syn
       ordered.push(entry.message)
       emitted.add(entry.message.id)
     }
+    const composer = mergeComposer(writers)
     chats.push({
+      ...(Object.keys(composer).length ? { composer } : {}),
       ...(trashed ? { trashed: true } : {}),
       tab: {
         id: chatId,
@@ -516,6 +552,7 @@ export class AssistantSyncedChats {
   private readonly budget: Readonly<AssistantChatStorageBudget>
   private readonly ownerUuid: string
   private _writerId: string
+  private composerWriterId?: string
   private identityClaimed: boolean
   private releaseIdentity?: () => void
   get writerId(): string {
@@ -731,7 +768,21 @@ export class AssistantSyncedChats {
     return pending
   }
   /** Metadata and locally authored messages only. Run admission is a separate server lease. */
-  save(tab: ChatTab, messages: PersistedAssistantMessage[] | undefined, deniedToolNames: string[] = []): Promise<void> {
+  checkpointComposer(chatId: string, patch: AssistantChatComposerPatch, tab?: ChatTab): Promise<void> {
+    return this.save(
+      tab && tab.id === chatId ? tab : { id: chatId, title: 'New chat', userRenamed: false },
+      undefined,
+      [],
+      patch,
+    )
+  }
+
+  save(
+    tab: ChatTab,
+    messages: PersistedAssistantMessage[] | undefined,
+    deniedToolNames: string[] = [],
+    composerPatch?: AssistantChatComposerPatch,
+  ): Promise<void> {
     return this.enqueue(async () => {
       await this.assertAvailable()
       await this.claimIdentity()
@@ -749,8 +800,14 @@ export class AssistantSyncedChats {
       if (isChatTrashed(group)) {
         throw new AssistantChatStorageError('CHAT_TRASHED', 'validate')
       }
+      // A tiny dedicated record avoids rewriting the transcript on every draft keystroke.
+      // It consumes one additional writer slot and shares the claimed session identity.
+      const writeIdentity =
+        composerPatch === undefined
+          ? this.writerId
+          : (this.composerWriterId ??= `composer-${base64Url(sha256(utf8Bytes(`assistant-composer-v1:${this.writerId}`)))}`)
       const own = group
-        .filter(({ record }) => record.kind === 'writer' && record.writerId === this.writerId)
+        .filter(({ record }) => record.kind === 'writer' && record.writerId === writeIdentity)
         .sort((a, b) => a.record.revision - b.record.revision || rank(a, b))
         .at(-1)
       if (
@@ -794,6 +851,7 @@ export class AssistantSyncedChats {
       const inheritedModeClock =
         inheritedMode?.conversationModeUpdatedAt ?? inheritedMode?.metadataUpdatedAt ?? inheritedMode?.updatedAt ?? 0
       const modeChanged =
+        composerPatch === undefined &&
         messages === undefined &&
         tab.conversationMode !== undefined &&
         tab.conversationMode !== inheritedMode?.conversationMode &&
@@ -801,7 +859,8 @@ export class AssistantSyncedChats {
       const conversationMode = modeChanged
         ? tab.conversationMode
         : (inheritedMode?.conversationMode ?? tab.conversationMode)
-      const metadataChanged = messages === undefined && !(inheritedMetadata?.userRenamed && !tab.userRenamed)
+      const metadataChanged =
+        composerPatch === undefined && messages === undefined && !(inheritedMetadata?.userRenamed && !tab.userRenamed)
       const metadata = metadataChanged
         ? tab
         : inheritedMetadata
@@ -811,13 +870,28 @@ export class AssistantSyncedChats {
               kind: inheritedMetadata.tabKind,
             }
           : tab
+      const composer = { ...(own?.record.composer ?? {}) }
+      if (composerPatch !== undefined) {
+        const inheritedComposer = mergeComposer(group)
+        for (const field of ASSISTANT_COMPOSER_FIELDS) {
+          if (composerPatch[field] !== undefined) {
+            Object.assign(composer, {
+              [field]: {
+                value: composerPatch[field],
+                updatedAt: Math.max(updatedAt, (inheritedComposer[field]?.updatedAt ?? 0) + 1),
+              },
+            })
+          }
+        }
+      }
       const candidate = {
         version: 1,
         ownerUuid: this.ownerUuid,
         chatId: tab.id,
         kind: 'writer',
+        ...(Object.keys(composer).length ? { composer } : {}),
         removedMessageIds: own?.record.removedMessageIds ?? [],
-        writerId: this.writerId,
+        writerId: writeIdentity,
         revision,
         updatedAt,
         metadataUpdatedAt: metadataChanged
@@ -896,6 +970,7 @@ export class AssistantSyncedChats {
                   selectConversationMode(group)?.updatedAt,
               }
             : {}),
+          ...(own?.record.composer ? { composer: own.record.composer } : {}),
           entries: (own?.record.entries ?? []).filter((entry) => entry.message.id !== messageId),
           deniedToolNames: own?.record.deniedToolNames ?? [],
           removedMessageIds,

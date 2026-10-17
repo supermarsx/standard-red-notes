@@ -1005,3 +1005,83 @@ it('bounds retention maintenance to 25 rooms and one sync while deferring unackn
     clock.mockRestore()
   }
 })
+
+it('syncs independent composer fields across writers without replacing transcript or renamed metadata', async () => {
+  const h = harness()
+  const a = new AssistantSyncedChats(h.application, 'composer-a')
+  const b = new AssistantSyncedChats(h.application, 'composer-b')
+  const tab = { id: 'chat', title: 'Named chat', userRenamed: true }
+  await a.save(tab, [message('existing')])
+  await Promise.all([
+    a.checkpointComposer('chat', { draft: { text: 'Unsent draft' } }),
+    b.checkpointComposer('chat', { context: { scope: 'current-note' }, toolPermissionMode: 'ask' }),
+  ])
+  let chat = (await b.read())[0]
+  expect(chat.composer?.draft?.value?.text).toBe('Unsent draft')
+  expect(chat.composer?.context?.value.scope).toBe('current-note')
+  expect(chat.composer?.toolPermissionMode?.value).toBe('ask')
+  expect(chat.messages).toEqual([message('existing')])
+  expect(chat.tab.title).toBe('Named chat')
+  await a.save(tab, [message('existing'), message('answer')])
+  await a.removeMessage('chat', 'answer')
+  await b.checkpointComposer('chat', { draft: null })
+  chat = (await a.read())[0]
+  expect(chat.composer?.draft?.value).toBeNull()
+  expect(chat.composer?.context?.value.scope).toBe('current-note')
+  expect(chat.messages).toEqual([message('existing')])
+  await a.trash('chat')
+  await expect(a.checkpointComposer('chat', { draft: { text: 'late' } })).rejects.toMatchObject({
+    code: 'CHAT_TRASHED',
+  })
+  await a.delete('chat')
+  await expect(a.checkpointComposer('chat', { draft: null })).rejects.toMatchObject({ code: 'CHAT_DELETED' })
+})
+
+it('advances each composer clock despite a backwards local clock and merges ties deterministically', async () => {
+  const h = harness()
+  const store = new AssistantSyncedChats(h.application, 'a')
+  const clock = jest.spyOn(Date, 'now').mockReturnValue(5000)
+  try {
+    await store.checkpointComposer('chat', { draft: { text: 'first' } })
+    clock.mockReturnValue(1)
+    await store.checkpointComposer('chat', { draft: { text: 'second' } })
+    const chat = (await store.read())[0]
+    expect(chat.composer?.draft?.updatedAt).toBe(5001)
+    const a = record(writer('a', [], { composer: { draft: { value: { text: 'A' }, updatedAt: 10 } } }))
+    const b = record(writer('b', [], { composer: { draft: { value: null, updatedAt: 10 } } }))
+    expect(mergeSyncedChats([a, b])).toEqual(mergeSyncedChats([b, a]))
+    expect(mergeSyncedChats([a, b])[0].composer?.draft?.value).toBeNull()
+  } finally {
+    clock.mockRestore()
+  }
+})
+
+it('does not change an equal-clock composer winner when another writer updates unrelated transcript metadata', () => {
+  const a = record(writer('a', [], { updatedAt: 100, composer: { draft: { value: { text: 'A' }, updatedAt: 10 } } }))
+  const b = record(writer('b', [], { updatedAt: 1, composer: { draft: { value: { text: 'B' }, updatedAt: 10 } } }))
+  expect(mergeSyncedChats([a, b])[0].composer?.draft?.value?.text).toBe('B')
+  a.record = { ...a.record, revision: 999, updatedAt: 9999, entries: [entry('new-message', null)] }
+  expect(mergeSyncedChats([a, b])[0].composer?.draft?.value?.text).toBe('B')
+})
+
+it('writes drafts to a stable lightweight record without rewriting the transcript', async () => {
+  const h = harness()
+  const store = new AssistantSyncedChats(h.application, 'writer-session')
+  const tab = { id: 'chat', title: 'Long chat', userRenamed: true }
+  await store.save(tab, [message('long', 'body '.repeat(1000))])
+  const transcript = [...h.values.values()][0]
+  await store.checkpointComposer('chat', { draft: { text: 'first draft' } })
+  expect(h.values.get(transcript.uuid)).toBe(transcript)
+  const draftRecord = [...h.values.values()].find((item) => item.uuid !== transcript.uuid)!
+  expect((draftRecord.content as SyncedChatRecord).entries).toEqual([])
+  expect((draftRecord.content as SyncedChatRecord).writerId).toMatch(/^composer-[A-Za-z0-9_-]{43}$/)
+  expect((await store.getStorageStats()).writerRecords).toBe(2)
+  await store.checkpointComposer('chat', { draft: { text: 'second draft' } })
+  expect(h.values.size).toBe(2)
+  expect(h.values.get(transcript.uuid)).toBe(transcript)
+  expect((await store.read())[0].messages).toEqual([message('long', 'body '.repeat(1000))])
+  const reopened = new AssistantSyncedChats(h.application, 'writer-session')
+  await reopened.checkpointComposer('chat', { draft: null })
+  expect(h.values.size).toBe(2)
+  expect((await reopened.read())[0].composer?.draft?.value).toBeNull()
+})
