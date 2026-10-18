@@ -125,7 +125,7 @@ export function createAssistantChatHistoryCheckpoint(
 ): AssistantChatHistoryCheckpoint {
   let timeout: ReturnType<typeof setTimeout> | undefined
   let dirty = false
-  let writeChain = Promise.resolve()
+  let running: Promise<void> | undefined
 
   const clearScheduled = () => {
     if (timeout !== undefined) {
@@ -135,15 +135,29 @@ export function createAssistantChatHistoryCheckpoint(
   }
 
   const enqueueDirtyWrite = (): Promise<void> => {
-    if (!dirty) {
-      return writeChain
+    if (running) {
+      return running
     }
-    dirty = false
-    const next = writeChain.then(write)
-    // Keep later checkpoints usable after a best-effort persistence failure,
-    // while still returning the real rejection to an explicit flush caller.
-    writeChain = next.catch(() => undefined)
-    return next
+    if (!dirty) {
+      return Promise.resolve()
+    }
+    // A slow encrypted checkpoint must not collect an unbounded promise chain
+    // of identical full-transcript writes. Every update during a write shares
+    // one dirty trailing snapshot; explicit flush waits for the drain.
+    running = Promise.resolve().then(async () => {
+      try {
+        while (dirty) {
+          dirty = false
+          await write()
+        }
+      } catch (error) {
+        dirty = true
+        throw error
+      } finally {
+        running = undefined
+      }
+    })
+    return running
   }
 
   return {

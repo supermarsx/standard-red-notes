@@ -75,6 +75,36 @@ describe('assistant chat history checkpoints', () => {
     expect(write).toHaveBeenCalledTimes(1)
   })
 
+  it('coalesces repeated intervals during a slow checkpoint into one trailing write', async () => {
+    let release!: () => void
+    const write = jest
+      .fn<Promise<void>, []>()
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            release = resolve
+          }),
+      )
+      .mockResolvedValue(undefined)
+    const checkpoint = createAssistantChatHistoryCheckpoint(write)
+    const first = checkpoint.flush()
+    await Promise.resolve()
+    for (let i = 0; i < 20; i++) {
+      checkpoint.schedule()
+      await jest.advanceTimersByTimeAsync(ASSISTANT_CHAT_HISTORY_CHECKPOINT_DELAY_MS)
+    }
+    expect(write).toHaveBeenCalledTimes(1)
+    let terminalComplete = false
+    const terminal = checkpoint.flush().then(() => {
+      terminalComplete = true
+    })
+    expect(terminalComplete).toBe(false)
+    release()
+    await Promise.all([first, terminal])
+    expect(write).toHaveBeenCalledTimes(2)
+    expect(terminalComplete).toBe(true)
+  })
+
   it('keeps later terminal checkpoints usable after one durable write rejection', async () => {
     const write = jest
       .fn<Promise<void>, []>()
@@ -684,15 +714,26 @@ describe('long research transcript retention', () => {
   })
 })
 
-
 it('retains aggregate outcomes for all 660 calls without retaining 660 detail cards or counting twice', () => {
-  const activities = Array.from({ length: 660 }, (_, index) => ({ id: `call-${index}`, name: 'web.fetch', label: 'Read page', outcome: index % 2 ? 'failed' : 'succeeded' }))
+  const activities = Array.from({ length: 660 }, (_, index) => ({
+    id: `call-${index}`,
+    name: 'web.fetch',
+    label: 'Read page',
+    outcome: index % 2 ? 'failed' : 'succeeded',
+  }))
   const first = sanitizeAssistantChatMessages([{ kind: 'assistant', id: 'research', text: 'Report', activities }])
   expect(first[0].activities).toHaveLength(8)
   expect(first[0].activityOmittedCounts).toEqual({ succeeded: 326, failed: 326 })
   expect(sanitizeAssistantChatMessages(first)).toEqual(first)
-  const continued = sanitizeAssistantChatMessages([{ ...first[0], activities: [...first[0].activities!, { id: 'extra', name: 'web.fetch', label: 'Read page', outcome: 'denied' }] }])
-  const total = Object.values(continued[0].activityOmittedCounts ?? {}).reduce((sum, count) => sum + count, 0) + (continued[0].activities?.length ?? 0)
+  const continued = sanitizeAssistantChatMessages([
+    {
+      ...first[0],
+      activities: [...first[0].activities!, { id: 'extra', name: 'web.fetch', label: 'Read page', outcome: 'denied' }],
+    },
+  ])
+  const total =
+    Object.values(continued[0].activityOmittedCounts ?? {}).reduce((sum, count) => sum + count, 0) +
+    (continued[0].activities?.length ?? 0)
   expect(total).toBe(661)
 })
 it('validates omitted counters and never persists arbitrary metadata or nonassistant counters', () => {
