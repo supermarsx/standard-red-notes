@@ -411,3 +411,25 @@ installation fails, Mode A stops before nginx, Mode B stops before supervisord
 can launch nginx, and the Mode C installer stops before switching the live
 release. None substitutes `unsafe-inline` to serve an unpinned app shell. The
 container's own build/curl verification is captured in the PR description.
+
+## Assistant internet search
+
+Both root Compose deployments start a private `assistant-search` SearXNG service. It publishes no host port and shares a dedicated outbound-capable network only with the server (the app in single-container Compose). It is not a readiness dependency: search failures do not prevent app startup. Admin Assistant internet access and user tool permissions still control requests; disabling access leaves the idle sidecar running.
+
+The bundled configuration retains upstream default engines and explicitly enables Bing. Engines can refuse or throttle requests; configuring them does not bypass their restrictions. See the official [engine configuration](https://github.com/searxng/searxng/blob/master/searx/settings.yml), [Docker installation](https://docs.searxng.org/admin/installation-docker.html), and [JSON formats](https://docs.searxng.org/admin/settings/settings_search.html).
+
+| Setting | Default / purpose |
+| --- | --- |
+| `SEARCH_PROVIDER` | `searxng`; also supports `brave` and `serper` |
+| `SEARCH_SEARXNG_URL` | `http://assistant-search:8080/search`, used only for SearXNG |
+| `SEARCH_API_URL` | Explicit endpoint override; otherwise Brave uses `https://api.search.brave.com/res/v1/web/search`, Serper uses `https://google.serper.dev/search` |
+| `SEARCH_API_KEY` | External provider key, retained only on the server |
+| `ASSISTANT_SEARCH_IMAGE` | Official multi-platform image pinned by digest in Compose; override to upgrade |
+| `ASSISTANT_SEARCH_MEM_LIMIT` | `512m` |
+| `WEB_SEARCH_TIMEOUT_MS` / `WEB_FETCH_TIMEOUT_MS` | `12000` / `15000` |
+| `WEB_SEARCH_MAX_BYTES` / `WEB_FETCH_MAX_BYTES` | `2097152` / `5242880` |
+| `WEB_FETCH_MAX_CHARS` | `100000` extracted text bound |
+
+For Brave, set `SEARCH_PROVIDER=brave` and `SEARCH_API_KEY`, leaving `SEARCH_API_URL` empty. For your own SearXNG instance, set `SEARCH_API_URL` to its JSON-enabled `/search` endpoint. External providers do not use the bundled endpoint; the sidecar still starts unless removed through your Compose override.
+
+Normal and seamless Compose deployments include this unprofiled service. Standalone `docker run`, LXC, and source deployments do not create SearXNG automatically: configure a reachable provider there. Only the configured search origin may reach private addresses; search redirects are rejected and public-page fetch SSRF restrictions remain enforced. The sidecar runs unprivileged, generates a random secret at startup, and uses temporary cache storage.

@@ -300,6 +300,16 @@ x-server-env: &server-env
   ASSISTANT_OLLAMA_URL: ${ASSISTANT_OLLAMA_URL:-}
   ASSISTANT_DEFAULT_PROVIDER: ${ASSISTANT_DEFAULT_PROVIDER:-}
   ASSISTANT_DEFAULT_MODEL: ${ASSISTANT_DEFAULT_MODEL:-}
+  # Server-side Assistant search (keys never reach the browser).
+  SEARCH_PROVIDER: ${SEARCH_PROVIDER:-searxng}
+  SEARCH_SEARXNG_URL: ${SEARCH_SEARXNG_URL:-http://assistant-search:8080/search}
+  SEARCH_API_URL: ${SEARCH_API_URL:-}
+  SEARCH_API_KEY: ${SEARCH_API_KEY:-}
+  WEB_FETCH_MAX_CHARS: ${WEB_FETCH_MAX_CHARS:-}
+  WEB_FETCH_MAX_BYTES: ${WEB_FETCH_MAX_BYTES:-}
+  WEB_SEARCH_MAX_BYTES: ${WEB_SEARCH_MAX_BYTES:-}
+  WEB_FETCH_TIMEOUT_MS: ${WEB_FETCH_TIMEOUT_MS:-}
+  WEB_SEARCH_TIMEOUT_MS: ${WEB_SEARCH_TIMEOUT_MS:-}
   # Guided ChatGPT/Codex pairing. The key is intentionally unset by default;
   # generate 32 random bytes as 64 hex characters to enable it. Pairing state
   # and credentials live on the server-data volume, not the container layer.
@@ -639,12 +649,36 @@ services:
       start_period: 90s
     networks:
       - standard-red-notes
+      - assistant-search
       # - proxy
     # NOTE: an external reverse proxy (Traefik/nginx/Caddy) does NOT need to
     # route to this container at all. The app front door above already proxies
     # every backend path (/v1, /v2, /auth, /subscription, /healthcheck,
     # /files/, /sockets) same-origin, so a single router to the
     # `app` service covers the whole stack (see the labels example on `app`).
+
+  # Private server-side search. No host port and no main-app readiness dependency.
+  assistant-search:
+    image: ${ASSISTANT_SEARCH_IMAGE:-docker.io/searxng/searxng@sha256:8bdd9aa136b2dc3b9332cf24714fa34a375b8a1949a1201ec900c24d7378596e}
+    restart: unless-stopped
+    user: "977:977"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: ${ASSISTANT_SEARCH_MEM_LIMIT:-512m}
+    pids_limit: 128
+    entrypoint: ["/bin/sh", "/etc/searxng/start.sh"]
+    environment:
+      FORCE_OWNERSHIP: "false"
+      GRANIAN_WORKERS: "1"
+    volumes:
+      - ./deploy/search/settings.yml:/etc/searxng/settings.yml:ro
+      - ./deploy/search/start.sh:/etc/searxng/start.sh:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m,mode=1777
+      - /var/cache/searxng:rw,noexec,nosuid,size=64m,uid=977,gid=977,mode=0700
+    networks:
+      - assistant-search
 
   mcp:
     profiles:
@@ -1031,6 +1065,8 @@ services:
       - standard-red-notes
 
 networks:
+  assistant-search:
+    driver: bridge
   standard-red-notes:
     driver: bridge
   # Narrow trust bridge: n8n joins only this network; the dual-homed MCP bridge

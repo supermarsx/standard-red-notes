@@ -230,6 +230,15 @@ services:
       ASSISTANT_OLLAMA_URL: ${ASSISTANT_OLLAMA_URL:-}
       ASSISTANT_DEFAULT_PROVIDER: ${ASSISTANT_DEFAULT_PROVIDER:-}
       ASSISTANT_DEFAULT_MODEL: ${ASSISTANT_DEFAULT_MODEL:-}
+      SEARCH_PROVIDER: ${SEARCH_PROVIDER:-searxng}
+      SEARCH_SEARXNG_URL: ${SEARCH_SEARXNG_URL:-http://assistant-search:8080/search}
+      SEARCH_API_URL: ${SEARCH_API_URL:-}
+      SEARCH_API_KEY: ${SEARCH_API_KEY:-}
+      WEB_FETCH_MAX_CHARS: ${WEB_FETCH_MAX_CHARS:-}
+      WEB_FETCH_MAX_BYTES: ${WEB_FETCH_MAX_BYTES:-}
+      WEB_SEARCH_MAX_BYTES: ${WEB_SEARCH_MAX_BYTES:-}
+      WEB_FETCH_TIMEOUT_MS: ${WEB_FETCH_TIMEOUT_MS:-}
+      WEB_SEARCH_TIMEOUT_MS: ${WEB_SEARCH_TIMEOUT_MS:-}
       ASSISTANT_DAILY_REQUEST_LIMIT: ${ASSISTANT_DAILY_REQUEST_LIMIT:-0}
       # Guided ChatGPT/Codex pairing. /data is the named persistent volume.
       # Leave the key empty to keep pairing disabled, or set 64 hex characters.
@@ -262,6 +271,37 @@ services:
       timeout: 5s
       retries: 10
       start_period: 120s
+
+    networks:
+      - default
+      - assistant-search
+
+  # Private server-side search. No host port and no main-app readiness dependency.
+  assistant-search:
+    image: ${ASSISTANT_SEARCH_IMAGE:-docker.io/searxng/searxng@sha256:8bdd9aa136b2dc3b9332cf24714fa34a375b8a1949a1201ec900c24d7378596e}
+    restart: unless-stopped
+    user: "977:977"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: ${ASSISTANT_SEARCH_MEM_LIMIT:-512m}
+    pids_limit: 128
+    entrypoint: ["/bin/sh", "/etc/searxng/start.sh"]
+    environment:
+      FORCE_OWNERSHIP: "false"
+      GRANIAN_WORKERS: "1"
+    volumes:
+      - ./deploy/search/settings.yml:/etc/searxng/settings.yml:ro
+      - ./deploy/search/start.sh:/etc/searxng/start.sh:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m,mode=1777
+      - /var/cache/searxng:rw,noexec,nosuid,size=64m,uid=977,gid=977,mode=0700
+    networks:
+      - assistant-search
+
+networks:
+  assistant-search:
+    driver: bridge
 
 volumes:
   single-data:

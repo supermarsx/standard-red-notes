@@ -54,7 +54,7 @@ import { DomainEventFactory } from '../Event/DomainEventFactory'
 import { AssistantProviderConfig } from '../Service/Assistant/providers/factory'
 import { FetchLike, GitHubPublishService } from '../Service/Integrations/GitHubPublishService'
 import { createTesseractRecognizer, OcrService } from '../Service/Ocr/OcrService'
-import { WebFetchLike, WebService } from '../Service/Web/WebService'
+import { resolveWebSearchApiUrl, WebFetchLike, WebService } from '../Service/Web/WebService'
 import {
   resolveOwnPackageVersion,
   UpdateCheckFetchLike,
@@ -734,7 +734,12 @@ export class ContainerConfigLoader {
     // still DNS-pinned, redirects are rejected, and decoded JSON is bounded.
     // Both routes are authenticated by WebController so this is not an open
     // proxy.
-    const searchApiUrl = env.get('SEARCH_API_URL', true) || undefined
+    const searchProvider = env.get('SEARCH_PROVIDER', true) || undefined
+    const searchApiUrl = resolveWebSearchApiUrl({
+      searchProvider,
+      searchApiUrl: env.get('SEARCH_API_URL', true) || undefined,
+      searchSearxngUrl: env.get('SEARCH_SEARXNG_URL', true) || undefined,
+    })
     const webOutboundTransport = new PinnedHttpTransport()
     const searchOutboundTransport = new PinnedHttpTransport(undefined, undefined, {
       allowedPrivateOrigins: searchApiUrl ? [searchApiUrl] : [],
@@ -743,7 +748,7 @@ export class ContainerConfigLoader {
       new WebService(
         webOutboundTransport.fetch.bind(webOutboundTransport) as WebFetchLike,
         {
-          searchProvider: env.get('SEARCH_PROVIDER', true) || undefined,
+          searchProvider,
           searchApiUrl,
           searchApiKey: env.get('SEARCH_API_KEY', true) || undefined,
           maxContentChars: env.get('WEB_FETCH_MAX_CHARS', true) ? +env.get('WEB_FETCH_MAX_CHARS', true) : undefined,

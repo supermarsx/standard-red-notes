@@ -1,4 +1,11 @@
-import { htmlToText, WebFetchLike, WebService, WebServiceConfig, WebValidationError } from './WebService'
+import {
+  htmlToText,
+  resolveWebSearchApiUrl,
+  WebFetchLike,
+  WebService,
+  WebServiceConfig,
+  WebValidationError,
+} from './WebService'
 
 type Recorded = { url: string; init: Parameters<WebFetchLike>[1] }
 
@@ -78,6 +85,33 @@ const streamingFetch = (
 }
 
 describe('WebService.search', () => {
+  it('uses the bundled URL only for SearXNG and respects explicit overrides', () => {
+    const bundled = { searchSearxngUrl: 'http://assistant-search:8080/search' }
+    expect(resolveWebSearchApiUrl(bundled)).toBeUndefined()
+    expect(resolveWebSearchApiUrl({ ...bundled, searchProvider: 'searxng' })).toBe(bundled.searchSearxngUrl)
+    expect(resolveWebSearchApiUrl({ ...bundled, searchProvider: 'brave' })).toBe(
+      'https://api.search.brave.com/res/v1/web/search',
+    )
+    expect(
+      resolveWebSearchApiUrl({ ...bundled, searchProvider: 'searxng', searchApiUrl: 'https://search.example/api' }),
+    ).toBe('https://search.example/api')
+  })
+  it.each([
+    ['brave', 'https://api.search.brave.com/res/v1/web/search', '{"web":{"results":[]}}', 'X-Subscription-Token'],
+    ['serper', 'https://google.serper.dev/search', '{"organic":[]}', 'X-API-KEY'],
+  ])('uses the official %s endpoint only when that provider is selected', async (provider, endpoint, body, header) => {
+    const { fn, calls } = recordingFetch(body)
+    await expect(
+      makeService({ searchProvider: provider, searchApiKey: 'test-key' }, fn).search('cats'),
+    ).resolves.toEqual({
+      results: [],
+    })
+    expect(calls).toHaveLength(1)
+    expect(calls[0].url.split('?')[0]).toBe(endpoint)
+    expect(calls[0].init.headers[header]).toBe('test-key')
+    expect(calls[0].init.redirect).toBe('error')
+  })
+
   it('uses a separate exact-origin operator path for a private configured SearXNG backend', async () => {
     const publicFetch = recordingFetch('{}')
     const privateSearch = recordingFetch(

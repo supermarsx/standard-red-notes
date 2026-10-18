@@ -51,6 +51,8 @@ export interface WebServiceConfig {
   // search returns an empty result set with an `error` marker (never a 500).
   searchProvider?: string
   searchApiUrl?: string
+  /** Bundled private SearXNG endpoint; used only for the searxng provider. */
+  searchSearxngUrl?: string
   searchApiKey?: string
   // Caps, with safe defaults applied in the constructor.
   maxContentChars?: number
@@ -102,6 +104,20 @@ const DEFAULT_FETCH_TIMEOUT_MS = 15_000
 const DEFAULT_SEARCH_TIMEOUT_MS = 12_000
 const USER_AGENT = 'standard-red-notes-web-proxy'
 
+export function resolveWebSearchApiUrl(config: WebServiceConfig): string | undefined {
+  const provider = config.searchProvider?.trim().toLowerCase()
+  return (
+    config.searchApiUrl?.trim() ||
+    (provider === 'brave'
+      ? 'https://api.search.brave.com/res/v1/web/search'
+      : provider === 'serper'
+        ? 'https://google.serper.dev/search'
+        : provider === 'searxng'
+          ? config.searchSearxngUrl?.trim() || undefined
+          : undefined)
+  )
+}
+
 export class WebService {
   private readonly maxContentChars: number
   private readonly maxFetchBytes: number
@@ -118,6 +134,12 @@ export class WebService {
     // public-only URLs supplied to fetch().
     private readonly searchFetchFn: WebFetchLike = fetchFn,
   ) {
+    const provider = config.searchProvider?.trim().toLowerCase()
+    this.config = {
+      ...config,
+      searchProvider: provider,
+      searchApiUrl: resolveWebSearchApiUrl(config),
+    }
     this.maxContentChars =
       config.maxContentChars && config.maxContentChars > 0 ? config.maxContentChars : DEFAULT_MAX_CONTENT_CHARS
     this.maxFetchBytes =

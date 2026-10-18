@@ -618,6 +618,8 @@
           url: /DEPLOYMENT.html#c-lxc--systemd-new
         - title: Container restart controls
           url: /DEPLOYMENT.html#opt-in-container-restart-redis--mariadb
+        - title: Assistant internet search
+          url: /DEPLOYMENT.html#assistant-internet-search
         - title: Browser caching across redeploys
           url: /DEPLOYMENT.html#browser-caching-across-redeploys
         - title: CSP verification
