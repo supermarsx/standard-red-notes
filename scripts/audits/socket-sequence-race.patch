@@ -1,0 +1,35 @@
+diff --git a/app/packages/web/src/javascripts/Services/SyncTransport/SyncTransportWorkerRuntime.spec.ts b/app/packages/web/src/javascripts/Services/SyncTransport/SyncTransportWorkerRuntime.spec.ts
+index 9d76894e..cff4167f 100644
+--- a/app/packages/web/src/javascripts/Services/SyncTransport/SyncTransportWorkerRuntime.spec.ts
++++ b/app/packages/web/src/javascripts/Services/SyncTransport/SyncTransportWorkerRuntime.spec.ts
+@@ -333,6 +333,30 @@ describe('SyncTransportWorkerRuntime', () => {
+     return { runtime, messages, sockets, outbox: sharedOutbox }
+   }
+ 
++  it('preserves wire sequence while command journal persistence overlaps another RPC', async () => {
++    const harness = setup()
++    let resume!: () => void
++    const gate = new Promise<void>((resolve) => { resume = resolve })
++    const put = harness.outbox.put.bind(harness.outbox)
++    let writes = 0
++    jest.spyOn(harness.outbox, 'put').mockImplementation(async (record) => {
++      await put(record)
++      if (++writes === 1) await gate
++    })
++    const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS', 'API_RPC'])
++    expect(writes).toBe(1)
++    await harness.runtime.handle({
++      type: 'OPEN_RPC',
++      clientRequestId: 'concurrent-read',
++      sessionScope: SESSION_A,
++      request: { method: 'GET', path: '/v1/workflows/status', deadlineMs: 30_000, initialCreditBytes: 4096, stream: false },
++    })
++    resume()
++    for (let i = 0; i < 8; i++) await flush()
++    const frames = socket.sent.map((entry) => JSON.parse(entry)).filter((frame) => frame.type !== 'AUTH')
++    expect(frames.map((frame) => frame.sequence)).toEqual([1, 2])
++  })
++
+   it('does not mint two command identities when reconnect overlaps a pending digest', async () => {
+     let resume!: (value: ArrayBuffer) => void
+     const digest = jest

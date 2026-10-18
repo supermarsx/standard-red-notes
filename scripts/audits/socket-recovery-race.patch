@@ -1,0 +1,357 @@
+diff --git a/app/packages/web/src/javascripts/Services/SyncTransport/SyncTransportWorkerRuntime.recoveryAudit.spec.ts b/app/packages/web/src/javascripts/Services/SyncTransport/SyncTransportWorkerRuntime.recoveryAudit.spec.ts
+new file mode 100644
+index 00000000..3ac16767
+--- /dev/null
++++ b/app/packages/web/src/javascripts/Services/SyncTransport/SyncTransportWorkerRuntime.recoveryAudit.spec.ts
+@@ -0,0 +1,351 @@
++import type { AccountSyncTransportRequest } from '@standardnotes/services'
++import { LaneDegradationLedger } from './LaneDegradationLedger'
++import {
++  OwnerRenewalOutcome,
++  SyncOutboxRecord,
++  SyncOutboxStore,
++  SyncOutboxUnavailableError,
++  ownerRenewalOutcome,
++} from './SyncTransportOutbox'
++import { SyncSocketCloseEvent, SyncSocketLike, SyncTransportWorkerRuntime } from './SyncTransportWorkerRuntime'
++import { SharedSyncTransportBroker } from './SharedSyncTransportBroker'
++import { payloadByteLength, SyncServerFrame, SyncWorkerToMainMessage } from './syncTransportProtocol'
++
++class FakeOutbox implements SyncOutboxStore {
++  records = new Map<string, SyncOutboxRecord>()
++  owners = new Map<string, { sessionScope: string; ownerId: string; expiresAt: number }>()
++  failWrites = false
++  /** Reads throw like a store whose `open()` never resolved (R21). */
++  unopenable = false
++  /** Reads throw with an ordinary error: a single failed operation, not a dead store. */
++  failReads = false
++
++  async put(record: SyncOutboxRecord): Promise<void> {
++    if (this.failWrites) {
++      throw new Error('idb unavailable')
++    }
++    this.records.set(record.commandId, { ...record })
++  }
++
++  async oldest(sessionScope: string): Promise<SyncOutboxRecord | undefined> {
++    if (this.unopenable) {
++      throw new SyncOutboxUnavailableError('Sync outbox upgrade was blocked')
++    }
++    if (this.failReads) {
++      throw new Error('idb read failed')
++    }
++    return [...this.records.values()]
++      .filter((record) => record.sessionScope === sessionScope && record.revoked !== true)
++      .sort((left, right) => left.createdAt - right.createdAt)[0]
++  }
++
++  async heldByAnotherOwner(
++    transportScope: string,
++    sessionScope: string,
++    ownerId: string,
++    now: number,
++  ): Promise<boolean> {
++    if (this.unopenable) {
++      throw new SyncOutboxUnavailableError('Sync outbox upgrade was blocked')
++    }
++    const current = this.owners.get(transportScope)
++    return (
++      current !== undefined &&
++      current.sessionScope === sessionScope &&
++      current.ownerId !== ownerId &&
++      current.expiresAt > now
++    )
++  }
++
++  async sessionHeldByAnotherOwner(sessionScope: string, ownerId: string, now: number): Promise<boolean> {
++    if (this.unopenable) {
++      throw new SyncOutboxUnavailableError('Sync outbox upgrade was blocked')
++    }
++    return [...this.owners.values()].some(
++      (lease) => lease.sessionScope === sessionScope && lease.ownerId !== ownerId && lease.expiresAt > now,
++    )
++  }
++
++  async quarantineSessionScope(sessionScope: string): Promise<void> {
++    for (const [commandId, record] of this.records) {
++      if (record.sessionScope === sessionScope) {
++        this.records.set(commandId, { ...record, revoked: true })
++      }
++    }
++  }
++
++  async delete(sessionScope: string, commandId: string): Promise<void> {
++    if (this.records.get(commandId)?.sessionScope === sessionScope) {
++      this.records.delete(commandId)
++    }
++  }
++
++  async acquireOwner(
++    transportScope: string,
++    sessionScope: string,
++    ownerId: string,
++    now: number,
++    ttlMs: number,
++  ): Promise<boolean> {
++    const current = this.owners.get(transportScope)
++    if (current && current.sessionScope === sessionScope && current.ownerId !== ownerId && current.expiresAt > now) {
++      return false
++    }
++    this.owners.set(transportScope, { sessionScope, ownerId, expiresAt: now + ttlMs })
++    return true
++  }
++
++  /**
++   * Delegates the verdict to the store's own `ownerRenewalOutcome` rather than
++   * re-deciding it. A fake that answered `renewed` or `taken` where the real store
++   * answers `lapsed` would make the surrender path untestable with every spec green,
++   * which is the shape of the defect this double is here to catch.
++   */
++  async renewOwner(
++    transportScope: string,
++    sessionScope: string,
++    ownerId: string,
++    now: number,
++    ttlMs: number,
++  ): Promise<OwnerRenewalOutcome> {
++    const outcome = ownerRenewalOutcome(this.owners.get(transportScope), sessionScope, ownerId, now)
++    if (outcome === 'renewed') {
++      this.owners.set(transportScope, { sessionScope, ownerId, expiresAt: now + ttlMs })
++    }
++    return outcome
++  }
++
++  async releaseOwner(transportScope: string, sessionScope: string, ownerId: string): Promise<void> {
++    const current = this.owners.get(transportScope)
++    if (current?.sessionScope === sessionScope && current.ownerId === ownerId) {
++      this.owners.delete(transportScope)
++    }
++  }
++
++  close(): void {}
++}
++
++class FakeSocket implements SyncSocketLike {
++  readyState = 0
++  bufferedAmount = 0
++  binaryType = 'blob'
++  onopen: (() => void) | null = null
++  onmessage: ((event: { data: unknown }) => void) | null = null
++  onerror: (() => void) | null = null
++  onclose: ((event: SyncSocketCloseEvent) => void) | null = null
++  sent: string[] = []
++  /** What `close()` was asked for locally, so a test can assert the client's own close. */
++  closes: { code?: number; reason?: string }[] = []
++
++  open(): void {
++    this.readyState = 1
++    this.onopen?.()
++  }
++
++  send(data: string): void {
++    this.sent.push(data)
++  }
++
++  sentBinary: Uint8Array[] = []
++
++  sendBinary(data: Uint8Array): void {
++    this.sentBinary.push(data)
++  }
++
++  receive(frame: SyncServerFrame | string): void {
++    this.onmessage?.({ data: typeof frame === 'string' ? frame : JSON.stringify(frame) })
++  }
++
++  receiveBinary(bytes: Uint8Array): void {
++    this.onmessage?.({ data: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) })
++  }
++
++  /**
++   * A LOCAL close, which is the only thing `SyncSocketLike` exposes. Echoed back
++   * through `onclose` with the code AND reason it was asked for, like a browser.
++   */
++  close(code = 1000, reason = ''): void {
++    this.closes.push({ code, reason })
++    this.finishClose(code, reason, true)
++  }
++
++  /**
++   * The gateway closing with a stated cause — a close frame arrived, so the close
++   * is clean and its reason is the server's own word.
++   *
++   * *** THIS DOUBLE USED TO BE PART OF THE BUG. *** It mirrored a narrow
++   * `{ code?: number }` close type, so no test in this file could express
++   * `{ code: 1008, reason: 'sync rate limit exceeded' }` — which is exactly what
++   * `gateway.attach.test.ts` asserts the gateway sends. A test that cannot see a
++   * close reason proves nothing about attribution.
++   */
++  serverClose(code: number, reason = ''): void {
++    this.finishClose(code, reason, true)
++  }
++
++  /** The connection died with no close frame: what a browser reports as 1006. */
++  abort(): void {
++    this.finishClose(1006, '', false)
++  }
++
++  private finishClose(code: number, reason: string, wasClean: boolean): void {
++    if (this.readyState === 3) {
++      return
++    }
++    this.readyState = 3
++    this.onclose?.({ code, reason, wasClean })
++  }
++}
++
++const body = (suffix = 'a'): AccountSyncTransportRequest => ({
++  api: '20240226',
++  items: [{ uuid: `note-${suffix}`, content: `cipher-${suffix}` }],
++  sync_token: `token-${suffix}`,
++  limit: 150,
++})
++
++const SESSION_A = `sync-session-v1:${'a'.repeat(64)}`
++const serverFrame = (
++  type: SyncServerFrame['type'],
++  commandId: string,
++  payload: Record<string, unknown>,
++  digest?: string,
++): SyncServerFrame => ({
++  version: 1,
++  channel: 'sync',
++  type,
++  requestId: 'server-request',
++  commandId,
++  sequence: 1,
++  payloadLength: payloadByteLength(payload),
++  payload,
++  ...(digest ? { digest } : {}),
++})
++
++const flush = async () => {
++  await Promise.resolve()
++  await Promise.resolve()
++  await Promise.resolve()
++}
++
++describe('SyncTransportWorkerRuntime', () => {
++  let runtimeNumber = 0
++
++  beforeEach(() => {
++    jest.useFakeTimers()
++    runtimeNumber = 0
++  })
++
++  afterEach(() => {
++    jest.clearAllTimers()
++    jest.useRealTimers()
++  })
++
++  const setup = (
++    sharedOutbox = new FakeOutbox(),
++    subtle?: SubtleCrypto,
++    observe?: (message: SyncWorkerToMainMessage) => void,
++  ) => {
++    const messages: SyncWorkerToMainMessage[] = []
++    const sockets: FakeSocket[] = []
++    let uuid = 0
++    const runtimeId = ++runtimeNumber
++    const runtime = new SyncTransportWorkerRuntime({
++      outbox: sharedOutbox,
++      postMessage: (message) => {
++        messages.push(message)
++        observe?.(message)
++      },
++      socketFactory: () => {
++        const socket = new FakeSocket()
++        sockets.push(socket)
++        return socket
++      },
++      uuid: () => `runtime-${runtimeId}-id-${++uuid}`,
++      random: () => 0,
++      subtle:
++        subtle ??
++        ({
++          digest: jest.fn().mockResolvedValue(Uint8Array.from({ length: 32 }, () => 0xab).buffer),
++        } as unknown as SubtleCrypto),
++    })
++    return { runtime, messages, sockets, outbox: sharedOutbox }
++  }
++
++  const authorize = async (
++    harness: ReturnType<typeof setup>,
++    requestBody = body(),
++    ticket = 't'.repeat(40),
++    sessionScope = SESSION_A,
++    operations: string[] = ['SYNC_ITEMS', 'AUTHORIZE_COLLABORATION'],
++    context?: { operationId?: string; operationIndex?: number; socketOnly?: boolean },
++  ) => {
++    await harness.runtime.handle({
++      type: 'EXECUTE',
++      clientRequestId: 'client-1',
++      body: requestBody,
++      sessionScope,
++      ...(context ? { context } : {}),
++    })
++    await harness.runtime.handle({
++      type: 'CONNECT',
++      clientRequestId: 'client-1',
++      sessionScope,
++      authorization: {
++        endpoint: 'wss://sync.example.test/sockets/sync',
++        ticket,
++        expiresAt: Date.now() + 30_000,
++        deviceId: 'device-1',
++      },
++    })
++    const socket = harness.sockets.at(-1) as FakeSocket
++    socket.open()
++    const auth = JSON.parse(socket.sent[0]) as { commandId: string }
++    socket.receive(
++      serverFrame('AUTHENTICATED', auth.commandId, {
++        capability: 'ws-sync',
++        protocolVersion: 1,
++        operations,
++        nextClientSequence: 1,
++      }),
++    )
++    // Persisting the command includes an async digest and outbox write before
++    // the worker may put the COMMAND frame on the socket.
++    await flush()
++    await flush()
++    return socket
++  }
++
++  it('clears the acknowledged in-memory journal even after recovery detached its active request', async () => {
++    const harness = setup()
++    const socket = await authorize(harness, body(), undefined, SESSION_A, ['SYNC_ITEMS'], { socketOnly: true })
++    const command = JSON.parse(socket.sent.find((entry) => JSON.parse(entry).type === 'COMMAND')!)
++    socket.receive(serverFrame('COMMITTED', command.commandId, { result: { retrieved_items: [] } }, command.digest))
++    await flush()
++    expect(harness.messages.some((message) => message.type === 'RESULT')).toBe(true)
++    socket.serverClose(1008, 'policy violation')
++    await jest.advanceTimersByTimeAsync(1000)
++    await harness.runtime.handle({
++      type: 'TICKET_UNAVAILABLE',
++      clientRequestId: 'client-1',
++      reason: 'ticket-unavailable',
++    })
++    expect(harness.messages).toContainEqual({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' })
++    await harness.runtime.handle({
++      type: 'CHECKPOINT_DURABLE',
++      requestId: 'ack',
++      sessionScope: SESSION_A,
++      commandId: command.commandId,
++    })
++    expect(harness.outbox.records.size).toBe(0)
++    await harness.runtime.handle({ type: 'RECOVER', clientRequestId: 'recover-next', sessionScope: SESSION_A })
++    expect(harness.messages).toContainEqual({ type: 'RECOVERY_EMPTY', clientRequestId: 'recover-next' })
++    const fresh = await authorize(harness, body('new'), undefined, SESSION_A, ['SYNC_ITEMS'])
++    await flush()
++    const sent = fresh.sent.map((entry) => JSON.parse(entry))
++    expect(sent.some((frame) => frame.type === 'STATUS' && frame.commandId === command.commandId)).toBe(false)
++    expect(sent).toContainEqual(
++      expect.objectContaining({ type: 'COMMAND', payload: expect.objectContaining({ body: body('new') }) }),
++    )
++  })
++})

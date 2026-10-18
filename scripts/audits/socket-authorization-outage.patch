@@ -1,0 +1,119 @@
+diff --git a/server/packages/api-gateway/src/Controller/v1/CollaborationController.socketAudit.spec.ts b/server/packages/api-gateway/src/Controller/v1/CollaborationController.socketAudit.spec.ts
+new file mode 100644
+--- /dev/null
++++ b/server/packages/api-gateway/src/Controller/v1/CollaborationController.socketAudit.spec.ts
+@@ -0,0 +1,72 @@
++import 'reflect-metadata'
++
++import { Request, Response } from 'express'
++
++import { CollaborationController } from './CollaborationController'
++import { ResponseLocals } from '../ResponseLocals'
++import { ServiceProxyInterface } from '../../Service/Proxy/ServiceProxyInterface'
++import { EndpointResolverInterface } from '../../Service/Resolver/EndpointResolverInterface'
++import { CollaborationAuthorizationService } from '../../Service/Sync/CollaborationAuthorizationService'
++
++// Characterization proofs for the socket audit: these assertions document the
++// current defect, not the desired behavior. Transient infrastructure failures
++// must eventually become a distinct retryable result, while never minting access.
++describe('socket audit: collaboration access-check outages', () => {
++  const input = {
++    noteUuid: 'audit-note',
++    collaborationProtocolVersion: 3 as const,
++    expectedRoomEpoch: 'room_epoch_0000000000000001',
++  }
++  const locals = {
++    user: { uuid: 'audit-user' },
++    collaborationEnabled: true,
++    readOnlyAccess: false,
++  } as ResponseLocals
++
++  function harness() {
++    const callSyncingServer = jest.fn().mockRejectedValue(new Error('temporary upstream timeout'))
++    const proxy = { callSyncingServer } as unknown as ServiceProxyInterface
++    const resolver = {
++      resolveEndpointOrMethodIdentifier: jest.fn(() => 'items/collaboration-authorization'),
++    } as EndpointResolverInterface
++    const logger = { error: jest.fn(), info: jest.fn() }
++    return { callSyncingServer, proxy, resolver, logger }
++  }
++
++  it('collapses an undecidable upstream failure into the same result as an access denial', async () => {
++    const { proxy, resolver, logger } = harness()
++    const service = new CollaborationAuthorizationService(proxy, resolver, 'audit-secret', 300, logger)
++    expect(await service.authorize({} as Request, locals, input)).toEqual({ authorized: false })
++    expect(logger.error).toHaveBeenCalledWith(
++      'Collaboration authorization could not be decided.',
++      expect.objectContaining({ category: 'unreadable', reason: 'access-check-unreachable' }),
++    )
++  })
++
++  it('returns terminal-looking HTTP 403 for a timeout even though the next check succeeds', async () => {
++    const { proxy, resolver, logger, callSyncingServer } = harness()
++    const controller = new CollaborationController(proxy, resolver, 'audit-secret', 300, logger as never)
++    const json = jest.fn()
++    const response = { locals, status: jest.fn(() => ({ json })) } as unknown as Response
++    const request = { body: input } as Request
++    await controller.authorize(request, response)
++    expect(response.status).toHaveBeenLastCalledWith(403)
++    expect(json).toHaveBeenLastCalledWith({
++      error: {
++        tag: 'collaboration-not-authorized',
++        message: 'Live collaboration requires edit access to this note.',
++      },
++    })
++
++    callSyncingServer.mockImplementation(async (_request: Request, capture: Response) => {
++      capture.status(200).json({
++        authorized: true,
++        serverUpdatedAtTimestamp: 1_700_000_000_000,
++        collaborationSecurityEpoch: 'security_epoch_0000000000000001',
++      })
++    })
++    await controller.authorize(request, response)
++    expect(response.status).toHaveBeenLastCalledWith(200)
++    expect(json).toHaveBeenLastCalledWith(expect.objectContaining({ capability: expect.any(String) }))
++  })
++})
+diff --git a/app/packages/services/src/Domain/Api/WebsocketsService.socketAudit.spec.ts b/app/packages/services/src/Domain/Api/WebsocketsService.socketAudit.spec.ts
+new file mode 100644
+--- /dev/null
++++ b/app/packages/services/src/Domain/Api/WebsocketsService.socketAudit.spec.ts
+@@ -0,0 +1,37 @@
++import { WebSocketsService } from './WebsocketsService'
++
++// Audit characterization: a stale pre-revocation response currently repopulates
++// the authorization cache. This passing test proves the defect, not a fix.
++describe('socket audit: authorization session fencing', () => {
++  it('reuses a late old-session grant after the session revocation barrier', async () => {
++    const service = new WebSocketsService({} as never, '', {} as never, { publish: jest.fn() } as never)
++    const roomEpoch = 'room_epoch_0000000000000001'
++    const grant = {
++      epochDiscovery: false as const,
++      capability: 'old-session-capability',
++      room: 'note-1',
++      expiresIn: 300,
++      serverUpdatedAtTimestamp: 123,
++      collaborationProtocolVersion: 3 as const,
++      roomEpoch,
++      collaborationSecurityEpoch: 'security_epoch_0000000000000001',
++    }
++    let resolveOld!: (value: typeof grant) => void
++    const oldTransport = jest.fn(() => new Promise<typeof grant>((resolve) => (resolveOld = resolve)))
++    service.setCollaborationAuthorizationTransport(oldTransport)
++    try {
++      const oldRequest = service.authorizeCollaborationRoom('note-1', undefined, undefined, roomEpoch)
++      await service.revokeSyncTransportSession()
++      const newTransport = jest.fn().mockResolvedValue({ ...grant, capability: 'new-session-capability' })
++      service.setCollaborationAuthorizationTransport(newTransport)
++      resolveOld(grant)
++      await oldRequest
++
++      const result = await service.authorizeCollaborationRoom('note-1', undefined, undefined, roomEpoch)
++      expect(result?.capability).toBe('old-session-capability')
++      expect(newTransport).not.toHaveBeenCalled()
++    } finally {
++      service.deinit()
++    }
++  })
++})
