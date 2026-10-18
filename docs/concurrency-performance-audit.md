@@ -17,9 +17,9 @@ Audit baseline: `0f752fd0`. Reviewed Assistant execution and persistence, client
 | F04 | High         | Ownership acquisition/ticket inspection completes after shutdown/bootstrap replacement; delayed renewal failure affects a newer socket.                                                                      | Fixed: attempt/identity fencing and serialized ownership acquisition/cleanup.                                                     |
 | F05 | Medium       | Shared-comment hook ignores note removal/insertion; removed note comments remain until an unrelated rerender.                                                                                                | Fixed: scoped add/remove/change/decryption-recovery handling; regression requires removal to clear UI without manual rerender.    |
 | F06 | Medium       | Crypto worker postMessage throws synchronously, leaving its timer and failed worker in the pool; retries can reuse it.                                                                                       | Fixed: clear pending state and timeout, retire worker and retry on a fresh entry.                                                 |
-| F07 | High         | Concurrent private-comment preference snapshots overwrite additions, discard concurrent comments during purge, or resurrect purged comments.                                                                 | **Open: requires a versioned merge/deletion model and migration.**                                                                |
+| F07 | High         | Concurrent private-comment preference snapshots overwrite additions, discard concurrent comments during purge, or resurrect purged comments.                                                                 | Repaired in the 19 October follow-up below; live multi-device acceptance remains unverified.                                                                |
 | F08 | High         | Old Redis lease refresh fails after a replacement editor is admitted and denies/releases the replacement room.                                                                                               | Fixed: deterministic policy failures apply only to the exact still-current lease. Real Redis failures still invalidate the relay. |
-| F09 | Medium / Low | Delayed footer usage response crosses an account/key boundary. Separately, local counters use a global last-writer-wins storage key despite a session label.                                                 | Footer response race fixed. **Counter attribution/concurrency remains open.** These counters do not enforce server limits.        |
+| F09 | Medium / Low | Delayed footer usage response crosses an account/key boundary. Separately, local counters use a global last-writer-wins storage key despite a session label.                                                 | Footer response race fixed; account-scoped page counters repaired in the 19 October follow-up. These counters do not enforce server limits.        |
 | F10 | Medium       | Delayed sign-in approval poll creates toasts after teardown/account switch; resolution preceding the initial notification does not suppress stale delivery.                                                  | Fixed: lifecycle/principal fencing, resolution retention, owned-toast teardown and inert stale Review actions.                    |
 | F11 | Medium       | Nested fold processing rebuilds descendant arrays for every ancestor on each document edit, yielding quadratic work.                                                                                         | Fixed: iterative traversal with disjoint hidden-subtree collectors and preserved nested collapse state.                           |
 
@@ -37,9 +37,9 @@ Audit baseline: `0f752fd0`. Reviewed Assistant execution and persistence, client
 
 Final local validation: 1,503 web tests across 123 suites, 979 gateway tests, and 34 runtime-security checks passed. Web and gateway TypeScript checks passed, as did scoped source lint and documentation/compatibility/safe-logging checks. Gateway coverage thresholds remained intact (92.51% statements, 91.61% branches). One opt-in real-Redis tombstone test was skipped because `SRN_COLLAB_REDIS_HOST` was not configured. The three synthetic private-comment probe scenarios reproduced the open bug. No live multi-device acceptance or Firefox timing profile was performed.
 
-## Open private-comment data-loss issue
+## Original private-comment data-loss finding
 
-All private comment threads share one personal UserPrefs field. Local mutation queues serialize only one WebApplication instance. The generic singleton conflict strategy keeps one preference snapshot without a duplicate or per-comment reconciliation. Sockets do not change this conflict policy.
+At the original audit baseline, all private comment threads shared one personal UserPrefs field. Local mutation queues serialize only one WebApplication instance. The generic singleton conflict strategy keeps one preference snapshot without a duplicate or per-comment reconciliation. Sockets do not change this conflict policy.
 
 Read-only reproduction using current source and synthetic payloads:
 
@@ -47,13 +47,14 @@ Read-only reproduction using current source and synthetic payloads:
 node scripts/audit-private-comment-concurrency.cjs
 ```
 
-Success means the probe **confirmed the known bug**, not that comments are healthy. The probe demonstrates concurrent cross-note addition loss, stale-edit resurrection after remote purge, and purge discarding a concurrent addition. It touches no user data and contacts no server.
+The updated probe keeps the original singleton failures as historical controls and
+also verifies the repaired operation merge. The probe demonstrates concurrent cross-note addition loss, stale-edit resurrection after remote purge, and purge discarding a concurrent addition. It touches no user data and contacts no server.
 
 A safe repair needs stable comment IDs, deterministic operation stamps, retained deletion tombstones, resolve/reopen ordering and purge watermarks. Migration must preserve version-1 data until durable, prevent older clients from silently overwriting the new model, retain personal encryption boundaries and bound tombstone growth without resurrecting offline copies. A naive union is unsafe. Acceptance must include two-device encrypted sync, same/different-note additions, edit/delete/purge races, late offline reconnect, resolve/reopen, account/key changes, invalid/full storage and import/export.
 
 ## Other unresolved observations
 
-- Local usage accounting needs a defined scope (session, account lifetime or historical device usage), captured attribution for delayed provider completions, and transactional increments or per-writer records. Historical global totals cannot honestly be assigned to a specific account.
+- At this baseline, local usage accounting needed a defined scope (session, account lifetime or historical device usage), captured attribution for delayed provider completions, and transactional increments or per-writer records. Historical global totals cannot honestly be assigned to a specific account.
 - Notification reconstruction loops over all notes on note changes, although signature verification is cached. Broad Assistant context previews can re-extract plaintext on unrelated updates. These are source-backed performance leads; their user-visible cost has not been measured. The comment-indicator block scan was subsequently reproduced and fixed in F16 below.
 - Browser timing, reverse-proxy behavior under load and real multi-device acceptance remain separate from deterministic unit/regression verification.
 
@@ -173,3 +174,68 @@ Composer fields merge independently. Pending local edits survive incoming snapsh
 Each writer keeps composer state in a separate, stable encrypted record with no transcript entries, so typing does not rewrite the conversation's message payload. This record consumes one additional slot within the existing per-chat writer limit. Tests cover separate-field merges, stable equal-clock tie-breaking, draft clears, lifecycle restrictions, attachment recovery, offline retry, account boundaries and active-run permission isolation. Deployed multi-device acceptance remains unverified.
 
 Composer validation: 154 tests across 13 chat storage, composer lifecycle, Assistant view and conversation integration suites passed. Scoped production lint and formatting checks passed.
+
+
+## Remaining-issue repairs — 19 October 2026
+
+Baseline: `a66d4fb9`, after the socket reliability repairs. This pass followed the
+remaining Assistant, editor/comments, email/queue and deployment findings. It is
+not an exhaustive proof that the app has no remaining races.
+
+- **F07 private comments:** immutable account-encrypted operation records replace
+  singleton writes. Logical clocks and stable event identities resolve concurrent
+  edits; deletion markers defeat stale edits and purge preserves unseen additions.
+  Legacy preferences remain a recovery backup and are never cleared by migration.
+  Acknowledged compaction preserves the frontier before deleting unchanged source
+  records. Read failures surface in the comments panel. Server validation refuses
+  shared-vault/key-system associations for this personal content type. Historical
+  losses cannot be recovered; older tabs need to refresh. Legacy backup text is not
+  securely erased by a new-format purge.
+- **F09 usage:** local counters now explicitly mean this page and account. Providers
+  capture the account's accumulator, so delayed completions cannot update another
+  account's counter. Origin-global historical totals are not falsely attributed or
+  migrated. Server rolling windows remain authoritative across devices. Throwing
+  subscribers cannot interrupt a successful provider reply.
+- **Slow Assistant saves:** periodic checkpoints no longer accumulate an unbounded
+  promise chain of full-transcript writes while encrypted persistence is slow.
+  One write runs at a time with a coalesced trailing update; explicit flush awaits
+  the drain and failed saves remain retryable.
+- **Notification work:** initial reconstruction still scans notes; later item events
+  project only changed/inserted notes and remove deleted ones. Trust, account,
+  protection-session and vault-lock changes invalidate the projection. This avoids
+  an account-wide scan on every edit while clearing cached titles when access ends.
+- **Last edited badge:** equivalent contact model refreshes no longer force another
+  synchronous layout measurement. Actual attribution/name changes still remeasure.
+- **Email readiness:** capacity rejection retains the heartbeat so safe capacity
+  recovery is recognized. Startup is claimed before awaits, shutdown invalidates
+  pending readiness work, and concurrent stops share the drain. Failure logs expose
+  a closed stage without leaking exception messages. The shared fleet readiness
+  marker intentionally expires within 12 seconds rather than being deleted when
+  one instance stops. Missing relay configuration still correctly denies delivery.
+- **Queue diagnostics:** an unhandled event can result from unfiltered topic fan-out;
+  the warning no longer asserts that the worker necessarily has a wrong queue URL.
+  The warning change does not change message handling or bypass delivery durability checks.
+- **Deployment:** rolling-web validates candidate health and private reachability
+  before interrupting backend services. Backend updates still have downtime; this
+  change does not introduce backend replication. Server artifacts receive ownership
+  during Docker COPY rather than a recursive rewrite of the entire dependency tree.
+  No measured build-time reduction is claimed.
+
+Static review and existing tests confirmed contextual Checklist gating, Review
+controls, labeled Insert lists and sidebar resizing/collapse are already present.
+External LightsOut theme contrast was not visually verified. No deployed Firefox
+speedup or production sleep/resume acceptance is claimed.
+
+Local Docker started successfully, but live email verification could not pull Redis:
+Docker's registry lookup failed with `lookup registry-1.docker.io: no such host`.
+Compose configuration and simulated rollout checks do not substitute for a live
+container deployment. No production deployment was performed.
+
+Validation for this pass: the combined web cohort passed 230 tests across 15 suites.
+Final private-comment consumer checks additionally passed 13 Assistant-tool tests
+and the editor observer regression; model/server content-type and isolation checks
+passed 8 and 34 tests respectively. Email cohorts passed 59 gateway, 81 auth and
+11 queue tests. Deployment/cache/hardening contracts passed 93 tests with one
+platform-specific skip; 34 web runtime-security checks passed. These cohorts
+overlap with focused runs and are not an additive coverage total. Web TypeScript,
+scoped lint, model/SDK builds, safe-logging and documentation checks passed.

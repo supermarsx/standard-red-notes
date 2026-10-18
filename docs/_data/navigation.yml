@@ -1071,7 +1071,7 @@
         - title: Regression coverage
           url: /concurrency-performance-audit.html#evidence-and-regression-coverage
         - title: Private-comment data loss
-          url: /concurrency-performance-audit.html#open-private-comment-data-loss-issue
+          url: /concurrency-performance-audit.html#original-private-comment-data-loss-finding
         - title: Open observations
           url: /concurrency-performance-audit.html#other-unresolved-observations
         - title: Static-analysis follow-up
@@ -1084,6 +1084,48 @@
           url: /concurrency-performance-audit.html#evening-firefox-profile
         - title: Chat save failure observability
           url: /concurrency-performance-audit.html#chat-save-failure-observability
+        - title: Remaining issue repairs
+          url: /concurrency-performance-audit.html#remaining-issue-repairs--19-october-2026
+    - title: Socket reliability audit
+      items:
+        - title: "Overview"
+          url: /socket-reliability-audit.html
+        - title: "Repair status"
+          url: /socket-reliability-audit.html#repair-status
+        - title: "Incident and scope"
+          url: /socket-reliability-audit.html#incident-and-scope
+        - title: "Findings, in repair order"
+          url: /socket-reliability-audit.html#findings-in-repair-order
+        - title: "Findings, in repair order › P1 — Concurrent sends violate the gateway's frame sequence"
+          url: /socket-reliability-audit.html#p1--concurrent-sends-violate-the-gateways-frame-sequence
+        - title: "Findings, in repair order › P1 — A late checkpoint leaves a stale in-memory command after recovery"
+          url: /socket-reliability-audit.html#p1--a-late-checkpoint-leaves-a-stale-in-memory-command-after-recovery
+        - title: "Findings, in repair order › P1 — Temporary authorization outages become terminal edit denials"
+          url: /socket-reliability-audit.html#p1--temporary-authorization-outages-become-terminal-edit-denials
+        - title: "Findings, in repair order › P2 — A revoked session's pending authorization can repopulate the cache"
+          url: /socket-reliability-audit.html#p2--a-revoked-sessions-pending-authorization-can-repopulate-the-cache
+        - title: "Findings, in repair order › P2 — Authorization cache grows with consumed lease challenges"
+          url: /socket-reliability-audit.html#p2--authorization-cache-grows-with-consumed-lease-challenges
+        - title: "Findings, in repair order › P2 — Diagnostic aggregation hides the actionable cause"
+          url: /socket-reliability-audit.html#p2--diagnostic-aggregation-hides-the-actionable-cause
+        - title: "Findings, in repair order › Long-session policy to reconsider — lifetime reauthentication cap"
+          url: /socket-reliability-audit.html#long-session-policy-to-reconsider--lifetime-reauthentication-cap
+        - title: "Interpreting the reported messages"
+          url: /socket-reliability-audit.html#interpreting-the-reported-messages
+        - title: "Reproduction artifacts and checks"
+          url: /socket-reliability-audit.html#reproduction-artifacts-and-checks
+        - title: "Limits and next implementation boundary"
+          url: /socket-reliability-audit.html#limits-and-next-implementation-boundary
+    - title: Assistant Telegram bridge
+      items:
+        - title: "Overview"
+          url: /assistant-telegram.html
+        - title: "Server setup"
+          url: /assistant-telegram.html#server-setup
+        - title: "Pair and use"
+          url: /assistant-telegram.html#pair-and-use
+        - title: "Delivery and privacy"
+          url: /assistant-telegram.html#delivery-and-privacy
     - title: Dependency upgrade audit
       items:
         - title: Audit overview
