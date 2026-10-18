@@ -141,7 +141,14 @@ export type ToolEntry = {
 
 type UIMessage =
   | { kind: 'user'; id: string; text: string; steered?: boolean; attachments?: AssistantAttachment[] }
-  | { kind: 'assistant'; id: string; text: string; tools: ToolEntry[]; streaming?: boolean }
+  | {
+      kind: 'assistant'
+      id: string
+      text: string
+      tools: ToolEntry[]
+      streaming?: boolean
+      progressTextLength?: number
+    }
   | { kind: 'error'; id: string; text: string }
 
 const hydrateAssistantHistory = (history: PersistedAssistantMessage[]): UIMessage[] =>
@@ -151,6 +158,7 @@ const hydrateAssistantHistory = (history: PersistedAssistantMessage[]): UIMessag
         kind: 'assistant',
         id: message.id,
         text: message.text,
+        progressTextLength: message.progressTextLength,
         tools: (message.activities ?? []).map((activity) => {
           const persistedChange = activity.noteChange
           return {
@@ -715,6 +723,7 @@ function ConversationPanelImpl({
           kind: message.kind,
           id: message.id,
           text: message.text,
+          progressTextLength: message.progressTextLength,
           activities: message.tools.map((tool) => ({
             id: tool.id,
             name: tool.name,
@@ -1970,9 +1979,12 @@ function ConversationPanelImpl({
               textAfterTools = true
               const activityId = newId()
               activeToolActivityIdsRef.current.set(call.id, activityId)
-              updateAssistant((message) =>
-                message.tools.push({ id: activityId, providerCallId: call.id, name: call.name, args: call.args }),
-              )
+              updateAssistant((message) => {
+                // This is ordinary visible model narration, not private reasoning.
+                // Keep the backing transcript intact; collapse only the prefix before tools.
+                message.progressTextLength = message.text.length
+                message.tools.push({ id: activityId, providerCallId: call.id, name: call.name, args: call.args })
+              })
             },
             onToolResult: (callId, _toolResult, outcome) => {
               if (!isSessionCurrent()) {
@@ -2039,6 +2051,7 @@ function ConversationPanelImpl({
             (!hasRunText || hasActiveText)
           ) {
             message.text = result.finalText
+            message.progressTextLength = undefined
           }
         })
         finishRunActivities()
@@ -2609,29 +2622,35 @@ export const MessageBubble = memo(function MessageBubble({
     )
   }
 
+  const progressTextLength =
+    message.tools.length > 0 ? Math.min(message.progressTextLength ?? 0, message.text.length) : 0
+  const progressText = message.text.slice(0, progressTextLength)
+  const answerText = progressTextLength > 0 ? message.text.slice(progressTextLength).replace(/^\n\n/, '') : message.text
   return (
     <AssistantMessageActions message={message} onRemoveMessage={onRemoveMessage}>
       {(messageTextRef) => (
         <div className="min-w-0">
           {message.tools.length > 0 && (
             <AssistantActivityGroup
+              streaming={message.streaming}
               tools={message.tools.map((tool) => ({
                 label: tool.persistedLabel ?? describeAssistantTool(tool.name, tool.args).label,
                 outcome: tool.outcome,
                 changed: Boolean(tool.noteChange),
               }))}
             >
+              {progressText && (
+                <div aria-label="Activity updates" className="text-passive-1 whitespace-pre-wrap">
+                  {progressText}
+                </div>
+              )}
               {message.tools.map((tool) => (
                 <ToolActivity key={tool.id} tool={tool} onApplyNoteChange={onApplyNoteChange} />
               ))}
             </AssistantActivityGroup>
           )}
-          {(message.text || (message.streaming && message.tools.length === 0)) && (
-            <AssistantMessageContent
-              text={message.text}
-              streaming={message.streaming}
-              messageTextRef={messageTextRef}
-            />
+          {(answerText || (message.streaming && message.tools.length === 0)) && (
+            <AssistantMessageContent text={answerText} streaming={message.streaming} messageTextRef={messageTextRef} />
           )}
         </div>
       )}

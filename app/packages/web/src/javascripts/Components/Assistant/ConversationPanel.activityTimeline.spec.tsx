@@ -145,7 +145,7 @@ describe('Assistant conversation activity timeline', () => {
     container.remove()
   })
 
-  it('keeps one collapsed tool summary above the complete answer across two tool cycles and history restore', async () => {
+  it('folds progress into one activity group while keeping the final answer outside across history restore', async () => {
     await act(async () => {
       render()
       await flush()
@@ -159,7 +159,8 @@ describe('Assistant conversation activity timeline', () => {
     const group = container.querySelector('details')!
     expect(group.open).toBe(false)
     expect(group.querySelector('summary')?.textContent).toContain('Working')
-    expect(container.querySelectorAll('[aria-label="Message display format"]')).toHaveLength(1)
+    expect(container.querySelectorAll('[aria-label="Message display format"]')).toHaveLength(0)
+    expect(group.querySelector('[aria-label="Activity updates"]')?.textContent).toBe('I will check the note first.')
     await act(async () => {
       options.onToolResult?.('read-call', 'private protocol result', 'succeeded')
       options.onTextDelta?.('I will check another note.')
@@ -172,6 +173,9 @@ describe('Assistant conversation activity timeline', () => {
     const text = container.textContent!
     expect(container.querySelectorAll('details.group\\/activity')).toHaveLength(1)
     expect(group.querySelector('summary')?.textContent).toContain('2 completed')
+    expect(group.querySelector('[aria-label="Activity updates"]')?.textContent).toContain('I will check another note.')
+    expect(group.textContent).not.toContain('Here is the final answer.')
+    expect(container.querySelectorAll('[aria-label="Message display format"]')).toHaveLength(1)
     expect(text.indexOf('2 completed')).toBeLessThan(text.indexOf('I will check the note first.'))
     expect(text.indexOf('I will check the note first.')).toBeLessThan(text.indexOf('I will check another note.'))
     expect(text.indexOf('I will check another note.')).toBeLessThan(text.indexOf('Here is the final answer.'))
@@ -182,6 +186,9 @@ describe('Assistant conversation activity timeline', () => {
     if (history.status === 'found') {
       expect(history.messages.filter((message) => message.kind === 'assistant')).toHaveLength(1)
       expect(history.messages.find((message) => message.kind === 'assistant')?.activities).toHaveLength(2)
+      const assistant = history.messages.find((message) => message.kind === 'assistant')!
+      expect(assistant.text.slice(0, assistant.progressTextLength)).toContain('I will check another note.')
+      expect(assistant.text.slice(assistant.progressTextLength)).toContain('Here is the final answer.')
     }
     act(() => root.unmount())
     root = createRoot(container)
@@ -191,6 +198,7 @@ describe('Assistant conversation activity timeline', () => {
     })
     const restored = container.textContent!
     expect(container.querySelectorAll('details.group\\/activity')).toHaveLength(1)
+    expect(container.querySelector('details.group\\/activity')?.textContent).not.toContain('Here is the final answer.')
     expect(restored.indexOf('2 completed')).toBeLessThan(restored.indexOf('I will check the note first.'))
     expect(restored.indexOf('I will check another note.')).toBeLessThan(restored.indexOf('Here is the final answer.'))
     expect(runConversationMode).toHaveBeenCalledTimes(1)

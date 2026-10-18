@@ -11,9 +11,11 @@ export type AssistantActivitySummary = {
 export default function AssistantActivityGroup({
   tools,
   children,
+  streaming = false,
 }: {
   tools: readonly AssistantActivitySummary[]
   children: ReactNode
+  streaming?: boolean
 }) {
   if (!tools.length) {
     return null
@@ -35,7 +37,7 @@ export default function AssistantActivityGroup({
         <span className="min-w-0 truncate" title={pending?.label}>
           {pending ? pending.label : `${succeeded} completed`}
         </span>
-        {pending && <span className="shrink-0">· Working…</span>}
+        {(pending || streaming) && <span className="shrink-0">· Working…</span>}
         {issues.map(({ outcome, count }) => (
           <span key={outcome} className={outcome === 'interrupted' ? 'shrink-0' : 'text-danger shrink-0'}>
             · {count} {outcome}

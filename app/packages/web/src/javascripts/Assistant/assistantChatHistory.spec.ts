@@ -11,6 +11,7 @@ import {
   persistAssistantChatHistoryStrict,
   readAssistantChatHistory,
   readAssistantChatHistoryResult,
+  sanitizeAssistantChatMessages,
 } from './assistantChatHistory'
 
 const createStorage = () => {
@@ -29,6 +30,24 @@ const keyFor = (accountScope: string, tabId: string) =>
 describe('assistant chat history checkpoints', () => {
   beforeEach(() => jest.useFakeTimers())
   afterEach(() => jest.useRealTimers())
+
+  it('preserves a bounded activity text prefix without accepting invalid hiding offsets', () => {
+    const message = {
+      id: 'assistant-progress',
+      kind: 'assistant',
+      text: 'Checking.\n\nAnswer.',
+      progressTextLength: 9,
+      activities: [{ id: 'read', name: 'notes.read', label: 'Read note', outcome: 'succeeded' }],
+    }
+    expect(sanitizeAssistantChatMessages([message])[0].progressTextLength).toBe(9)
+    for (const offset of [-1, 999, 1.5, '9']) {
+      expect(
+        sanitizeAssistantChatMessages([{ ...message, progressTextLength: offset }])[0].progressTextLength,
+      ).toBeUndefined()
+    }
+    expect(sanitizeAssistantChatMessages([{ ...message, activities: [] }])[0].progressTextLength).toBeUndefined()
+    expect(sanitizeAssistantChatMessages([{ ...message, kind: 'user' }])[0].progressTextLength).toBeUndefined()
+  })
 
   it('coalesces a streaming burst into at most one encrypted-store write per interval', async () => {
     const write = jest.fn(async () => undefined)

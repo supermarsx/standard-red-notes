@@ -64,6 +64,8 @@ export type PersistedAssistantMessage = {
   steered?: boolean
   attachments?: AssistantAttachment[]
   activities?: PersistedAssistantToolActivity[]
+  /** Visible narration prefix folded into the activity group, not private reasoning. */
+  progressTextLength?: number
 }
 
 export interface AssistantChatHistoryStorage {
@@ -445,6 +447,13 @@ const sanitizeMessage = (
     ...(attachments?.length ? { attachments } : {}),
     ...(typeof message.steered === 'boolean' ? { steered: message.steered } : {}),
     ...(activities.length > 0 ? { activities } : {}),
+    ...(message.kind === 'assistant' &&
+    activities.length > 0 &&
+    Number.isSafeInteger(message.progressTextLength) &&
+    (message.progressTextLength as number) > 0 &&
+    (message.progressTextLength as number) <= message.text.length
+      ? { progressTextLength: Math.min(message.progressTextLength as number, MAX_MESSAGE_CHARS) }
+      : {}),
   }
 }
 

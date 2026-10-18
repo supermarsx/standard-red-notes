@@ -6,6 +6,26 @@ import AssistantActivityGroup from './AssistantActivityGroup'
 jest.mock('@/Components/Icon/Icon', () => ({ __esModule: true, default: () => null }))
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
+it('keeps a working indicator while the answer is generating after completed tools', () => {
+  const container = document.createElement('div')
+  const root = createRoot(container)
+  const tools = [{ label: 'Read note', outcome: 'succeeded' as const }]
+  try {
+    act(() =>
+      root.render(
+        <AssistantActivityGroup tools={tools} streaming>
+          Progress
+        </AssistantActivityGroup>,
+      ),
+    )
+    expect(container.querySelector('summary')?.textContent).toContain('Working…')
+    act(() => root.render(<AssistantActivityGroup tools={tools}>Progress</AssistantActivityGroup>))
+    expect(container.querySelector('summary')?.textContent).not.toContain('Working…')
+  } finally {
+    act(() => root.unmount())
+  }
+})
+
 it('starts collapsed with the latest real pending activity and retains detailed actions when expanded', () => {
   const container = document.createElement('div')
   const root = createRoot(container)
