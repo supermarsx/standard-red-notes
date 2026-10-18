@@ -7,6 +7,75 @@ const makeApplication = (response: unknown) => {
 }
 
 describe('assistant web tools', () => {
+  it.each([
+    ['github', 'github.com'],
+    ['gitlab', 'gitlab.com'],
+    ['codeberg', 'codeberg.org'],
+    ['bitbucket', 'bitbucket.org'],
+    ['sourcehut', 'sr.ht'],
+    ['npm', 'npmjs.com'],
+    ['pypi', 'pypi.org'],
+  ])('scopes %s discovery and excludes lookalike and unrelated hosts', async (site, domain) => {
+    const { application, serverJsonRequest } = makeApplication({
+      ok: true,
+      status: 200,
+      data: {
+        results: [
+          { title: 'Repo', url: `https://${domain}/owner/project`, snippet: 'readme' },
+          { title: 'Wrong', url: `https://${domain}.evil.test/project`, snippet: '' },
+          { title: 'Other', url: 'https://example.test/project', snippet: '' },
+        ],
+      },
+    })
+    await expect(webSearch(application, 'collaborative editor', { site, kind: 'repositories' })).resolves.toEqual({
+      results: [{ title: 'Repo', url: `https://${domain}/owner/project`, snippet: 'readme' }],
+    })
+    expect(serverJsonRequest).toHaveBeenCalledWith(
+      WEB_SEARCH_ROUTE,
+      { query: `collaborative editor repositories site:${domain}`, limit: 10 },
+      undefined,
+    )
+  })
+
+  it('rejects invalid filters and over-budget expanded queries without network access', async () => {
+    const { application, serverJsonRequest } = makeApplication({})
+    for (const options of [{ site: '__proto__' }, { kind: 'private' }, { site: 'github' }]) {
+      expect(await webSearch(application, 'x'.repeat(1000), options)).toHaveProperty('error')
+    }
+    expect(serverJsonRequest).not.toHaveBeenCalled()
+  })
+
+  it('finds literal page text case-insensitively and bounds excerpts', async () => {
+    const { application, serverJsonRequest } = makeApplication({
+      ok: true,
+      status: 200,
+      data: {
+        title: 'README',
+        text: Array.from({ length: 12 }, () => `INSTALL${'.'.repeat(1200)}`).join(''),
+      },
+    })
+    const result = await webFetch(application, 'https://github.com/example/repo', { find: 'install' })
+    expect(result).toMatchObject({ title: 'README', matches: 12, truncated: true })
+    expect('text' in result && result.text.length).toBeLessThan(9000)
+    expect(serverJsonRequest).toHaveBeenCalledWith(
+      WEB_FETCH_ROUTE,
+      { url: 'https://github.com/example/repo' },
+      undefined,
+    )
+    await expect(webFetch(application, 'https://github.com/example/repo', { find: 'absent' })).resolves.toMatchObject({
+      text: '',
+      matches: 0,
+      truncated: false,
+    })
+  })
+
+  it('rejects empty or excessive find text without fetching', async () => {
+    const { application, serverJsonRequest } = makeApplication({})
+    for (const find of [' ', 'x'.repeat(201)]) {
+      expect(await webFetch(application, 'https://example.test', { find })).toHaveProperty('error')
+    }
+    expect(serverJsonRequest).not.toHaveBeenCalled()
+  })
   it('honors typed upstream throttling even when the gateway request succeeds', async () => {
     const search = makeApplication({
       ok: true,

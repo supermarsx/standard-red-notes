@@ -44,7 +44,7 @@ import {
   NoteRemindersKey,
 } from '@/Reminders/reminders'
 import { createEmailReminder, deleteEmailReminder } from '@/Reminders/emailReminders'
-import { webSearch, webFetch } from './webTools'
+import { webSearch, webFetch, WEB_SEARCH_SITES, WEB_SEARCH_KINDS } from './webTools'
 import { assistantInternetAccessEnabled } from './assistantInternetAccess'
 import { achievements, ACHIEVEMENTS } from '@/Achievements'
 import { AssistantToolConfirmation } from './assistantPresentation'
@@ -2041,12 +2041,20 @@ export class AssistantTools implements ToolSession {
   private async webSearch(args: Record<string, unknown>) {
     const query = typeof args.query === 'string' ? args.query : ''
     const limit = typeof args.limit === 'number' ? args.limit : undefined
-    return webSearch(this.application, query, { limit, signal: this.context.signal })
+    return webSearch(this.application, query, {
+      limit,
+      signal: this.context.signal,
+      site: typeof args.site === 'string' ? args.site : undefined,
+      kind: typeof args.kind === 'string' ? args.kind : undefined,
+    })
   }
 
   private async webFetch(args: Record<string, unknown>) {
     const url = typeof args.url === 'string' ? args.url : ''
-    return webFetch(this.application, url, { signal: this.context.signal })
+    return webFetch(this.application, url, {
+      signal: this.context.signal,
+      find: typeof args.find === 'string' ? args.find : undefined,
+    })
   }
 
   /**
@@ -2997,13 +3005,23 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'web.search',
     description:
-      'Search the web for a query and get back a list of {title, url, snippet}. Runs via the server (the query leaves end-to-end encryption). Use this for facts the user notes do not contain; then web.fetch a result url for full content. Returns {error} (not an exception) if web tools are unavailable.',
+      'Search public web indexes for {title, url, snippet}. Optionally scope to GitHub, GitLab, Codeberg, Bitbucket, SourceHut, npm or PyPI and focus on repositories, code, issues, releases or documentation. This is indexed discovery, not exhaustive native code search; it cannot access private repositories. Runs via the server (the query leaves end-to-end encryption). Then web.fetch a result URL to verify its content. Returns {error} if unavailable.',
     mutating: false,
     inputSchema: {
       type: 'object',
       properties: {
         query: { type: 'string' },
         limit: { type: 'number', description: 'Optional max number of results.' },
+        site: {
+          type: 'string',
+          enum: ['web', ...Object.keys(WEB_SEARCH_SITES)],
+          description: 'Public host to search; default web.',
+        },
+        kind: {
+          type: 'string',
+          enum: [...WEB_SEARCH_KINDS],
+          description: 'Search focus; default general. A search hint, not a guarantee about result type.',
+        },
       },
       required: ['query'],
     },
@@ -3011,11 +3029,17 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'web.fetch',
     description:
-      'Fetch a single web page (absolute http(s) url) and get back {title, text} (readable extracted text). Runs via the server (the url leaves end-to-end encryption). Returns {error} (not an exception) if the page cannot be fetched or web tools are unavailable.',
+      'Read a public web page, documentation, repository README or raw source URL as {title,text}. Optional find returns up to 10 excerpts around case-insensitive literal matches, with matches and truncated fields, instead of the full page. Runs via the server; no browser JavaScript execution or authenticated/private repository access. Returns {error} if unavailable.',
     mutating: false,
     inputSchema: {
       type: 'object',
-      properties: { url: { type: 'string' } },
+      properties: {
+        url: { type: 'string' },
+        find: {
+          type: 'string',
+          description: 'Optional literal text to locate in the extracted page, 1–200 characters.',
+        },
+      },
       required: ['url'],
     },
   },

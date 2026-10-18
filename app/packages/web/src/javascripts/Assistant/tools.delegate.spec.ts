@@ -55,7 +55,9 @@ describe('AssistantTools delegate', () => {
     expect(requestConfirmation).not.toHaveBeenCalled()
     enabled = true
     expect(tools.tools().some((tool) => tool.name === 'web.search')).toBe(true)
-    await expect(tools.call('web.search', { query: 'research' })).rejects.toMatchObject({ code: 'ASSISTANT_ACTION_NOT_ALLOWED' })
+    await expect(tools.call('web.search', { query: 'research' })).rejects.toMatchObject({
+      code: 'ASSISTANT_ACTION_NOT_ALLOWED',
+    })
     expect(serverJsonRequest).not.toHaveBeenCalled()
   })
   it('exposes the delegate tool at the top level when a sub-agent runner is provided', () => {
@@ -913,6 +915,33 @@ describe('AssistantTools trusted confirmation identity', () => {
 })
 
 describe('Assistant web access modes', () => {
+  it('dispatches repository search and focused page reads through the existing web policy', async () => {
+    const serverJsonRequest = jest.fn(async (route: string) => ({
+      ok: true,
+      status: 200,
+      data: route.endsWith('search')
+        ? { results: [{ title: 'Repo', url: 'https://github.com/test/repo', snippet: '' }] }
+        : { title: 'README', text: 'Install this package' },
+    }))
+    const requestWebConfirmation = jest.fn(async () => true)
+    const tools = new AssistantTools(
+      {
+        serverJsonRequest,
+        getPreference: (key: string, fallback: unknown) => (key === 'assistantWebAccessMode' ? 'safe' : fallback),
+      } as unknown as WebApplication,
+      { ...makeContext(), requestWebConfirmation },
+    )
+    await tools.call('web.search', { query: 'editor', site: 'github', kind: 'code' })
+    await expect(
+      tools.call('web.fetch', { url: 'https://github.com/test/repo', find: 'install' }),
+    ).resolves.toMatchObject({ matches: 1, text: 'Install this package' })
+    expect(serverJsonRequest).toHaveBeenCalledWith(
+      '/v1/web/search',
+      { query: 'editor code site:github.com', limit: 10 },
+      undefined,
+    )
+    expect(requestWebConfirmation).toHaveBeenCalledTimes(1)
+  })
   it('Safe approves search and unrelated fetch, but not pages returned by that search', async () => {
     const requestWebConfirmation = jest.fn(async () => true)
     const serverJsonRequest = jest.fn(async (route: string) => ({

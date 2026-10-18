@@ -40,7 +40,21 @@ export interface WebSearchResponse {
 export interface WebFetchResponse {
   title: string
   text: string
+  matches?: number
+  truncated?: boolean
 }
+
+export const WEB_SEARCH_SITES = {
+  github: 'github.com',
+  gitlab: 'gitlab.com',
+  codeberg: 'codeberg.org',
+  bitbucket: 'bitbucket.org',
+  sourcehut: 'sr.ht',
+  npm: 'npmjs.com',
+  pypi: 'pypi.org',
+} as const
+
+export const WEB_SEARCH_KINDS = ['general', 'repositories', 'code', 'issues', 'releases', 'documentation'] as const
 
 /** Shape of an error the model can read instead of a thrown exception. */
 export interface WebToolError {
@@ -166,7 +180,7 @@ function isPermissionRefusal(status: number, data: { error?: unknown }): boolean
 export async function webSearch(
   application: WebApplication,
   query: string,
-  options: { limit?: number; signal?: AbortSignal } = {},
+  options: { limit?: number; signal?: AbortSignal; site?: string; kind?: string } = {},
 ): Promise<WebSearchResponse | WebToolError> {
   if (!assistantInternetAccessEnabled(application)) {
     return {
@@ -182,6 +196,22 @@ export async function webSearch(
   if (trimmed.length > MAX_SEARCH_QUERY_CHARS) {
     return { error: `The search query must be ${MAX_SEARCH_QUERY_CHARS.toLocaleString()} characters or fewer.` }
   }
+  const site = options.site ?? 'web'
+  if (site !== 'web' && !Object.prototype.hasOwnProperty.call(WEB_SEARCH_SITES, site)) {
+    return { error: 'Unsupported search site. Use web, github, gitlab, codeberg, bitbucket, sourcehut, npm or pypi.' }
+  }
+  const kind = options.kind ?? 'general'
+  if (!(WEB_SEARCH_KINDS as readonly string[]).includes(kind)) {
+    return { error: 'Unsupported search kind.' }
+  }
+  const domain = site === 'web' ? undefined : WEB_SEARCH_SITES[site as keyof typeof WEB_SEARCH_SITES]
+  // This is public indexed discovery, not a host's authenticated code-search API.
+  const scopedQuery = [trimmed, kind === 'general' ? '' : kind, domain ? `site:${domain}` : '']
+    .filter(Boolean)
+    .join(' ')
+  if (scopedQuery.length > MAX_SEARCH_QUERY_CHARS) {
+    return { error: 'The query plus search filters exceeds 1,000 characters. Shorten the query.' }
+  }
   const limit =
     typeof options.limit === 'number' && Number.isFinite(options.limit) && options.limit > 0
       ? Math.max(1, Math.min(MAX_SEARCH_RESULT_LIMIT, Math.floor(options.limit)))
@@ -190,7 +220,7 @@ export async function webSearch(
   try {
     const { ok, status, data } = await application.serverJsonRequest<RawSearchData>(
       WEB_SEARCH_ROUTE,
-      { query: trimmed, limit },
+      { query: scopedQuery, limit },
       options.signal,
     )
 
@@ -223,6 +253,10 @@ export async function webSearch(
       if (!url) {
         continue
       }
+      const hostname = new URL(url).hostname.toLowerCase()
+      if (domain && hostname !== domain && !hostname.endsWith(`.${domain}`)) {
+        continue
+      }
       results.push({
         title: normalizeResultText(item.title, MAX_RESULT_TITLE_CHARS),
         url,
@@ -250,7 +284,7 @@ export async function webSearch(
 export async function webFetch(
   application: WebApplication,
   url: string,
-  options: { signal?: AbortSignal } = {},
+  options: { signal?: AbortSignal; find?: string } = {},
 ): Promise<WebFetchResponse | WebToolError> {
   if (!assistantInternetAccessEnabled(application)) {
     return {
@@ -260,6 +294,9 @@ export async function webFetch(
     }
   }
   const trimmed = typeof url === 'string' ? url.trim() : ''
+  if (options.find !== undefined && (!options.find.trim() || options.find.length > 200)) {
+    return { error: 'The find text must contain between 1 and 200 characters.' }
+  }
   if (!trimmed) {
     return { error: 'A non-empty "url" string is required.' }
   }
@@ -301,6 +338,32 @@ export async function webFetch(
         error: `Web page returned HTTP ${data.status}.`,
         ...(data.status === 429 ? { rateLimited: true as const } : {}),
       }
+    }
+    if (options.find !== undefined) {
+      const text = asString(data.text)
+      const needle = options.find.trim().toLowerCase()
+      const haystack = text.toLowerCase()
+      const excerpts: string[] = []
+      let cursor = 0
+      let matches = 0
+      let lastEnd = 0
+      let truncated = false
+      while (cursor < haystack.length) {
+        const index = haystack.indexOf(needle, cursor)
+        if (index < 0) {
+          break
+        }
+        matches++
+        if (excerpts.length < 10 && (index >= lastEnd || excerpts.length === 0)) {
+          const start = Math.max(0, index - 300)
+          lastEnd = Math.min(text.length, index + needle.length + 500)
+          excerpts.push(text.slice(start, lastEnd))
+        } else if (index >= lastEnd) {
+          truncated = true
+        }
+        cursor = index + needle.length
+      }
+      return { title: asString(data.title), text: excerpts.join('\n\n…\n\n'), matches, truncated }
     }
     return {
       title: asString(data.title),

@@ -2,7 +2,7 @@ import type { WebApplication } from '@/Application/WebApplication'
 import { gatherResearchWebEvidence, researchWebSourcesMarkdown } from './researchWebEvidence'
 import { webFetch, webSearch } from './webTools'
 
-jest.mock('./webTools', () => ({ webSearch: jest.fn(), webFetch: jest.fn() }))
+jest.mock('./webTools', () => ({ ...jest.requireActual('./webTools'), webSearch: jest.fn(), webFetch: jest.fn() }))
 const search = jest.mocked(webSearch)
 const fetchPage = jest.mocked(webFetch)
 const application = {
