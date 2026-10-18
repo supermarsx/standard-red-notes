@@ -2959,6 +2959,9 @@ function isAllowedRpcRequest(
     /^\/v1\/assistant\/subscription\/(start|complete|unpair|unpair-all)$/.test(pathname) ||
     pathname === '/v1/web/search' ||
     pathname === '/v1/web/fetch' ||
+    pathname === '/v1/web/research' ||
+    pathname === '/v1/web/pdf' ||
+    /^\/v1\/assistant\/telegram\/(pair|revoke|reply|ack)$/.test(pathname) ||
     pathname === '/v1/collaboration/authorize' ||
     pathname === '/v1/sessions/activity' ||
     pathname === '/v1/collaboration/save-fence'

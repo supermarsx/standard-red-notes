@@ -4,6 +4,8 @@ import { BaseHttpController, controller, httpPost } from 'inversify-express-util
 
 import { TYPES } from '../../Bootstrap/Types'
 import { ServerSettingsResolver } from '../../Service/ServerSettings/ServerSettingsResolver'
+import { InternetResearchService, InternetResearchInput } from '../../Service/Web/InternetResearchService'
+import { PdfExtractionService } from '../../Service/Web/PdfExtractionService'
 import { WebService, WebValidationError } from '../../Service/Web/WebService'
 
 interface FetchRequestBody {
@@ -29,6 +31,8 @@ export class WebController extends BaseHttpController {
   constructor(
     @inject(TYPES.ApiGateway_WebService) private webService: WebService,
     @inject(TYPES.ApiGateway_ServerSettingsResolver) private settings?: ServerSettingsResolver,
+    @inject(TYPES.ApiGateway_InternetResearchService) private researchService?: InternetResearchService,
+    @inject(TYPES.ApiGateway_PdfExtractionService) private pdfService?: PdfExtractionService,
   ) {
     super()
   }
@@ -50,6 +54,75 @@ export class WebController extends BaseHttpController {
         error: { tag: 'internet-access-policy-unavailable', message: 'The internet access policy is unavailable.' },
       })
       return false
+    }
+  }
+
+  @httpPost('/research', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async research(request: Request, response: Response): Promise<void> {
+    if (!(await this.admitInternetAccess(response))) {
+      return
+    }
+    if (!this.researchService) {
+      response.status(503).json({ error: 'Research service is unavailable.' })
+      return
+    }
+    try {
+      response.json(await this.researchService.execute((request.body ?? {}) as InternetResearchInput))
+    } catch (error) {
+      if (error instanceof WebValidationError) {
+        response.status(400).json({ error: { tag: error.tag, message: error.message } })
+        return
+      }
+      response.status(502).json({ error: 'Research request failed.' })
+    }
+  }
+
+  @httpPost('/pdf', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async pdf(request: Request, response: Response): Promise<void> {
+    if (!(await this.admitInternetAccess(response))) {
+      return
+    }
+    if (!this.pdfService) {
+      response.status(503).json({ error: 'PDF extraction is unavailable.' })
+      return
+    }
+    const body = request.body ?? {}
+    if (typeof body.url !== 'string') {
+      response.status(400).json({ error: 'A public PDF URL is required.' })
+      return
+    }
+    try {
+      response.json(await this.pdfService.execute({ url: body.url, startPage: body.startPage, endPage: body.endPage }))
+    } catch (error) {
+      if (error instanceof WebValidationError) {
+        const status =
+          error.tag === 'response-too-large'
+            ? 413
+            : error.tag === 'fetch-timeout'
+              ? 504
+              : error.tag === 'fetch-failed'
+                ? 502
+                : 400
+        response.status(status).json({ error: { tag: error.tag, message: error.message } })
+        return
+      }
+      const code = error instanceof Error ? error.message : ''
+      const publicCodes = [
+        'INVALID_PDF_REQUEST',
+        'INVALID_PDF_DOCUMENT',
+        'PDF_RATE_LIMITED',
+        'PDF_EXTRACTION_NOT_CONFIGURED',
+        'PDF_EXTRACTOR_BUSY',
+      ]
+      const status =
+        code === 'PDF_RATE_LIMITED' || code === 'PDF_EXTRACTOR_BUSY'
+          ? 429
+          : code.startsWith('INVALID_PDF_')
+            ? 400
+            : code === 'PDF_EXTRACTION_NOT_CONFIGURED'
+              ? 503
+              : 502
+      response.status(status).json({ error: publicCodes.includes(code) ? code : 'PDF extraction failed.' })
     }
   }
 

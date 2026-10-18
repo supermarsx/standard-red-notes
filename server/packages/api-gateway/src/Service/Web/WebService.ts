@@ -200,6 +200,40 @@ export class WebService {
   private async readBoundedBody(
     response: Awaited<ReturnType<WebFetchLike>>,
     controller: AbortController,
+    options?: { maxBytes: number; allowTextFallback: boolean; tooLargeMessage: string; tooLargeTag: string },
+  ): Promise<string> {
+    return (await this.readBoundedBytes(response, controller, options)).toString('utf8')
+  }
+
+  /** Binary documents use the same public-address and redirect checks as page reads. */
+  async fetchBytes(rawUrl: string): Promise<{ status: number; contentType: string; bytes: Uint8Array }> {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), this.fetchTimeoutMs)
+    try {
+      const response = await this.fetchFollowingRedirects(rawUrl, controller.signal)
+      const bytes = await this.readBoundedBytes(response, controller, {
+        maxBytes: Math.min(this.maxFetchBytes, 5 * 1024 * 1024),
+        allowTextFallback: false,
+        tooLargeMessage: 'The document exceeds the 5 MiB extraction limit.',
+        tooLargeTag: 'response-too-large',
+      })
+      return { status: response.status, contentType: response.headers.get('content-type') || '', bytes }
+    } catch (error) {
+      if (error instanceof WebValidationError) {
+        throw error
+      }
+      throw new WebValidationError(
+        'Document download failed.',
+        controller.signal.aborted ? 'fetch-timeout' : 'fetch-failed',
+      )
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  private async readBoundedBytes(
+    response: Awaited<ReturnType<WebFetchLike>>,
+    controller: AbortController,
     options: {
       maxBytes: number
       allowTextFallback: boolean
@@ -211,7 +245,7 @@ export class WebService {
       tooLargeMessage: 'The fetched response exceeds the allowed size.',
       tooLargeTag: 'response-too-large',
     },
-  ): Promise<string> {
+  ): Promise<Buffer> {
     const stream = response.body
     if (!stream || typeof stream.getReader !== 'function') {
       if (!options.allowTextFallback) {
@@ -228,7 +262,7 @@ export class WebService {
         controller.abort()
         throw new WebValidationError(options.tooLargeMessage, options.tooLargeTag)
       }
-      return text
+      return Buffer.from(text, 'utf8')
     }
 
     const reader = stream.getReader()
@@ -276,7 +310,7 @@ export class WebService {
       }
     }
 
-    return Buffer.concat(chunks, totalBytes).toString('utf8')
+    return Buffer.concat(chunks, totalBytes)
   }
 
   /**

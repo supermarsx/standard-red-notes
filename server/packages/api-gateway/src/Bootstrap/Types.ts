@@ -95,6 +95,8 @@ export const TYPES = {
   ApiGateway_GitHubPublishService: Symbol.for('ApiGateway_GitHubPublishService'),
   // Standard Red Notes: server-side WEB proxy (fetch + search) for the browser AI agent.
   ApiGateway_WebService: Symbol.for('ApiGateway_WebService'),
+  ApiGateway_InternetResearchService: Symbol.for('ApiGateway_InternetResearchService'),
+  ApiGateway_PdfExtractionService: Symbol.for('ApiGateway_PdfExtractionService'),
   // Standard Red Notes: self-hosted "Check for updates" (UPDATE_CHECK_URL).
   ApiGateway_UpdateCheckService: Symbol.for('ApiGateway_UpdateCheckService'),
   // Standard Red Notes: same-origin plugins gallery proxy (PLUGINS_REPO_URL).

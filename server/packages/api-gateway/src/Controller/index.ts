@@ -62,3 +62,5 @@ export * from './v1/WebDeploymentController'
 export * from './v2/ActionsControllerV2'
 export * from './v2/PaymentsControllerV2'
 export * from './v2/RevisionsControllerV2'
+
+export * from './v1/TelegramBridgeController'

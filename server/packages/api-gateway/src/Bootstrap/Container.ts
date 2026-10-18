@@ -1,3 +1,5 @@
+import { TELEGRAM_BRIDGE_SERVICE, TelegramBridgeService } from '../Service/Telegram/TelegramBridgeService'
+import { TelegramBridgeStore } from '../Service/Telegram/TelegramBridgeStore'
 import * as winston from 'winston'
 import AgentKeepAlive from 'agentkeepalive'
 import * as grpc from '@grpc/grpc-js'
@@ -54,6 +56,9 @@ import { DomainEventFactory } from '../Event/DomainEventFactory'
 import { AssistantProviderConfig } from '../Service/Assistant/providers/factory'
 import { FetchLike, GitHubPublishService } from '../Service/Integrations/GitHubPublishService'
 import { createTesseractRecognizer, OcrService } from '../Service/Ocr/OcrService'
+import { InternetResearchService } from '../Service/Web/InternetResearchService'
+import { PdfExtractionService } from '../Service/Web/PdfExtractionService'
+import { createPdfExtractorTransport } from '../Service/Web/PdfExtractorTransport'
 import { resolveWebSearchApiUrl, WebFetchLike, WebService } from '../Service/Web/WebService'
 import {
   resolveOwnPackageVersion,
@@ -761,6 +766,33 @@ export class ContainerConfigLoader {
         searchOutboundTransport.fetch.bind(searchOutboundTransport) as WebFetchLike,
       ),
     )
+
+    container
+      .bind<TelegramBridgeService>(TELEGRAM_BRIDGE_SERVICE)
+      .toConstantValue(
+        new TelegramBridgeService(
+          new TelegramBridgeStore(
+            env.get('TELEGRAM_ASSISTANT_STORE_PATH', true) ||
+              '/opt/server/packages/api-gateway/data/telegram-assistant.json',
+          ),
+          {
+            botToken: env.get('TELEGRAM_ASSISTANT_BOT_TOKEN', true) || undefined,
+            webhookSecret: env.get('TELEGRAM_ASSISTANT_WEBHOOK_SECRET', true) || undefined,
+          },
+        ),
+      )
+    const researchWeb = container.get<WebService>(TYPES.ApiGateway_WebService)
+    container
+      .bind<InternetResearchService>(TYPES.ApiGateway_InternetResearchService)
+      .toConstantValue(new InternetResearchService(researchWeb))
+    container
+      .bind<PdfExtractionService>(TYPES.ApiGateway_PdfExtractionService)
+      .toConstantValue(
+        new PdfExtractionService(
+          (url) => researchWeb.fetchBytes(url),
+          createPdfExtractorTransport(env.get('PDF_EXTRACTOR_URL', true) || undefined),
+        ),
+      )
 
     // Standard Red Notes: self-hosted "Check for updates".
     //

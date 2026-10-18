@@ -2359,6 +2359,10 @@ describe('SyncCommandHandler', () => {
   it.each([
     '/v1/web/search',
     '/v1/web/fetch',
+    '/v1/web/research',
+    '/v1/web/pdf',
+    '/v1/assistant/telegram/pair',
+    '/v1/assistant/telegram/reply',
     '/v1/assistant/subscription/start',
     '/v1/assistant/subscription/complete',
     '/v1/assistant/subscription/unpair',

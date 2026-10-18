@@ -7,6 +7,56 @@ import { WebController } from './WebController'
 
 const allowedPolicy = { resolveAssistantInternetAccessEnabled: async () => true }
 
+describe('structured research access', () => {
+  it.each([
+    ['PDF_EXTRACTOR_BUSY', 429],
+    ['PDF_EXTRACTION_NOT_CONFIGURED', 503],
+  ])('reports %s without claiming app downtime', async (code, expected) => {
+    const json = jest.fn()
+    const status = jest.fn(() => ({ json }))
+    const controller = new WebController({} as WebService, allowedPolicy as never, undefined, {
+      execute: jest.fn().mockRejectedValue(new Error(String(code))),
+    } as never)
+    await controller.pdf(
+      { body: { url: 'https://example.test/paper.pdf' } } as Request,
+      { status, json } as unknown as Response,
+    )
+    expect(status).toHaveBeenCalledWith(expected)
+  })
+  it.each(['research', 'pdf'] as const)('checks server internet lockdown before %s', async (method) => {
+    const execute = jest.fn()
+    const json = jest.fn()
+    const status = jest.fn(() => ({ json }))
+    const controller = new WebController(
+      {} as WebService,
+      { resolveAssistantInternetAccessEnabled: async () => false } as never,
+      { execute } as never,
+      { execute } as never,
+    )
+    await controller[method](
+      { body: { url: 'https://example.test/paper.pdf' } } as Request,
+      { status, json } as unknown as Response,
+    )
+    expect(status).toHaveBeenCalledWith(403)
+    expect(execute).not.toHaveBeenCalled()
+  })
+
+  it('forwards native research and PDF ranges after authorization', async () => {
+    const research = { execute: jest.fn().mockResolvedValue({ data: { title: 'Paper' } }) }
+    const pdf = { execute: jest.fn().mockResolvedValue({ pages: [{ pageNumber: 3, text: 'Evidence' }] }) }
+    const json = jest.fn()
+    const controller = new WebController({} as WebService, allowedPolicy as never, research as never, pdf as never)
+    const body = { capability: 'academic', provider: 'crossref', action: 'search', query: 'topic' }
+    await controller.research({ body } as Request, { json } as unknown as Response)
+    expect(research.execute).toHaveBeenCalledWith(body)
+    await controller.pdf(
+      { body: { url: 'https://example.test/paper.pdf', startPage: 3, endPage: 5 } } as Request,
+      { json } as unknown as Response,
+    )
+    expect(pdf.execute).toHaveBeenCalledWith({ url: 'https://example.test/paper.pdf', startPage: 3, endPage: 5 })
+  })
+})
+
 describe('WebController.fetch', () => {
   let service: jest.Mocked<WebService>
   let json: jest.Mock
