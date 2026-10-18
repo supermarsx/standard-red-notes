@@ -80,6 +80,7 @@ export interface WebSearchResultItem {
 }
 
 export interface WebSearchResult {
+  rateLimited?: true
   results: WebSearchResultItem[]
   // Present (and `results` empty) when search is unconfigured or upstream failed.
   error?: string
@@ -333,7 +334,11 @@ export class WebService {
     const response = await this.fetchSearchBackend(url, { method: 'GET', headers, signal: controller.signal })
     if (!response.ok) {
       cancelResponseBody(response)
-      return { results: [], error: `search upstream error (status ${response.status})` }
+      return {
+        results: [],
+        error: `search upstream error (status ${response.status})`,
+        ...(response.status === 429 ? { rateLimited: true as const } : {}),
+      }
     }
     const parsed = safeParseJson(await this.readBoundedSearchBody(response, controller))
     const rawResults = arrayAt(parsed, 'results')
@@ -358,7 +363,11 @@ export class WebService {
     const response = await this.fetchSearchBackend(url, { method: 'GET', headers, signal: controller.signal })
     if (!response.ok) {
       cancelResponseBody(response)
-      return { results: [], error: `search upstream error (status ${response.status})` }
+      return {
+        results: [],
+        error: `search upstream error (status ${response.status})`,
+        ...(response.status === 429 ? { rateLimited: true as const } : {}),
+      }
     }
     const parsed = safeParseJson(await this.readBoundedSearchBody(response, controller))
     const rawResults = arrayAt(parsed, 'web', 'results')
@@ -391,7 +400,11 @@ export class WebService {
     })
     if (!response.ok) {
       cancelResponseBody(response)
-      return { results: [], error: `search upstream error (status ${response.status})` }
+      return {
+        results: [],
+        error: `search upstream error (status ${response.status})`,
+        ...(response.status === 429 ? { rateLimited: true as const } : {}),
+      }
     }
     const parsed = safeParseJson(await this.readBoundedSearchBody(response, controller))
     const rawResults = arrayAt(parsed, 'organic')

@@ -85,6 +85,14 @@ const streamingFetch = (
 }
 
 describe('WebService.search', () => {
+  it.each(['searxng', 'brave', 'serper'])('reports typed upstream rate limiting for %s', async (searchProvider) => {
+    const { fn } = recordingFetch('', { status: 429 })
+    const service = makeService(
+      { searchProvider, searchApiUrl: 'https://search.example/api', searchApiKey: 'test' },
+      fn,
+    )
+    await expect(service.search('topic')).resolves.toMatchObject({ results: [], rateLimited: true })
+  })
   it('uses the bundled URL only for SearXNG and respects explicit overrides', () => {
     const bundled = { searchSearxngUrl: 'http://assistant-search:8080/search' }
     expect(resolveWebSearchApiUrl(bundled)).toBeUndefined()
@@ -396,6 +404,7 @@ describe('WebService.search', () => {
       await expect(makeService(config, fn).search('cats')).resolves.toEqual({
         results: [],
         error: 'search upstream error (status 429)',
+        rateLimited: true,
       })
     })
   })
