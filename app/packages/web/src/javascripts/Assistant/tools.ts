@@ -2574,7 +2574,12 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
               },
               expectedText: { type: 'string' },
               text: { type: 'string' },
-              marks: { type: 'integer', minimum: 0 },
+              marks: {
+                type: 'integer',
+                minimum: 0,
+                description:
+                  'Exact text formatting bitmask: bold=1, italic=2, strike=4, underline=8, code=16; combine by addition, 0 clears. For format-only replace-text, pass identical expectedText/text. Only the matched substring receives these marks.',
+              },
               checked: { type: 'boolean' },
               destination: {
                 type: 'object',
@@ -2673,7 +2678,8 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'app.openNote',
-    description: 'Open a note in the editor by uuid.',
+    description:
+      'Open an accessible note in the editor by uuid, discovered using notes.list/search/retrieve. Navigation stays inside the context selected for this request; opening a note does not grant access to other notes. Use notes.readBlocks and notes.patchBlocks for precise formatting after opening.',
     mutating: false,
     inputSchema: {
       type: 'object',

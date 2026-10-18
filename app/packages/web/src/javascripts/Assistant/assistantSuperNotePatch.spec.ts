@@ -581,3 +581,37 @@ it('reports effective legacy diagram fitting and refuses settings the legacy ver
   })
   expect(result.ok).toBe(false)
 })
+
+describe('precise text formatting', () => {
+  beforeEach(ensureCrypto)
+  it('formats only the requested substring, preserving surrounding style and native node state', async () => {
+    const leaf = { ...textNode('before target after', 2), style: 'color: red;', future: { preserved: true } }
+    const text = JSON.stringify({ root: { type: 'root', children: [{ type: 'paragraph', children: [leaf] }] } })
+    const result = await applyAssistantSuperPatch(text, {
+      base: await assistantSuperRevision(text),
+      operations: [
+        { type: 'replace-text', target: { path: [0, 0] }, expectedText: 'target', text: 'target', marks: 3 },
+      ],
+    })
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error('Expected patch')
+    expect(JSON.parse(result.text).root.children[0].children).toEqual([
+      { ...leaf, text: 'before ' },
+      { ...leaf, text: 'target', format: 3 },
+      { ...leaf, text: ' after' },
+    ])
+    expect(result.operationEffects[0].affected).toEqual([{ path: [0, 1] }])
+  })
+  it('treats replacement dollar patterns literally', async () => {
+    const text = JSON.stringify({
+      root: { type: 'root', children: [{ type: 'paragraph', children: [textNode('target')] }] },
+    })
+    const result = await applyAssistantSuperPatch(text, {
+      base: await assistantSuperRevision(text),
+      operations: [{ type: 'replace-text', target: { path: [0] }, expectedText: 'target', text: '$& $` $$' }],
+    })
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error('Expected patch')
+    expect(JSON.parse(result.text).root.children[0].children[0].text).toBe('$& $` $$')
+  })
+})

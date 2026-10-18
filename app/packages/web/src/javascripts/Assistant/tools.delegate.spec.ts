@@ -357,6 +357,29 @@ describe('AssistantTools selected note scope', () => {
     await expect(tools.call('app.openNote', { uuid: 'private-note' })).rejects.toThrow('outside the context')
   })
 
+  it('opens selected notes without expanding this run context and propagates navigation failures', async () => {
+    const openNote = jest.fn(async () => {})
+    const presentPane = jest.fn()
+    const tools = new AssistantTools(
+      { ...application, itemListController: { openNote } } as unknown as WebApplication,
+      {
+        ...makeContext(),
+        selectedNoteUuids: new Set(['selected-note']),
+        presentPane,
+      },
+    )
+    await expect(tools.call('app.openNote', { uuid: 'selected-note' })).resolves.toEqual({
+      ok: true,
+      opened: 'selected-note',
+    })
+    expect(openNote).toHaveBeenCalledWith('selected-note')
+    expect(presentPane).toHaveBeenCalledTimes(1)
+    await expect(tools.call('notes.read', { uuid: 'private-note' })).rejects.toThrow('outside the context')
+    openNote.mockRejectedValueOnce(new Error('handover failed'))
+    await expect(tools.call('app.openNote', { uuid: 'selected-note' })).rejects.toThrow('handover failed')
+    expect(presentPane).toHaveBeenCalledTimes(1)
+  })
+
   it('lists reminders only from notes in the selected scope', async () => {
     const reminderNotes = notes.map((note) => ({
       ...note,

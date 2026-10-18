@@ -879,12 +879,36 @@ function replaceText(record: NodeRecord, expectedText: string, replacement: stri
         : 'Expected text occurs in more than one formatted text leaf; use a narrower locator.',
     )
   }
-  const leaf = candidates[0].node
-  leaf.text = (leaf.text as string).replace(expectedText, replacement)
-  if (marks !== undefined) {
-    if (!Number.isSafeInteger(marks) || marks < 0) {
-      throw new RefusedPatchError('Text marks must be a non-negative integer.')
+  const match = candidates[0].node === record.node ? record : candidates[0]
+  const leaf = match.node
+  const original = leaf.text as string
+  if (marks !== undefined && (!Number.isSafeInteger(marks) || marks < 0)) {
+    throw new RefusedPatchError('Text marks must be a non-negative integer.')
+  }
+  if (marks !== undefined && marks !== leaf.format && original !== expectedText) {
+    if (!match.parentChildren || nodeIdentifier(leaf, 'key') || nodeIdentifier(leaf, 'uuid')) {
+      throw new RefusedPatchError('This text leaf cannot safely be split; use an exact full-leaf formatting edit.')
     }
+    if (leaf.mode === 'token' || leaf.mode === 'segmented') {
+      throw new RefusedPatchError('Token or segmented text requires an exact full-leaf formatting edit.')
+    }
+    const offset = original.indexOf(expectedText)
+    const before = original.slice(0, offset)
+    const after = original.slice(offset + expectedText.length)
+    const parts = [
+      ...(before ? [{ ...leaf, text: before }] : []),
+      ...(replacement ? [leaf] : []),
+      ...(after ? [{ ...leaf, text: after }] : []),
+    ]
+    leaf.text = replacement
+    leaf.format = marks
+    match.parentChildren.splice(match.index, 1, ...parts)
+    return
+  }
+  // Slice rather than String.replace: replacement text such as "$&" is literal.
+  const offset = original.indexOf(expectedText)
+  leaf.text = original.slice(0, offset) + replacement + original.slice(offset + expectedText.length)
+  if (marks !== undefined) {
     leaf.format = marks
   }
 }
