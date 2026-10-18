@@ -36,14 +36,16 @@ it('defaults to Markdown, supports exact plain text, and retains the choice duri
   try {
     act(() => render(raw, true))
     expect(messageTextRef.current?.querySelector('strong')?.textContent).toBe('Answer')
-    expect(container.querySelector('[aria-label="Generating response"]')).not.toBeNull()
+    expect(container.querySelector('[role="status"]')?.textContent).toBe('Working…')
+    expect(container.querySelector('[role="status"]')?.className).not.toContain('animate-')
     const plain = Array.from(container.querySelectorAll('button')).find(
       (button) => button.textContent === 'Plain text',
     )!
     act(() => plain.click())
-    expect(messageTextRef.current?.textContent).toBe(`${raw}▍`)
+    expect(messageTextRef.current?.textContent).toBe(raw)
     const finished = raw + 'finished\n```'
     act(() => render(finished, false))
+    expect(container.querySelector('[role="status"]')).toBeNull()
     expect(plain.getAttribute('aria-pressed')).toBe('true')
     expect(messageTextRef.current?.textContent).toBe(finished)
     expect(assistantMessageTextForCopy({ id: 'response', kind: 'assistant', text: raw })).toBe(raw)
@@ -79,7 +81,7 @@ it('bounds Markdown work during streaming while showing every pending character 
       })
     }
     expect(parse).toHaveBeenCalledTimes(initialCalls)
-    expect(ref.current?.textContent).toBe('Start delta0 delta1 delta2 delta3▍')
+    expect(ref.current?.textContent).toBe('Start delta0 delta1 delta2 delta3')
     expect(assistantMessageTextForCopy({ id: 'm', kind: 'assistant', text })).toBe(text)
     act(() => jest.advanceTimersByTime(200))
     expect(parse).toHaveBeenCalledTimes(initialCalls + 1)
@@ -116,7 +118,7 @@ it('hides a replaced message snapshot immediately and cancels pending formatting
         createElement(AssistantMessageContent, { text: 'new account response', streaming: true, messageTextRef: ref }),
       ),
     )
-    expect(ref.current?.textContent).toBe('new account response▍')
+    expect(ref.current?.textContent).toBe('new account response')
     expect(container.textContent).not.toContain('old account secret')
     expect(ref.current?.querySelector('strong')).toBeNull()
     act(() => root.unmount())
@@ -124,4 +126,18 @@ it('hides a replaced message snapshot immediately and cancels pending formatting
   } finally {
     jest.useRealTimers()
   }
+})
+
+it('renders sanitized tables with inline formatting and column alignment', () => {
+  const output = document.createElement('div')
+  output.innerHTML = assistantMarkdownHtml(
+    '| Task | State |\n| :--- | ---: |\n| **One** | Done |\n| [Unsafe](javascript:alert) | ![Remote](https://example.test/image) |',
+  )
+  expect(output.querySelectorAll('thead th')).toHaveLength(2)
+  expect(output.querySelectorAll('tbody tr')).toHaveLength(2)
+  expect(output.querySelector('td strong')?.textContent).toBe('One')
+  expect(output.querySelectorAll('th')[1].getAttribute('align')).toBe('right')
+  expect(output.querySelector('a')?.getAttribute('href')).toBeNull()
+  expect(output.querySelector('img')).toBeNull()
+  expect(output.textContent).toContain('[Image: Remote]')
 })

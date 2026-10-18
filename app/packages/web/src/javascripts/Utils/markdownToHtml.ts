@@ -48,6 +48,33 @@ function renderInline(text: string): string {
   return out
 }
 
+/** Split only unescaped pipes; optional outer pipes do not create extra columns. */
+function tableCells(line: string): { cells: string[]; hasPipe: boolean } {
+  const cells: string[] = []
+  let cell = ''
+  let hasPipe = false
+  for (let index = 0; index < line.length; index++) {
+    const char = line[index]
+    if (char === '\\' && (line[index + 1] === '|' || line[index + 1] === '\\')) {
+      cell += line[++index]
+    } else if (char === '|') {
+      cells.push(cell.trim())
+      cell = ''
+      hasPipe = true
+    } else {
+      cell += char
+    }
+  }
+  cells.push(cell.trim())
+  if (hasPipe && cells[0] === '') {
+    cells.shift()
+  }
+  if (hasPipe && cells.at(-1) === '') {
+    cells.pop()
+  }
+  return { cells, hasPipe }
+}
+
 /**
  * Detects a block-math construct ($$...$$ or \[...\]) that begins on line
  * `start`. The opening delimiter must be the first non-whitespace on the line.
@@ -171,6 +198,46 @@ export function markdownToHtml(source: string): string {
     if (quote) {
       closeList()
       out.push(`<blockquote>${renderInline(quote[1])}</blockquote>`)
+      continue
+    }
+
+    const header = tableCells(line)
+    const delimiter = i + 1 < lines.length ? tableCells(lines[i + 1]) : undefined
+    if (
+      delimiter &&
+      (header.hasPipe || delimiter.hasPipe) &&
+      header.cells.length > 0 &&
+      delimiter.cells.length === header.cells.length &&
+      delimiter.cells.every((cell) => /^:?-{3,}:?$/.test(cell))
+    ) {
+      closeList()
+      const alignments = delimiter.cells.map((cell) => {
+        return cell.startsWith(':')
+          ? cell.endsWith(':')
+            ? 'center'
+            : 'left'
+          : cell.endsWith(':')
+            ? 'right'
+            : undefined
+      })
+      const row = (cells: string[], tag: 'th' | 'td') =>
+        `<tr>${header.cells
+          .map(
+            (_, column) =>
+              `<${tag}${alignments[column] ? ` align="${alignments[column]}"` : ''}>${renderInline(cells[column] ?? '')}</${tag}>`,
+          )
+          .join('')}</tr>`
+      out.push(`<table><thead>${row(header.cells, 'th')}</thead><tbody>`)
+      i += 1
+      while (i + 1 < lines.length && !/^\s*(?:```|~~~|#{1,6}\s|>)/.test(lines[i + 1])) {
+        const body = tableCells(lines[i + 1])
+        if (!body.hasPipe) {
+          break
+        }
+        out.push(row(body.cells, 'td'))
+        i += 1
+      }
+      out.push('</tbody></table>')
       continue
     }
 

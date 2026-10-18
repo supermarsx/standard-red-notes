@@ -107,18 +107,18 @@ export default function AssistantMessageContent({
         ) : (
           <div>
             <div
-              className="[&_a]:text-info [&_blockquote]:border-info [&_code]:bg-default [&_pre]:bg-default break-words [&_a]:underline [&_blockquote]:border-l-2 [&_blockquote]:pl-2 [&_code]:rounded [&_code]:px-1 [&_code]:font-mono [&_h1]:my-2 [&_h1]:text-lg [&_h1]:font-bold [&_h2]:my-2 [&_h2]:text-base [&_h2]:font-bold [&_h3]:my-1 [&_h3]:font-semibold [&_li]:my-0.5 [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-1 [&_pre]:my-2 [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:p-2 [&_pre_code]:p-0 [&_pre_code]:whitespace-pre [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-5"
+              className="[&_th]:border-border [&_th]:bg-default [&_td]:border-border [&_a]:text-info [&_blockquote]:border-info [&_code]:bg-default [&_pre]:bg-default overflow-x-auto break-words [&_a]:underline [&_blockquote]:border-l-2 [&_blockquote]:pl-2 [&_code]:rounded [&_code]:px-1 [&_code]:font-mono [&_h1]:my-2 [&_h1]:text-lg [&_h1]:font-bold [&_h2]:my-2 [&_h2]:text-base [&_h2]:font-bold [&_h3]:my-1 [&_h3]:font-semibold [&_li]:my-0.5 [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-1 [&_pre]:my-2 [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:p-2 [&_pre_code]:p-0 [&_pre_code]:whitespace-pre [&_table]:my-2 [&_table]:w-full [&_table]:border-collapse [&_td]:border [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:px-2 [&_th]:py-1 [&_th]:font-semibold [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-5"
               dangerouslySetInnerHTML={{ __html: html }}
             />
             {pendingText && <span className="break-words whitespace-pre-wrap">{pendingText}</span>}
           </div>
         )}
-        {streaming && (
-          <span aria-label="Generating response" className="ml-0.5 animate-pulse">
-            ▍
-          </span>
-        )}
       </div>
+      {streaming && (
+        <div role="status" aria-label="Generating response" className="text-passive-1 mt-1 text-xs leading-4">
+          Working…
+        </div>
+      )}
     </div>
   )
 }

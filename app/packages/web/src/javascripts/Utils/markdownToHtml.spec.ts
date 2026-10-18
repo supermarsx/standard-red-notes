@@ -321,3 +321,39 @@ describe('markdownToHtml', () => {
     })
   })
 })
+
+describe('Markdown pipe tables', () => {
+  it('renders header and body cells with optional outside pipes and delimiter alignment', () => {
+    const html = markdownToHtml('| Name | Amount | Note |\n| :--- | ---: | :---: |\nItem | 12 | **yes**')
+    expect(html).toContain(
+      '<thead><tr><th align="left">Name</th><th align="right">Amount</th><th align="center">Note</th></tr></thead>',
+    )
+    expect(html).toContain('<td align="center"><strong>yes</strong></td>')
+  })
+
+  it('handles escaped pipes and pads or truncates body rows to the header width', () => {
+    const html = markdownToHtml('A | B\n--- | ---\nx\\|y | z | dropped\n| short |')
+    expect(html).toContain('<tr><td>x|y</td><td>z</td></tr>')
+    expect(html).toContain('<tr><td>short</td><td></td></tr>')
+    expect(html).not.toContain('dropped')
+  })
+
+  it('requires a matching valid delimiter and leaves prose and horizontal rules alone', () => {
+    expect(markdownToHtml('A | B\n--- | nope')).not.toContain('<table>')
+    expect(markdownToHtml('A | B\n--- | --- | ---')).not.toContain('<table>')
+    expect(markdownToHtml('A\n---')).toBe('<p>A</p>\n<hr />')
+  })
+
+  it('keeps tables out of fenced code and stops before the following code block', () => {
+    expect(markdownToHtml('```\nA | B\n--- | ---\n```')).not.toContain('<table>')
+    const html = markdownToHtml('A | B\n--- | ---\n```\nx | y\n```')
+    expect(html).toContain('</tbody></table>\n<pre><code>x | y</code></pre>')
+  })
+
+  it('escapes cell HTML and preserves inline math rendering', () => {
+    const html = markdownToHtml('A | B\n--- | ---\n<script>alert(1)</script> | $x^2$')
+    expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;')
+    expect(html).not.toContain('<script>')
+    expect(html).toContain('md-katex')
+  })
+})
