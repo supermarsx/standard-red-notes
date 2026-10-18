@@ -3,7 +3,7 @@
  */
 import { ApplicationEvent } from '@standardnotes/snjs'
 import { WebApplication } from '@/Application/WebApplication'
-import { assistantUsageService } from '@/Assistant/AssistantUsageService'
+import { getAssistantUsageService } from '@/Assistant/AssistantUsageService'
 import { act, createElement, useLayoutEffect } from 'react'
 import { Root, createRoot } from 'react-dom/client'
 import { AssistantUsageState, useAssistantUsage } from './useAssistantUsage'
@@ -30,7 +30,6 @@ describe('useAssistantUsage bounded server refresh', () => {
 
   beforeEach(() => {
     localStorage.clear()
-    assistantUsageService.reset()
     container = document.createElement('div')
     document.body.appendChild(container)
     root = createRoot(container)
@@ -69,7 +68,7 @@ describe('useAssistantUsage bounded server refresh', () => {
     expect(assistantConfigRequest).toHaveBeenLastCalledWith('/v1/assistant/usage')
     expect(latest?.cap).toEqual({ used: 2, limit: 10 })
     await act(async () => {
-      assistantUsageService.record({ totalTokens: 1 })
+      getAssistantUsageService(application).record({ totalTokens: 1 })
     })
 
     expect(assistantConfigRequest).toHaveBeenCalledTimes(2)
@@ -89,6 +88,8 @@ describe('useAssistantUsage bounded server refresh', () => {
       },
       assistantConfigRequest,
     } as unknown as WebApplication
+    const firstAccountUsage = getAssistantUsageService(application)
+    firstAccountUsage.record({ totalTokens: 15 })
     let latest: AssistantUsageState | undefined
     await act(async () => {
       root.render(createElement(Harness, { application, onResult: (result) => (latest = result) }))
@@ -101,8 +102,11 @@ describe('useAssistantUsage bounded server refresh', () => {
     expect(latest?.cap).toEqual({ used: 2, limit: 20 })
     await act(async () => {
       pending[0]({ used: 99, limit: 100 })
+      firstAccountUsage.record({ totalTokens: 12 })
     })
     expect(latest?.cap).toEqual({ used: 2, limit: 20 })
+    expect(latest?.session.totalTokens).toBe(0)
+    expect(firstAccountUsage.get().totalTokens).toBe(27)
     act(() => {
       notify(ApplicationEvent.KeyStatusChanged)
     })
@@ -132,12 +136,12 @@ describe('useAssistantUsage bounded server refresh', () => {
     let latest: AssistantUsageState | undefined
     await act(async () => {
       root.render(createElement(Harness, { application, onResult: (result) => (latest = result) }))
-      assistantUsageService.record({ totalTokens: 1 })
-      assistantUsageService.record({ totalTokens: 1 })
+      getAssistantUsageService(application).record({ totalTokens: 1 })
+      getAssistantUsageService(application).record({ totalTokens: 1 })
     })
     await act(async () => {
-      assistantUsageService.record({ totalTokens: 1 })
-      assistantUsageService.record({ totalTokens: 1 })
+      getAssistantUsageService(application).record({ totalTokens: 1 })
+      getAssistantUsageService(application).record({ totalTokens: 1 })
       notify(ApplicationEvent.PreferencesChanged)
     })
     expect(assistantConfigRequest).toHaveBeenCalledTimes(1)

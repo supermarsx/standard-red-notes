@@ -1,5 +1,5 @@
 import { assertImageRequestBudget, normalizeAssistantAttachments } from './attachments'
-import { assistantUsageService } from './AssistantUsageService'
+import { assistantUsageService, type AssistantUsageService } from './AssistantUsageService'
 import { assistantHttpError, assistantNetworkError } from './AssistantHttpError'
 import { directEndpointConfigurationError, openAICompatibleEndpointURL } from './OpenAICompatibleEndpoint'
 import { cleanOpenAIStreamErrorMessage, openAIToolNamesForRequest } from './OpenAIToolNameMap'
@@ -7,6 +7,7 @@ import { samplingRequestFields, SamplingSettings } from './samplingSettings'
 import { ChatMessage, Provider, ProviderEvent, ProviderRequest, ProviderStopReason, ToolDescriptor } from './types'
 
 export interface DirectProviderOptions {
+  usageService?: AssistantUsageService
   /** Base URL of an OpenAI-compatible server, e.g. http://localhost:1234/v1 */
   baseURL: string
   /** Model identifier understood by the endpoint. */
@@ -78,6 +79,7 @@ export class DirectProvider implements Provider {
   constructor(private readonly options: DirectProviderOptions) {}
 
   async *send(req: ProviderRequest): AsyncIterable<ProviderEvent> {
+    const usageService = this.options.usageService ?? assistantUsageService
     const configurationError = directEndpointConfigurationError(this.options.baseURL)
     if (configurationError) {
       yield { kind: 'error', message: configurationError }
@@ -328,12 +330,12 @@ export class DirectProvider implements Provider {
         completionTokens: usage.completion_tokens,
         totalTokens: usage.total_tokens,
       }
-      assistantUsageService.record(report)
+      usageService.record(report)
       yield { kind: 'usage', ...report }
     } else {
       // No usage reported by the endpoint, but a request still completed — count
       // it so the request tally (and the server cap) stays accurate.
-      assistantUsageService.record({})
+      usageService.record({})
     }
 
     yield { kind: 'finish', stopReason: this.mapStopReason(finishReason, completedToolCalls.length > 0) }

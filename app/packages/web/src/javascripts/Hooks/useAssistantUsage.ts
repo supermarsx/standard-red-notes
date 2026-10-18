@@ -1,7 +1,7 @@
 import { WebApplication } from '@/Application/WebApplication'
 import { ApplicationEvent, PrefKey } from '@standardnotes/snjs'
 import { useEffect, useState } from 'react'
-import { AssistantUsage, assistantUsageService, EMPTY_USAGE } from '@/Assistant/AssistantUsageService'
+import { AssistantUsage, getAssistantUsageService } from '@/Assistant/AssistantUsageService'
 import { ServerCap } from '@/Components/Footer/assistantUsageFormat'
 import { AssistantUsageResponse } from '@/Assistant/usageMeter'
 import {
@@ -27,18 +27,16 @@ export interface AssistantUsageState {
  * feed, so these bounded reads remain necessary without background polling.
  */
 export function useAssistantUsage(application: WebApplication): AssistantUsageState {
-  const [session, setSession] = useState<AssistantUsage>(() => assistantUsageService.get() ?? EMPTY_USAGE)
+  const [session, setSession] = useState<AssistantUsage>(() => getAssistantUsageService(application).get())
   const [cap, setCap] = useState<ServerCap | null>(null)
-
-  // Session token totals: re-render only when the accumulator actually changes.
-  useEffect(() => {
-    setSession(assistantUsageService.get())
-    return assistantUsageService.subscribe(setSession)
-  }, [])
 
   // Authentication events can change the principal without remounting this
   // memoized footer. Each boundary invalidates pending responses synchronously.
   useEffect(() => {
+    let usageService = getAssistantUsageService(application)
+    setSession(usageService.get())
+    let unsubscribeSession = usageService.subscribe(setSession)
+    let unsubscribeRefresh: (() => void) | undefined
     let disposed = false
     let epoch = 0
     let pendingEpoch: number | undefined
@@ -106,6 +104,15 @@ export function useAssistantUsage(application: WebApplication): AssistantUsageSt
       ) {
         return
       }
+      const nextService = getAssistantUsageService(application)
+      if (nextService !== usageService) {
+        unsubscribeSession()
+        unsubscribeRefresh?.()
+        usageService = nextService
+        setSession(usageService.get())
+        unsubscribeSession = usageService.subscribe(setSession)
+        unsubscribeRefresh = usageService.subscribe(() => void refresh())
+      }
       principal = nextPrincipal
       mode = nextMode
       epoch += 1
@@ -116,12 +123,13 @@ export function useAssistantUsage(application: WebApplication): AssistantUsageSt
       }
     })
     void refresh()
-    const unsubscribe = assistantUsageService.subscribe(() => void refresh())
+    unsubscribeRefresh = usageService.subscribe(() => void refresh())
     return () => {
       disposed = true
       epoch += 1
       stopEvents()
-      unsubscribe()
+      unsubscribeSession()
+      unsubscribeRefresh?.()
     }
   }, [application])
 

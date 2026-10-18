@@ -1,5 +1,5 @@
 import { assertImageRequestBudget, normalizeAssistantAttachments } from './attachments'
-import { assistantUsageService } from './AssistantUsageService'
+import { assistantUsageService, type AssistantUsageService } from './AssistantUsageService'
 import { assistantHttpError, assistantNetworkError, assistantStreamError } from './AssistantHttpError'
 import { Provider, ProviderEvent, ProviderRequest } from './types'
 import type { AssistantChatRunProof } from './assistantChatRunLease'
@@ -13,6 +13,7 @@ function normalizeSseBuffer(buffer: string, streamEnded = false): string {
 }
 
 export interface ProxyProviderOptions {
+  usageService?: AssistantUsageService
   chatRunLease?: AssistantChatRunProof
   /** Provider id understood by the server proxy (anthropic | openai | ollama). */
   provider: string
@@ -39,6 +40,7 @@ export class ProxyProvider implements Provider {
   }
 
   async *send(req: ProviderRequest): AsyncIterable<ProviderEvent> {
+    const usageService = this.options.usageService ?? assistantUsageService
     const body = {
       ...(this.options.provider ? { provider: this.options.provider } : {}),
       ...(this.options.model ? { model: this.options.model } : {}),
@@ -179,7 +181,7 @@ export class ProxyProvider implements Provider {
     // quota has the same success boundary, so failed/truncated requests remain
     // absent from both displays even if an upstream sent an early usage frame.
     if (!failed && finished) {
-      assistantUsageService.record(
+      usageService.record(
         usage
           ? {
               promptTokens: usage.promptTokens,

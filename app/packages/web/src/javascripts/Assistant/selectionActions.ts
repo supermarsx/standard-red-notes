@@ -1,3 +1,4 @@
+import { getAssistantUsageService } from './AssistantUsageService'
 import { declaredDirectImageSupport } from './attachments'
 import { PrefKey } from '@standardnotes/snjs'
 import { WebApplication } from '@/Application/WebApplication'
@@ -559,6 +560,7 @@ export function buildAssistantProvider(
   const overrides = resolveActiveProfileOverrides(application)
   if (mode === 'proxy') {
     return new ProxyProvider({
+      usageService: getAssistantUsageService(application),
       // The authenticated server assignment is authoritative in proxy mode.
       // Never forward provider/model preferences left behind by Direct mode or
       // older clients: either value would bypass USER > ROLE > default profile
@@ -573,6 +575,7 @@ export function buildAssistantProvider(
   }
   const auth = resolveDirectAuth(application)
   return new DirectProvider({
+    usageService: getAssistantUsageService(application),
     baseURL: overrides.baseURL,
     model: overrides.model,
     supportsImageInputs: declaredDirectImageSupport(application, overrides.baseURL, overrides.model),

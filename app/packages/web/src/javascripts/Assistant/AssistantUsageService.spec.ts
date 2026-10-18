@@ -1,4 +1,4 @@
-import { accumulateUsage, EMPTY_USAGE } from './AssistantUsageService'
+import { accumulateUsage, EMPTY_USAGE, AssistantUsageService, getAssistantUsageService } from './AssistantUsageService'
 
 describe('accumulateUsage', () => {
   it('folds prompt/completion/total tokens and counts the request', () => {
@@ -60,5 +60,36 @@ describe('accumulateUsage', () => {
     const start = { ...EMPTY_USAGE }
     accumulateUsage(start, { promptTokens: 1, completionTokens: 1 })
     expect(start).toEqual(EMPTY_USAGE)
+  })
+})
+
+describe('page-local account usage', () => {
+  it('keeps delayed reports with their original account and isolates application instances', () => {
+    let account = 'first'
+    const application = { sessions: { isSignedIn: () => true, getUser: () => ({ uuid: account }) } } as Parameters<
+      typeof getAssistantUsageService
+    >[0]
+    const first = getAssistantUsageService(application)
+    account = 'second'
+    const second = getAssistantUsageService(application)
+    first.record({ promptTokens: 12 })
+    expect(second.get()).toEqual(EMPTY_USAGE)
+    second.record({ completionTokens: 7 })
+    expect(first.get().totalTokens).toBe(12)
+    expect(second.get().totalTokens).toBe(7)
+    const anotherTab = { sessions: application.sessions } as typeof application
+    expect(getAssistantUsageService(anotherTab).get()).toEqual(EMPTY_USAGE)
+    account = 'first'
+    expect(getAssistantUsageService(application)).toBe(first)
+  })
+  it('isolates throwing observers from provider accounting and other observers', () => {
+    const service = new AssistantUsageService()
+    service.subscribe(() => {
+      throw new Error('Broken view')
+    })
+    const listener = jest.fn()
+    service.subscribe(listener)
+    expect(() => service.record({ totalTokens: 3 })).not.toThrow()
+    expect(listener).toHaveBeenCalledWith(expect.objectContaining({ totalTokens: 3 }))
   })
 })

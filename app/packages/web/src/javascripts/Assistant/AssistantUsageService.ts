@@ -1,17 +1,8 @@
-// Session AI-usage accumulator. Providers (Direct/Proxy) report the token usage
-// that the LLM endpoint returns at the end of each completion into this shared
-// store, and the footer chip reads it. This is intentionally a tiny module-level
-// singleton (not a synced PrefKey) so EVERY assistant request path — the one-shot
-// selection/narration completions AND the agentic ConversationPanel run, which
-// builds its own provider instances — feeds the same counters without any of them
-// having to know about the footer.
-//
-// Honesty note: token counts come from the provider's reported `usage` object and
-// are therefore approximate / provider-dependent. Some endpoints (notably local
-// LM Studio / Ollama builds, or providers that omit `usage`) report nothing, in
-// which case only the request count advances.
+import { captureAssistantSessionPrincipal } from './assistantSessionPrincipal'
+import type { WebApplication } from '@/Application/WebApplication'
 
-const STORAGE_KEY = 'sn-assistant-usage'
+// Local display counters belong to this application/account for this page lifetime.
+// Server rolling windows remain authoritative across browsers and devices.
 
 export interface AssistantUsage {
   /** Total prompt (input) tokens reported across the session. */
@@ -43,28 +34,6 @@ export const EMPTY_USAGE: AssistantUsage = {
 
 type Listener = (usage: AssistantUsage) => void
 
-function loadPersisted(): AssistantUsage {
-  if (typeof localStorage === 'undefined') {
-    return { ...EMPTY_USAGE }
-  }
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) {
-      return { ...EMPTY_USAGE }
-    }
-    const parsed = JSON.parse(raw) as Partial<AssistantUsage>
-    return {
-      promptTokens: numberOr(parsed.promptTokens),
-      completionTokens: numberOr(parsed.completionTokens),
-      totalTokens: numberOr(parsed.totalTokens),
-      requests: numberOr(parsed.requests),
-      requestsWithTokens: numberOr(parsed.requestsWithTokens),
-    }
-  } catch {
-    return { ...EMPTY_USAGE }
-  }
-}
-
 function numberOr(value: unknown, fallback = 0): number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : fallback
 }
@@ -90,8 +59,8 @@ export function accumulateUsage(current: AssistantUsage, report: UsageReport): A
   }
 }
 
-class AssistantUsageService {
-  private usage: AssistantUsage = loadPersisted()
+export class AssistantUsageService {
+  private usage: AssistantUsage = { ...EMPTY_USAGE }
   private listeners = new Set<Listener>()
 
   get(): AssistantUsage {
@@ -101,14 +70,12 @@ class AssistantUsageService {
   /** Record one completed completion's usage and notify subscribers. */
   record(report: UsageReport): void {
     this.usage = accumulateUsage(this.usage, report)
-    this.persist()
     this.emit()
   }
 
   /** Reset the session counters (e.g. a "clear usage" affordance). */
   reset(): void {
     this.usage = { ...EMPTY_USAGE }
-    this.persist()
     this.emit()
   }
 
@@ -119,23 +86,35 @@ class AssistantUsageService {
     }
   }
 
-  private persist(): void {
-    if (typeof localStorage === 'undefined') {
-      return
-    }
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.usage))
-    } catch {
-      /* storage may be full or unavailable; usage display is best-effort */
-    }
-  }
-
   private emit(): void {
     for (const listener of this.listeners) {
-      listener(this.usage)
+      try {
+        listener(this.usage)
+      } catch {
+        // Telemetry observers must never abort a completion or other observers.
+      }
     }
   }
 }
 
-/** Process-wide singleton shared by every provider and the footer chip. */
+/** Compatibility fallback for standalone providers without an application binding. */
 export const assistantUsageService = new AssistantUsageService()
+
+const applicationCounters = new WeakMap<WebApplication, Map<string, AssistantUsageService>>()
+
+/** Capture this service when creating a provider; late replies retain their account. */
+export function getAssistantUsageService(application: WebApplication): AssistantUsageService {
+  const principal = captureAssistantSessionPrincipal(application.sessions)
+  const scope = principal.valid ? (principal.userUuid ?? 'anonymous') : 'unavailable'
+  let counters = applicationCounters.get(application)
+  if (!counters) {
+    counters = new Map()
+    applicationCounters.set(application, counters)
+  }
+  let service = counters.get(scope)
+  if (!service) {
+    service = new AssistantUsageService()
+    counters.set(scope, service)
+  }
+  return service
+}
