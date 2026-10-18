@@ -216,6 +216,9 @@ function resolveRawContextSelection(
   application: WebApplication,
   selection: AssistantContextSelection,
 ): RawContextSelection {
+  if (selection.scope === 'no-note' || selection.scope === 'new-note') {
+    return { notes: [] }
+  }
   if (selection.scope === 'selection') {
     const note = currentNote(application)
     return { notes: note && selection.excerpt?.noteUuid === note.uuid && selection.excerpt.text.trim() ? [note] : [] }

@@ -21,6 +21,8 @@ const SCOPE_OPTIONS: {
   label: string
   icon: 'notes' | 'list-bulleted' | 'folder' | 'window' | 'search'
 }[] = [
+  { value: 'no-note', label: 'No note', icon: 'window' },
+  { value: 'new-note', label: 'New note', icon: 'notes' },
   { value: 'current-note', label: 'Current note', icon: 'notes' },
   { value: 'selection', label: 'Selected text only', icon: 'notes' },
   { value: 'open-notes', label: 'Open notes (tabs)', icon: 'window' },
@@ -66,6 +68,8 @@ function ContextSelectorImpl({ application, selection, onChange, disabled }: Pro
   const popover = usePopoverStore({ placement: 'top-start' })
   const selectedScope = SCOPE_OPTIONS.find((option) => option.value === selection.scope)
   const abbreviations = {
+    'no-note': 'None',
+    'new-note': 'New',
     'current-note': 'Note',
     selection: 'Sel.',
     'open-notes': 'Tabs',
@@ -74,20 +78,26 @@ function ContextSelectorImpl({ application, selection, onChange, disabled }: Pro
     collection: 'Set',
   }
 
+  const noExistingNoteContext = selection.scope === 'no-note' || selection.scope === 'new-note'
   const tags = useMemo(
-    () => application.items.getItems<SNTag>(ContentType.TYPES.Tag),
+    () => (noExistingNoteContext ? [] : application.items.getItems<SNTag>(ContentType.TYPES.Tag)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [application, pickingNotes],
+    [application, pickingNotes, noExistingNoteContext],
   )
   const folders = useMemo(
-    () => application.items.getItems<SNFolder>(FolderContentType),
+    () => (noExistingNoteContext ? [] : application.items.getItems<SNFolder>(FolderContentType)),
 
-    [application],
+    [application, noExistingNoteContext],
   )
   const notes = useMemo(
-    () => application.items.getItems<SNNote>(ContentType.TYPES.Note).filter((note) => !note.trashed),
+    () => {
+      if (noExistingNoteContext) {
+        return []
+      }
+      return application.items.getItems<SNNote>(ContentType.TYPES.Note).filter((note) => !note.trashed)
+    },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [application, pickingNotes],
+    [application, pickingNotes, noExistingNoteContext],
   )
 
   const scopeItems = SCOPE_OPTIONS.map((option) => ({

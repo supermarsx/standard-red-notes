@@ -241,3 +241,10 @@ it('selection context sends only its explicit excerpt and never falls back to wh
       .noteCount,
   ).toBe(0)
 })
+
+
+it.each(['no-note', 'new-note'] as const)('%s never reads the note library or active editor', (scope) => {
+  const application = new Proxy({}, { get() { throw new Error('No app data access permitted') } }) as WebApplication
+  expect(resolveContextNoteUuids(application, { scope })).toEqual([])
+  expect(buildContextForSelection(application, { scope })).toMatchObject({ text: '', noteUuids: [], noteCount: 0 })
+})

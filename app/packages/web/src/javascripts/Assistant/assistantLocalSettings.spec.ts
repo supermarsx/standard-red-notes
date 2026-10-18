@@ -95,3 +95,11 @@ describe('account-scoped assistant local settings', () => {
     expect(readAssistantContextScope('account-b')).toBe('current-note')
   })
 })
+
+
+it.each(['no-note', 'new-note'] as const)('persists %s in this account without changing another account', (scope) => {
+  localStorage.clear()
+  persistAssistantContextScope('account-a', scope)
+  expect(readAssistantContextScope('account-a')).toBe(scope)
+  expect(readAssistantContextScope('account-b')).toBe('current-note')
+})

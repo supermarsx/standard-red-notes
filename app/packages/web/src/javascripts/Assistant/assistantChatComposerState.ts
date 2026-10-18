@@ -22,7 +22,11 @@ function contextValue(value: unknown): AssistantContextSelection | undefined {
     return undefined
   }
   const raw = value as AssistantContextSelection
-  if (!['current-note', 'selection', 'open-notes', 'all-notes', 'topic', 'collection'].includes(raw.scope)) {
+  if (
+    !['no-note', 'new-note', 'current-note', 'selection', 'open-notes', 'all-notes', 'topic', 'collection'].includes(
+      raw.scope,
+    )
+  ) {
     return undefined
   }
   if (raw.scope === 'selection') {

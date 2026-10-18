@@ -33,3 +33,25 @@ it('keeps context configuration collapsed behind its abbreviated scope', async (
     host.remove()
   }
 })
+
+it.each([
+  ['no-note', 'None'],
+  ['new-note', 'New'],
+] as const)('renders %s compactly without reading existing notes', async (scope, label) => {
+  const host = document.createElement('div')
+  const root = createRoot(host)
+  const getItems = jest.fn(() => {
+    throw new Error('Must not read notes')
+  })
+  try {
+    await act(async () =>
+      root.render(
+        <ContextSelector application={{ items: { getItems } } as never} selection={{ scope }} onChange={jest.fn()} />,
+      ),
+    )
+    expect(host.querySelector('button[aria-label="Assistant context"]')?.textContent).toBe(label)
+    expect(getItems).not.toHaveBeenCalled()
+  } finally {
+    act(() => root.unmount())
+  }
+})
