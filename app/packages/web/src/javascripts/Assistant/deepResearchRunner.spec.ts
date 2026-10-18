@@ -55,12 +55,17 @@ describe('deep research application lifecycle', () => {
     const requestConfirmation = jest.fn().mockResolvedValue(true)
     const signal = new AbortController().signal
     await runDeepResearchForApplication(application, 'topic', { includeWeb: true, signal, requestConfirmation })
-    expect(gatherMock).toHaveBeenCalledWith(application, 'topic', {
-      signal,
-      requestConfirmation,
-      isCurrent: expect.any(Function),
-    })
-    expect(deepResearchMock.mock.calls[0][3]?.webEvidence?.sources[0].text).toBe('Evidence')
+    expect(gatherMock).toHaveBeenCalledWith(
+      application,
+      'topic',
+      expect.objectContaining({
+        signal: expect.any(AbortSignal),
+        requestConfirmation,
+        isCurrent: expect.any(Function),
+      }),
+    )
+    expect(deepResearchMock.mock.calls[0][3]?.webEvidence?.sources[0].text).toBe('')
+    expect(deepResearchMock.mock.calls[0][3]?.webSummary).toBe('provider response')
   })
 
   it('does not start local reads or provider work when the account changes during web gathering', async () => {

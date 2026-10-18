@@ -149,8 +149,8 @@ function ResearchModePanelImpl({ application, onClose, onTopicChange }: Props) {
 
       <div className="flex-grow overflow-y-auto px-4 py-3">
         <div className="border-warning bg-warning-faded text-warning rounded border border-solid p-3 text-sm">
-          Research mode searches through your server&rsquo;s configured web service, then reads up to three pages. Each
-          search query and page URL asks for approval before leaving end-to-end encryption. Retrieved text is sent to
+          Research mode searches through your server&rsquo;s configured web service, then reads up to three pages. Web
+          requests follow your Allow, Safe or Strict setting and leave end-to-end encryption. Retrieved text is sent to
           your AI provider; your notes are not used as search queries. The report links the pages actually retrieved and
           states when web access was unavailable or declined. Verify important claims against those sources.
         </div>

@@ -13,6 +13,10 @@
 const STORAGE_KEY = 'standardnotes.deepResearch.settings.v1'
 
 export interface DeepResearchSettings {
+  /** Unique fetched web pages per run; absolute ceiling 600. */
+  maxSources?: number
+  /** Foreground run budget, up to two hours; no minimum artificial delay. */
+  timeBudgetMinutes?: number
   /**
    * When true, a "Deep research" action becomes available in the assistant that
    * runs a bounded multi-step research loop over the user's notes (search →
@@ -25,6 +29,8 @@ export interface DeepResearchSettings {
 
 export const DEFAULT_DEEP_RESEARCH_SETTINGS: DeepResearchSettings = {
   enabled: false,
+  maxSources: 600,
+  timeBudgetMinutes: 90,
 }
 
 export function loadDeepResearchSettings(): DeepResearchSettings {
@@ -36,9 +42,24 @@ export function loadDeepResearchSettings(): DeepResearchSettings {
     const parsed = JSON.parse(raw) as Partial<DeepResearchSettings>
     return {
       enabled: typeof parsed.enabled === 'boolean' ? parsed.enabled : DEFAULT_DEEP_RESEARCH_SETTINGS.enabled,
+      ...normalizeDeepResearchWebLimits(parsed),
     }
   } catch {
     return { ...DEFAULT_DEEP_RESEARCH_SETTINGS }
+  }
+}
+
+export function normalizeDeepResearchWebLimits(
+  settings: Pick<DeepResearchSettings, 'maxSources' | 'timeBudgetMinutes'> = {},
+): { maxSources: number; timeBudgetMinutes: number } {
+  const bounded = (value: number | undefined, fallback: number, max: number) => {
+    return typeof value === 'number' && Number.isFinite(value)
+      ? Math.max(1, Math.min(max, Math.floor(value)))
+      : fallback
+  }
+  return {
+    maxSources: bounded(settings.maxSources, 600, 600),
+    timeBudgetMinutes: bounded(settings.timeBudgetMinutes, 90, 120),
   }
 }
 

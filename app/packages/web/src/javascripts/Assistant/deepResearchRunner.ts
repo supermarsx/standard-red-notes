@@ -17,7 +17,9 @@ import { extractPlaintextFromNoteText } from '@/Utils/NoteStats'
 import { getSelectionAIAvailability, runOneShotCompletion } from './selectionActions'
 import { DeepResearchOptions, DeepResearchReport, ResearchNote, runDeepResearch } from './deepResearch'
 import { assistantSessionPrincipalMatches, captureAssistantSessionPrincipal } from './assistantSessionPrincipal'
-import { gatherResearchWebEvidence, ResearchWebOptions } from './researchWebEvidence'
+import { gatherResearchWebEvidence, ResearchWebOptions, researchWebSourcesMarkdown } from './researchWebEvidence'
+import { runDeepWebResearch } from './deepResearchWeb'
+import { loadDeepResearchSettings, DeepResearchSettings } from './deepResearchSettings'
 
 export interface DeepResearchAvailability {
   /** Whether a deep-research run can start right now. */
@@ -72,6 +74,8 @@ export async function runDeepResearchForApplication(
   options: Pick<DeepResearchOptions, 'limits' | 'onProgress' | 'signal'> & {
     includeWeb?: boolean
     requestConfirmation?: ResearchWebOptions['requestConfirmation']
+    webLimits?: Pick<DeepResearchSettings, 'maxSources' | 'timeBudgetMinutes'>
+    isWebToolDenied?: ResearchWebOptions['isWebToolDenied']
   } = {},
 ): Promise<DeepResearchReport | null> {
   if (!getDeepResearchAvailability(application).available) {
@@ -106,18 +110,61 @@ export async function runDeepResearchForApplication(
     return response
   }
 
-  const webEvidence = options.includeWeb
+  const webRun = options.includeWeb
     ? await (async () => {
         options.onProgress?.({ kind: 'searching-web' })
-        return gatherResearchWebEvidence(application, question, {
-          signal: options.signal,
-          isCurrent: principalIsCurrent,
-          requestConfirmation: options.requestConfirmation,
+        return runDeepWebResearch(
+          question,
+          {
+            gather: (query, batch) =>
+              gatherResearchWebEvidence(application, query, {
+                ...batch,
+                isCurrent: principalIsCurrent,
+                requestConfirmation: options.requestConfirmation,
+                isWebToolDenied: options.isWebToolDenied,
+              }),
+            complete: async (system, user, signal) => {
+              assertCurrentReadAccess()
+              const response = await runOneShotCompletion(application, system, user, { signal })
+              assertCurrentReadAccess()
+              return response
+            },
+          },
+          {
+            signal: options.signal,
+            limits: options.webLimits ?? loadDeepResearchSettings(),
+            onProgress: options.onProgress,
+          },
+        ).catch((error) => {
+          if (!principalIsCurrent()) {
+            return undefined
+          }
+          throw error
         })
       })()
     : undefined
   if (!principalIsCurrent()) {
     return null
+  }
+  const webEvidence = webRun?.evidence
+  const webResearch = webRun
+    ? {
+        stopReason: webRun.stopReason,
+        rounds: webRun.rounds,
+        elapsedMs: webRun.elapsedMs,
+        sourceCount: webRun.evidence.sources.length,
+      }
+    : undefined
+  if (webRun?.stopReason === 'time-limit') {
+    return {
+      question,
+      report: `## Partial research\n\nThe research time budget expired. This is the accumulated evidence digest, not a completed final synthesis.\n\n${webRun.summary || 'No evidence digest was completed.'}\n\n${researchWebSourcesMarkdown(webRun.evidence)}`,
+      sources: [],
+      rounds: 0,
+      stopReason: 'max-rounds',
+      webEvidence,
+      webResearch,
+    }
   }
   corpus = buildCorpus(application)
   const report = await runDeepResearch(question, corpus, complete, {
@@ -125,10 +172,11 @@ export async function runDeepResearchForApplication(
     onProgress: options.onProgress,
     signal: options.signal,
     webEvidence,
+    webSummary: webRun?.summary,
   })
   if (!principalIsCurrent()) {
     return null
   }
   assertCurrentReadAccess()
-  return report
+  return { ...report, ...(webResearch ? { webResearch } : {}) }
 }

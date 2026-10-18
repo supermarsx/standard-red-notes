@@ -25,14 +25,14 @@ const modes: CompactAssistantOption[] = [
     abbreviation: 'Res.',
     label: 'Research',
     description:
-      'Create a structured report from the topic and context. Web evidence is used when configured and approved.',
+      'Create a structured report from the topic and context. Internet access follows your web permissions. You choose whether to save the findings to a note.',
   },
   {
     value: 'deep-research',
     abbreviation: 'Deep',
     label: 'Deep Research',
     description:
-      'Develop a more detailed report over multiple research and refinement steps. Web evidence is used when configured and approved.',
+      'Search, read and compare up to 600 sources over multiple rounds, with a configurable time budget that can exceed an hour. Keep this tab open; stop at any time. You choose whether to save the findings to a note.',
   },
 ]
 

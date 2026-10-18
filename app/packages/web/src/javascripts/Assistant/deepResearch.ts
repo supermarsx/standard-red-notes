@@ -22,6 +22,7 @@
 import { retrieve as defaultRetrieve, RetrievalDoc } from './retrieval'
 import { UNTRUSTED_CONTEXT_BEGIN, UNTRUSTED_CONTEXT_END, wrapUntrustedNoteContext } from './prompts'
 import { ResearchWebEvidence, renderResearchWebEvidence, researchWebSourcesMarkdown } from './researchWebEvidence'
+import type { DeepWebProgress, DeepWebStopReason } from './deepResearchWeb'
 
 /** A note available to the research loop (already plain text, decrypted upstream). */
 export interface ResearchNote {
@@ -39,6 +40,7 @@ export interface CitedSource {
 }
 
 export interface DeepResearchReport {
+  webResearch?: { stopReason: DeepWebStopReason; rounds: number; elapsedMs: number; sourceCount: number }
   webEvidence?: ResearchWebEvidence
   question: string
   /** The synthesized prose report (summary + findings) from the model. */
@@ -105,6 +107,7 @@ interface RetrievalHitLike {
 export type ProgressFn = (phase: DeepResearchProgress) => void
 
 export type DeepResearchProgress =
+  | DeepWebProgress
   | { kind: 'searching-web' }
   | { kind: 'searching' }
   | { kind: 'reading'; noteCount: number; round: number }
@@ -112,6 +115,8 @@ export type DeepResearchProgress =
   | { kind: 'synthesizing' }
 
 export interface DeepResearchOptions {
+  /** Bounded digest from staged extensive research; raw pages are not combined into one prompt. */
+  webSummary?: string
   webEvidence?: ResearchWebEvidence
   limits?: Partial<DeepResearchLimits>
   retrieve?: RetrieveFn
@@ -357,7 +362,7 @@ export async function runDeepResearch(
     )
     .join('\n\n')
   const webMaterial = options.webEvidence?.sources.length
-    ? `\n\nRetrieved web evidence (cite by [W1], [W2], etc.):\n${renderResearchWebEvidence(options.webEvidence)}`
+    ? `\n\nRetrieved web evidence (cite by [W1], [W2], etc.):\n${options.webSummary ?? renderResearchWebEvidence(options.webEvidence)}`
     : ''
   const synthUser =
     `Research question: ${trimmedQuestion}\n\n` +

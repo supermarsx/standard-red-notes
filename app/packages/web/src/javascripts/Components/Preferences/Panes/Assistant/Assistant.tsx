@@ -1,3 +1,10 @@
+import AssistantWebAccessSetting from './AssistantWebAccessSetting'
+import DeepResearchLimitsSetting from '@/Components/Assistant/DeepResearchLimitsSetting'
+import {
+  AssistantWebAccessMode,
+  getAssistantWebAccessMode,
+  ASSISTANT_WEB_ACCESS_MODE_PREF_KEY,
+} from '@/Assistant/assistantWebAccessPolicy'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { observer } from 'mobx-react-lite'
 import { ApplicationEvent, isErrorResponse, PrefKey, VectorIconNameOrEmoji } from '@standardnotes/snjs'
@@ -429,6 +436,11 @@ const Assistant = ({ application }: { application: WebApplication }) => {
   const [internetAccess, setInternetAccess] = useState(() =>
     application.getPreference(PrefKey.AssistantInternetAccessEnabled, true),
   )
+  const [webAccessMode, setWebAccessMode] = useState<AssistantWebAccessMode>(() =>
+    getAssistantWebAccessMode(application),
+  )
+  const [webAccessSaving, setWebAccessSaving] = useState(false)
+  const [webAccessError, setWebAccessError] = useState(false)
   const imageCapabilityValue = JSON.stringify({ baseURL: baseURL.trim().replace(/\/+$/, ''), model: model.trim() })
   const [toolPermissionMode, setToolPermissionMode] = useState<AssistantToolPermissionMode>(() =>
     application.getPreference(PrefKey.AssistantToolPermissionMode, 'allow-read'),
@@ -445,6 +457,7 @@ const Assistant = ({ application }: { application: WebApplication }) => {
           setToolPermissionMode(application.getPreference(PrefKey.AssistantToolPermissionMode, 'allow-read'))
           setImageCapability(application.getPreference(PrefKey.AssistantImageInputCapability, ''))
           setInternetAccess(application.getPreference(PrefKey.AssistantInternetAccessEnabled, true))
+          setWebAccessMode(getAssistantWebAccessMode(application))
         }
       }),
     [application],
@@ -1218,7 +1231,7 @@ const Assistant = ({ application }: { application: WebApplication }) => {
             <div className="flex items-center justify-between gap-4">
               <Text>
                 Allow Agent, Research and Deep Research to search the web and read pages through this server. Your
-                server administrator can disable access for everyone. Existing tool approvals still apply.
+                server administrator can disable access for everyone. Choose web approvals below.
               </Text>
               <Switch
                 checked={internetAccess}
@@ -1228,6 +1241,27 @@ const Assistant = ({ application }: { application: WebApplication }) => {
                 }}
               />
             </div>
+            <AssistantWebAccessSetting
+              value={webAccessMode}
+              disabled={!internetAccess || webAccessSaving}
+              onChange={(mode) => {
+                setWebAccessSaving(true)
+                setWebAccessError(false)
+                void application
+                  .setPreference(ASSISTANT_WEB_ACCESS_MODE_PREF_KEY, mode)
+                  .then(() => {
+                    setWebAccessMode(getAssistantWebAccessMode(application))
+                  })
+                  .catch(() => setWebAccessError(true))
+                  .finally(() => setWebAccessSaving(false))
+              }}
+            />
+            {webAccessError && (
+              <p role="alert" className="text-danger mt-1 text-xs">
+                Web approval settings could not be saved. Try again.
+              </p>
+            )}
+            <DeepResearchLimitsSetting />
             <Text className="text-passive-1 mt-2">
               Turning this off removes web tools from current and new chats. Note search remains available; queries and
               page URLs are sent to the server only while internet access is enabled.

@@ -24,6 +24,8 @@ type Props = {
 
 const progressLabel = (progress: DeepResearchProgress): string => {
   switch (progress.kind) {
+    case 'researching-web':
+      return `${progress.phase === 'searching' ? 'Searching and reading' : progress.phase === 'summarizing' ? 'Summarizing' : 'Planning'} · ${progress.sourceCount}/${progress.maxSources} sources`
     case 'searching-web':
       return 'Searching and reading approved web sources…'
     case 'searching':
@@ -171,9 +173,9 @@ function DeepResearchPanelImpl({ application, onClose, onTopicChange }: Props) {
         <div className="border-warning bg-warning-faded text-warning rounded border border-solid p-3 text-sm">
           Deep research reads several of your notes and sends those excerpts to your AI provider across multiple steps —
           more exposure than a single question. It is a bounded loop (≤ {DEFAULT_DEEP_RESEARCH_LIMITS.maxRounds} rounds,
-          ≤ {DEFAULT_DEEP_RESEARCH_LIMITS.maxNotes} notes, truncated snippets). Optional web research asks for approval
-          before sending your question to the server’s search service or reading each page. Retrieved text also goes to
-          your AI provider.
+          ≤ {DEFAULT_DEEP_RESEARCH_LIMITS.maxNotes} notes, truncated snippets). Optional web research follows your
+          Allow, Safe or Strict web permissions and the source and time budgets in Assistant settings. Retrieved text
+          also goes to your AI provider. Keep this tab open during research.
         </div>
 
         {!availability.available && (

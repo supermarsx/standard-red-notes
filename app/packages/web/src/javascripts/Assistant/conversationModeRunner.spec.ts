@@ -41,6 +41,7 @@ function setup(script?: (request: ProviderRequest, index: number) => ProviderEve
     onTextDelta: jest.fn(),
   }
   const application = {
+    getPreference: (key: string, fallback: unknown) => key === 'assistantWebAccessMode' ? 'strict' : fallback,
     get items() {
       throw new Error('Must never scan the note library')
     },
@@ -356,7 +357,7 @@ it('bounds a hung provider read and requests stream cleanup without awaiting it'
   }
 })
 
-it('enforces the complete-run model call budget, including deep refinement and synthesis', async () => {
+it('keeps deep refinement and synthesis independent of the ordinary one-step agent budget', async () => {
   const harness = setup()
   harness.extras.contextText = 'part '.repeat(4_000)
   const result = await runConversationMode(
@@ -365,8 +366,8 @@ it('enforces the complete-run model call budget, including deep refinement and s
     { ...harness.options, maxSteps: 1 },
     { ...harness.extras, requestWebConfirmation: undefined },
   )
-  expect(harness.seen).toHaveLength(1)
-  expect(result.steps).toBe(1)
+  expect(harness.seen).toHaveLength(2)
+  expect(result.steps).toBe(2)
   expect(result.stopReason).toBe('end_turn')
 })
 
@@ -450,4 +451,54 @@ it('drains a token-limited research response through EOF and returns its actual 
   expect(result.finalText).toContain('Partial findings')
   expect(result.finalText).toContain('incomplete')
   expect(harness.seen).toHaveLength(1)
+})
+
+
+it('reports actual research search/page tool activities including failed page reads in Allow', async () => {
+  const harness = setup()
+  harness.extras.application = { getPreference: (_key: string, fallback: unknown) => fallback } as WebApplication
+  const onToolCall = jest.fn()
+  const onToolResult = jest.fn()
+  jest.mocked(webFetch).mockResolvedValue({ error: 'Page unavailable' })
+  await runConversationMode('research', [], { ...harness.options, onToolCall, onToolResult }, harness.extras)
+  expect(harness.extras.requestWebConfirmation).not.toHaveBeenCalled()
+  expect(onToolCall.mock.calls.map(([call]) => call.name)).toEqual(['web.search', 'web.fetch'])
+  expect(onToolResult.mock.calls.map(([id, , outcome]) => [id, outcome])).toEqual([
+    [onToolCall.mock.calls[0][0].id, 'succeeded'], [onToolCall.mock.calls[1][0].id, 'failed'],
+  ])
+})
+
+it('allows deep research more than six model calls with a 600-source, 90-minute default budget', async () => {
+  let rounds = 0
+  jest.mocked(webSearch).mockImplementation(async () => ({ results: [{ title: 'Source', url: `https://example.test/${++rounds}`, snippet: 'Evidence' }] }))
+  const harness = setup((request) => [
+    { kind: 'text-delta', delta: request.system.includes('Plan the next public web query') ? (rounds < 4 ? JSON.stringify({ query: `next topic ${rounds}` }) : '{"done":true}') : '# Evidence digest [W1]' },
+    { kind: 'finish', stopReason: 'end_turn' },
+  ])
+  const onProgress = jest.fn()
+  const timers = jest.spyOn(globalThis, 'setTimeout')
+  try {
+    const result = await runConversationMode('deep-research', [], { ...harness.options, maxSteps: 1, maxRunTimeMs: 1000 }, { ...harness.extras, onResearchProgress: onProgress })
+    expect(harness.seen.length).toBeGreaterThan(6)
+    expect(result.stopReason).toBe('end_turn')
+    expect(timers.mock.calls.some(([, delay]) => delay === 90 * 60_000)).toBe(true)
+    expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ kind: 'researching-web', maxSources: 600 }))
+    expect(result.finalText).toContain('4 / 600')
+    expect(harness.options.onTextDelta).not.toHaveBeenCalledWith(expect.stringContaining('next topic'))
+  } finally { timers.mockRestore() }
+})
+
+it('cancels deep research during pending approval without starting a late search', async () => {
+  const harness = setup()
+  let resolveApproval!: (approved: boolean) => void
+  harness.extras.requestWebConfirmation = jest.fn(() => new Promise<boolean>((resolve) => { resolveApproval = resolve }))
+  const controller = new AbortController()
+  const pending = runConversationMode('deep-research', [], { ...harness.options, signal: controller.signal }, harness.extras)
+  for (let index = 0; index < 20; index++) { await Promise.resolve() }
+  controller.abort()
+  expect((await pending).stopReason).toBe('aborted')
+  resolveApproval(true)
+  await Promise.resolve()
+  expect(webSearch).not.toHaveBeenCalled()
+  expect(harness.seen).toHaveLength(0)
 })

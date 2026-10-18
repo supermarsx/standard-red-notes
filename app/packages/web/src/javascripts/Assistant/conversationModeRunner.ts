@@ -5,8 +5,10 @@ import { run, AgentOptions, AgentResult } from './agent'
 import type { AssistantConversationMode } from './conversationModes'
 import type { ChatMessage, ToolSession } from './types'
 import { runResearchMode } from './researchMode'
-import { DEEP_RESEARCH_REFINE_SYSTEM_PROMPT, runDeepResearch } from './deepResearch'
-import { gatherResearchWebEvidence, ResearchWebEvidence } from './researchWebEvidence'
+import { DEEP_RESEARCH_REFINE_SYSTEM_PROMPT, runDeepResearch, type DeepResearchProgress } from './deepResearch'
+import { gatherResearchWebEvidence, ResearchWebEvidence, researchWebSourcesMarkdown } from './researchWebEvidence'
+import { runDeepWebResearch, DeepWebResult } from './deepResearchWeb'
+import { loadDeepResearchSettings, normalizeDeepResearchWebLimits } from './deepResearchSettings'
 import { DEFAULT_SAMPLING_SETTINGS, getMaxRunTimeMs } from './samplingSettings'
 import { wrapUntrustedNoteContext } from './prompts'
 
@@ -18,7 +20,9 @@ export interface ConversationModeExtras {
   contextText: string
   images?: AssistantImageAttachment[]
   isCurrent: () => boolean
+  onResearchProgress?: (progress: DeepResearchProgress) => void
   /** Must use the chat approval path, including remembered tool denials. Absence disables web. */
+  isWebToolDenied?: (action: 'search' | 'fetch') => boolean
   requestWebConfirmation?: (action: 'search' | 'fetch', value: string) => Promise<boolean>
 }
 
@@ -75,18 +79,22 @@ export async function runConversationMode(
   }
 
   const controller = new AbortController()
-  const configuredTime = options.maxRunTimeMs
+  const deepLimits = normalizeDeepResearchWebLimits(loadDeepResearchSettings())
+  const configuredTime = mode === 'deep-research' ? deepLimits.timeBudgetMinutes * 60_000 : options.maxRunTimeMs
   const budgetMs =
     typeof configuredTime === 'number' && Number.isFinite(configuredTime) && configuredTime > 0
       ? configuredTime
       : getMaxRunTimeMs(DEFAULT_SAMPLING_SETTINGS)
   const deadlineAt = Date.now() + budgetMs
   const maxCalls =
-    Number.isFinite(options.maxSteps) && (options.maxSteps ?? 0) > 0
-      ? Math.max(1, Math.min(6, Math.floor(options.maxSteps!)))
-      : 6
+    mode === 'deep-research'
+      ? 245
+      : Number.isFinite(options.maxSteps) && (options.maxSteps ?? 0) > 0
+        ? Math.max(1, Math.min(6, Math.floor(options.maxSteps!)))
+        : 6
   let calls = 0
   let partialFinal = ''
+  let deepWeb: DeepWebResult | undefined
   let deadlineReached = false
   const abortFromCaller = () => controller.abort(options.signal?.reason)
   if (options.signal?.aborted) {
@@ -128,19 +136,24 @@ export async function runConversationMode(
     }
   }
 
-  const complete = async (system: string, user: string): Promise<string> => {
+  const complete = async (
+    system: string,
+    user: string,
+    finalPhase = system !== DEEP_RESEARCH_REFINE_SYSTEM_PROMPT,
+  ): Promise<string> => {
     check()
     if (calls >= maxCalls) {
       throw new ModeBoundary('max_steps')
     }
     calls += 1
-    const steers = options.control?.drainSteers().filter((value) => value.trim()) ?? []
+    // Private images and follow-up context belong to synthesis, never public-query planning.
+    const steers = finalPhase ? (options.control?.drainSteers().filter((value) => value.trim()) ?? []) : []
     steers.forEach((value) => options.onSteer?.(value))
     const iterator = options.provider
       .send({
         system,
         messages: [
-          { role: 'user', content: user, ...(extras.images?.length ? { images: extras.images } : {}) },
+          { role: 'user', content: user, ...(finalPhase && extras.images?.length ? { images: extras.images } : {}) },
           ...steers.map((content) => ({ role: 'user' as const, content })),
         ],
         tools: [],
@@ -151,7 +164,6 @@ export async function runConversationMode(
     let finished = false
     let outputLimited = false
     let completed = false
-    const finalPhase = system !== DEEP_RESEARCH_REFINE_SYSTEM_PROMPT
     try {
       for (;;) {
         const next = await guarded(() => iterator.next())
@@ -185,6 +197,9 @@ export async function runConversationMode(
       }
       check()
       if (outputLimited) {
+        if (!finalPhase) {
+          throw new Error('An intermediate research step reached its output limit. No final report was produced.')
+        }
         throw new ModeOutputLimit(text)
       }
       return text
@@ -203,32 +218,65 @@ export async function runConversationMode(
     check()
     const hasWebTool = (action: 'search' | 'fetch') =>
       options.session.tools().some((tool) => tool.name === `web.${action}` && !tool.mutating)
-    const webEvidence: ResearchWebEvidence =
-      extras.requestWebConfirmation && hasWebTool('search')
-        ? await guarded(() =>
-            gatherResearchWebEvidence(extras.application, extras.prompt, {
-              signal: controller.signal,
-              isCurrent: () => extras.isCurrent() && !controller.signal.aborted,
-              requestConfirmation: async (action, value) => {
-                check()
-                if (!hasWebTool(action)) {
-                  throw new AssistantActionNotAllowedError('Internet access became unavailable. Research stopped.')
-                }
-                const approved = await guarded(() => extras.requestWebConfirmation!(action, value))
-                check()
-                if (!approved) {
-                  throw new AssistantActionNotAllowedError(
-                    `The web ${action === 'search' ? 'search' : 'page read'} was not allowed. Research stopped.`,
-                  )
-                }
-                if (!hasWebTool(action)) {
-                  throw new AssistantActionNotAllowedError('Internet access became unavailable. Research stopped.')
-                }
-                return true
-              },
-            }),
-          )
-        : { sources: [], status: 'unavailable' }
+    const gather = (
+      query: string,
+      batch: { maxSources?: number; excludeUrls?: ReadonlySet<string>; signal?: AbortSignal } = {},
+    ) =>
+      gatherResearchWebEvidence(extras.application, query, {
+        ...batch,
+        signal: batch.signal ?? controller.signal,
+        onToolCall: options.onToolCall,
+        onToolResult: options.onToolResult,
+        isWebToolDenied: (action) => !hasWebTool(action) || !!extras.isWebToolDenied?.(action),
+        isCurrent: () => extras.isCurrent() && !controller.signal.aborted,
+        requestConfirmation: async (action, value) => {
+          check()
+          if (!hasWebTool(action)) {
+            throw new AssistantActionNotAllowedError('Internet access became unavailable. Research stopped.')
+          }
+          const approved = await guarded(() => extras.requestWebConfirmation!(action, value))
+          check()
+          if (!approved) {
+            throw new AssistantActionNotAllowedError(
+              `The web ${action === 'search' ? 'search' : 'page read'} was not allowed. Research stopped.`,
+            )
+          }
+          if (!hasWebTool(action)) {
+            throw new AssistantActionNotAllowedError('Internet access became unavailable. Research stopped.')
+          }
+          return true
+        },
+      })
+    let webEvidence: ResearchWebEvidence = { sources: [], status: 'unavailable' }
+    if (extras.requestWebConfirmation && hasWebTool('search')) {
+      if (mode === 'deep-research') {
+        deepWeb = await runDeepWebResearch(
+          extras.prompt,
+          {
+            gather,
+            complete: (system, user) => complete(system, user, false),
+          },
+          { limits: deepLimits, signal: controller.signal, onProgress: extras.onResearchProgress },
+        )
+        webEvidence = deepWeb.evidence
+        // Preserve useful evidence if the wall-clock deadline ended the run.
+        // Planner JSON is never treated as a partial user-facing report.
+        if (deepWeb.stopReason === 'time-limit' || deepWeb.stopReason === 'aborted') {
+          const finalText = `## Partial research\n\n${deepWeb.summary || 'No evidence digest was completed.'}\n\n> Research stopped before final synthesis.\n\n${researchWebSourcesMarkdown(webEvidence)}`
+          if (extras.isCurrent()) {
+            options.onTextDelta?.(finalText)
+          }
+          return {
+            finalText,
+            steps: calls,
+            stopReason: deadlineReached ? 'time_limit' : deepWeb.stopReason === 'aborted' ? 'aborted' : 'time_limit',
+          }
+        }
+      } else {
+        extras.onResearchProgress?.({ kind: 'searching-web' })
+        webEvidence = await guarded(() => gather(extras.prompt))
+      }
+    }
     const context = extras.contextText.slice(0, 24_000)
     let finalText: string
     if (mode === 'research') {
@@ -255,6 +303,8 @@ export async function runConversationMode(
       const result = await runDeepResearch(extras.prompt, corpus, complete, {
         signal: controller.signal,
         webEvidence,
+        webSummary: deepWeb?.summary,
+        onProgress: extras.onResearchProgress,
         limits: {
           maxRounds: Math.max(1, Math.min(4, maxCalls - 1)),
           maxNotes: 6,
@@ -273,6 +323,9 @@ export async function runConversationMode(
         finalText += `\n\n## Selected context sources\n\n${result.sources.map((source, index) => `- [${index + 1}] ${source.title}`).join('\n')}`
       }
     }
+    if (deepWeb) {
+      finalText += `\n\n### Research breakdown\n\n- Web pages read: ${deepWeb.evidence.sources.length} / ${deepLimits.maxSources}\n- Search rounds: ${deepWeb.rounds}\n- Elapsed: ${Math.ceil(deepWeb.elapsedMs / 60_000)} minutes\n- Stopped: ${deepWeb.stopReason.replace(/-/g, ' ')}\n`
+    }
     options.onTextDelta?.(finalText)
     options.onAssistantMessage?.(finalText)
     return { finalText, steps: calls, stopReason: 'end_turn' }
@@ -290,7 +343,9 @@ export async function runConversationMode(
     if (failure instanceof ModeBoundary) {
       const finalText = partialFinal
         ? `${partialFinal}\n\n> ${failure.message} This report is incomplete.`
-        : failure.message
+        : deepWeb?.summary
+          ? `## Partial research\n\n${deepWeb.summary}\n\n> ${failure.message} Final synthesis was not completed.\n\n${researchWebSourcesMarkdown(deepWeb.evidence)}`
+          : failure.message
       if (extras.isCurrent()) {
         options.onTextDelta?.(finalText)
       }
