@@ -26,15 +26,17 @@ const AssistantUsage: FunctionComponent<Props> = ({ application }) => {
       lines.push('Daily request limit reached — assistant requests will be refused until it resets.')
     }
   }
-  lines.push(`Session requests: ${session.requests.toLocaleString()}`)
+  lines.push(`This page/account requests: ${session.requests.toLocaleString()}`)
   if (session.totalTokens > 0) {
     lines.push(
-      `Session tokens: ${session.totalTokens.toLocaleString()} ` +
+      `This page/account tokens: ${session.totalTokens.toLocaleString()} ` +
         `(${session.promptTokens.toLocaleString()} prompt + ${session.completionTokens.toLocaleString()} completion)`,
     )
   }
   if (session.requests > 0 && session.requestsWithTokens < session.requests) {
-    lines.push(`${session.requests - session.requestsWithTokens} of this session's requests reported no token usage.`)
+    lines.push(
+      `${session.requests - session.requestsWithTokens} of this page/account's requests reported no token usage.`,
+    )
   }
   lines.push('Token counts come from the AI provider and are approximate.')
   const tooltip = lines.join('\n')
