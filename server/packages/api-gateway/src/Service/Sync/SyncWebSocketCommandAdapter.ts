@@ -454,10 +454,11 @@ export class SyncWebSocketCommandAdapter
       // what keeps "exists but you may not" and "does not exist" the same
       // answer.
       //
-      // An ABORT is not a verdict: the handler's own timeout owns it, and the
-      // socket was never told anything about the credential. It keeps the
-      // unqualified denial it has always produced here.
-      const stale = !signal.aborted && error instanceof SessionValidationError && error.credential === 'stale'
+      // Abort and upstream outages give no session verdict and remain retryable.
+      if (signal.aborted || !(error instanceof SessionValidationError) || error.kind === 'unavailable') {
+        return { authorized: false, code: 'AUTHORIZATION_UNAVAILABLE' }
+      }
+      const stale = error.credential === 'stale'
       return stale ? { authorized: false, code: 'SESSION_STALE' } : { authorized: false }
     }
     const { request } = this.httpContext(validated.locals, {}, COLLABORATION_AUTHORIZATION_ROUTE)

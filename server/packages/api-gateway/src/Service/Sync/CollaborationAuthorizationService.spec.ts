@@ -473,7 +473,7 @@ describe('CollaborationAuthorizationService', () => {
 
       const grant = await service.authorize(request, locals(), grantRequest(), controller.signal)
 
-      expect(grant).toEqual({ authorized: false })
+      expect(grant).toEqual({ authorized: false, code: 'AUTHORIZATION_UNAVAILABLE' })
       expect(callSyncingServer).not.toHaveBeenCalled()
     })
   })
@@ -501,7 +501,11 @@ describe('CollaborationAuthorizationService', () => {
       const grant = await service.authorize(request, locals(), grantRequest())
 
       expect(callSyncingServer).toHaveBeenCalledTimes(1)
-      expect(grant).toEqual({ authorized: false })
+      expect(grant).toEqual(
+        _label === 'syncing-server denies access'
+          ? { authorized: false }
+          : { authorized: false, code: 'AUTHORIZATION_UNAVAILABLE' },
+      )
       expect(grant).not.toHaveProperty('capability')
     })
 
@@ -519,7 +523,7 @@ describe('CollaborationAuthorizationService', () => {
 
       const grant = await service.authorize(request, locals(), grantRequest(), controller.signal)
 
-      expect(grant).toEqual({ authorized: false })
+      expect(grant).toEqual({ authorized: false, code: 'AUTHORIZATION_UNAVAILABLE' })
       expect(grant).not.toHaveProperty('capability')
     })
 
@@ -634,7 +638,7 @@ describe('CollaborationAuthorizationService', () => {
 
       const grant = await service.authorize(request, locals(), discoveryRequest)
 
-      expect(grant).toEqual({ authorized: false })
+      expect(grant).toEqual({ authorized: false, code: 'AUTHORIZATION_UNAVAILABLE' })
       expect(logger.info).not.toHaveBeenCalled()
       expect(logger.error).toHaveBeenCalledTimes(1)
       expect(logger.error.mock.calls[0][0]).toBe('Collaboration authorization could not be decided.')
@@ -723,7 +727,10 @@ describe('CollaborationAuthorizationService', () => {
         TTL_SECONDS,
       )
 
-      await expect(loggerless.authorize(request, locals(), discoveryRequest)).resolves.toEqual({ authorized: false })
+      await expect(loggerless.authorize(request, locals(), discoveryRequest)).resolves.toEqual({
+        authorized: false,
+        code: 'AUTHORIZATION_UNAVAILABLE',
+      })
     })
 
     it('every reason is categorised, and the two diagnostic halves are disjoint', () => {

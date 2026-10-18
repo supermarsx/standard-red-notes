@@ -512,7 +512,7 @@ describe('SyncCommandHandler credential refresh', () => {
     expect(harness.socket.closes).toHaveLength(0)
   })
 
-  it('serves a bounded number of refreshes and ends the socket past it', async () => {
+  it('serves a bounded number of refreshes per minute and ends the socket past it', async () => {
     const harness = await authenticated()
     for (let attempt = 1; attempt <= 8; attempt += 1) {
       enqueue(harness.handler, reauthFrame(attempt, await harness.mint()))
@@ -526,6 +526,26 @@ describe('SyncCommandHandler credential refresh', () => {
     await vi.waitFor(() => expect(harness.socket.closes).toHaveLength(1))
     expect(payloadOf(lastFrame(harness.socket))).toMatchObject({ code: 'REAUTH_REJECTED' })
     expect(harness.metrics.events).toContainEqual({ event: 'reauth', code: 'exhausted' })
+  })
+
+  it('keeps a long-lived socket open across more than eight legitimate refreshes', async () => {
+    let now = Date.now()
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const harness = await authenticated()
+    try {
+      for (let attempt = 1; attempt <= 12; attempt += 1) {
+        now += 60_001
+        enqueue(harness.handler, reauthFrame(attempt, await harness.mint()))
+        await vi.waitFor(() =>
+          expect(harness.socket.frames.filter((frame) => frame.type === 'REAUTHENTICATED')).toHaveLength(attempt),
+        )
+      }
+      expect(harness.socket.closes).toHaveLength(0)
+      expect(harness.metrics.events).not.toContainEqual({ event: 'reauth', code: 'exhausted' })
+    } finally {
+      harness.handler.disconnect()
+      clock.mockRestore()
+    }
   })
 
   it('cannot stand in for admission: a REAUTH before AUTH closes the socket', async () => {

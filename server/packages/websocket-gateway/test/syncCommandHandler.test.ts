@@ -1302,6 +1302,26 @@ describe('SyncCommandHandler', () => {
   // a session-plane call. The adapter now marks the one refusal whose cause is
   // an unusable credential; everything else must stay byte-identical.
   // -------------------------------------------------------------------------
+
+  it('keeps an undecidable authorization retryable on the live socket', async () => {
+    const authorizeCollaboration = vi.fn(async () => ({
+      authorized: false as const,
+      code: 'AUTHORIZATION_UNAVAILABLE' as const,
+    }))
+    const { handler, socket } = await authenticatedHandler({
+      collaborationAuthorization: { collaborationAuthorizationReady: () => true, authorizeCollaboration },
+    })
+    try {
+      enqueue(handler, collaborationAuthorizationFrame(1))
+      await vi.waitFor(() => expect(socket.frames.filter((frame) => frame.type === 'ERROR')).toHaveLength(1))
+      expect(socket.frames.at(-1)?.payload).toEqual({ code: 'BACKEND_ERROR', retryable: true })
+      enqueue(handler, collaborationAuthorizationFrame(2))
+      await vi.waitFor(() => expect(authorizeCollaboration).toHaveBeenCalledTimes(2))
+    } finally {
+      handler.disconnect()
+    }
+  })
+
   it('publishes SESSION_STALE only when the adapter says the credential is unusable', async () => {
     const authorizeCollaboration = vi.fn(async () => ({ authorized: false as const, code: 'SESSION_STALE' as const }))
     const { handler, socket } = await authenticatedHandler({
@@ -2815,11 +2835,14 @@ describe('SyncCommandHandler', () => {
   })
 
   it('enforces exact client order and resumes server sequence', async () => {
-    const { handler, socket } = await authenticatedHandler({ resumeSequence: 7 })
+    const metrics: SyncCommandMetrics = { increment: vi.fn() }
+    const { handler, socket } = await authenticatedHandler({ resumeSequence: 7, metrics })
     expect(socket.frames[0].sequence).toBe(8)
     enqueue(handler, pingFrame(2))
     await vi.waitFor(() => expect(socket.closes.at(-1)?.code).toBe(1008))
     expect(socket.frames.at(-1)?.payload).toEqual({ code: 'OUT_OF_ORDER', retryable: false })
+    expect(metrics.increment).toHaveBeenCalledWith('protocol', 'OUT_OF_ORDER')
+    expect(vi.mocked(metrics.increment).mock.calls.filter(([event]) => event === 'protocol')).toHaveLength(1)
   })
 
   it('returns reconnect STATUS using the same digest and next server sequence', async () => {

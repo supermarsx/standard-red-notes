@@ -429,17 +429,17 @@ export type SyncCollaborationAuthorizationResult =
   | {
       authorized: false
       /**
-       * Set ONLY when the refusal is "the credential this socket presented can no
+       * SESSION_STALE is set only when "the credential this socket presented can no
        * longer authenticate", classified by `classifyPresentedSessionCredential`.
        * A policy denial — including a revoked session — leaves it unset and stays
        * byte-identical to the collapsed NOT_AUTHORIZED it has always been.
        *
-       * The field is a one-member closed enum rather than a `SyncAuthorizationCode`
-       * on purpose: the collaboration lane must not gain the ability to publish
+       * AUTHORIZATION_UNAVAILABLE reports an undecidable check without minting access.
+       * This closed enum excludes policy topology: the lane must not publish
        * authorization topology (read-only state, content limits, shadow bans)
        * however the adapter grows.
        */
-      code?: 'SESSION_STALE'
+      code?: 'SESSION_STALE' | 'AUTHORIZATION_UNAVAILABLE'
     }
   | {
       authorized: true
@@ -685,10 +685,11 @@ const MAX_ACTIVE_RPC_REQUESTS = 8
  * Credential refreshes one socket may ask for. Each one consumes a ticket that
  * only an authenticated HTTP mint can produce and costs one call to the session
  * plane, so an unbounded REAUTH would be a client-driven amplifier against auth.
- * A real client needs one per token rotation; eight covers a very long-lived tab
- * and anything past it is a loop, which is ended rather than served.
+ * A rolling minute bounds bursts while allowing legitimate token rotations for
+ * the entire lifetime of a long-lived socket.
  */
 const MAX_REAUTH_ATTEMPTS = 8
+const REAUTH_WINDOW_MS = 60_000
 const COLLABORATION_EPOCH_DISCOVERY_TTL_MS = 10_000
 const COLLABORATION_ROOM_EPOCH_RESOLVER_TIMEOUT_MS = 1_500
 const MAX_RPC_CHUNK_BYTES = 64 * 1024
@@ -854,8 +855,8 @@ export class SyncCommandHandler {
   private readonly collaborationRoomEpochResolverTimeoutMs: number
   /** Commands this socket has attempted; the FIRST one refused BUSY is the post-crash signature (R36). */
   private commandsAttempted = 0
-  /** Credential refreshes asked for on this socket, bounded by MAX_REAUTH_ATTEMPTS. */
-  private reauthAttempts = 0
+  /** Bounded rolling budget; legitimate long sessions do not exhaust a lifetime allowance. */
+  private reauthAttempts: number[] = []
 
   constructor(private readonly options: SyncCommandHandlerOptions) {
     this.authDeadlineMs = options.authDeadlineMs ?? SYNC_AUTH_DEADLINE_MS
@@ -1149,7 +1150,6 @@ export class SyncCommandHandler {
       frame = parseSyncClientFrame(raw, rawBytes)
     } catch (error) {
       const code = error instanceof SyncProtocolError ? error.code : 'INVALID_ENVELOPE'
-      this.options.metrics?.increment('protocol', code)
       this.failAndClose(code, 'Invalid sync protocol frame.')
       return
     }
@@ -1377,12 +1377,15 @@ export class SyncCommandHandler {
       return
     }
 
-    this.reauthAttempts += 1
-    if (this.reauthAttempts > MAX_REAUTH_ATTEMPTS) {
+    const now = Date.now()
+    this.reauthAttempts = this.reauthAttempts.filter((at) => now - at < REAUTH_WINDOW_MS)
+    if (this.reauthAttempts.length >= MAX_REAUTH_ATTEMPTS) {
       this.options.metrics?.increment('reauth', 'exhausted')
       this.failAndClose('REAUTH_REJECTED', 'Too many credential refreshes.')
       return
     }
+
+    this.reauthAttempts.push(now)
 
     const consumed = await this.options.tickets.consume(frame.payload.ticket, this.lifecycleAbort.signal)
     if (this.closed) {
@@ -1508,6 +1511,11 @@ export class SyncCommandHandler {
         // that case says so. The code is re-derived from the closed literal
         // rather than forwarded, so no adapter can widen what this lane
         // publishes, and anything else is the exact byte-for-byte denial.
+        if (result.code === 'AUTHORIZATION_UNAVAILABLE') {
+          this.options.metrics?.increment('collaboration_authorization', 'unavailable')
+          this.sendError(frame.requestId, frame.commandId, 'BACKEND_ERROR')
+          return
+        }
         const stale = result.code === 'SESSION_STALE'
         this.options.metrics?.increment('collaboration_authorization', stale ? 'session_stale' : 'denied')
         this.sendError(frame.requestId, frame.commandId, stale ? 'SESSION_STALE' : 'NOT_AUTHORIZED')
@@ -2669,6 +2677,7 @@ export class SyncCommandHandler {
     if (this.closed) {
       return
     }
+    this.options.metrics?.increment('protocol', code)
     this.sendError('protocol', 'protocol', code)
     this.closed = true
     clearTimeout(this.authTimer)

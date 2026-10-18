@@ -25,7 +25,7 @@ export type CollaborationAuthorizationRequest =
     }
 
 export type CollaborationAuthorizationGrant =
-  | { authorized: false }
+  | { authorized: false; code?: 'AUTHORIZATION_UNAVAILABLE' }
   | {
       authorized: true
       epochDiscovery: true
@@ -160,10 +160,7 @@ export class CollaborationAuthorizationService {
     input: CollaborationAuthorizationRequest,
     signal?: AbortSignal,
   ): Promise<CollaborationAuthorizationGrant> {
-    // Each condition names itself. The ORDER and the outcome are unchanged --
-    // every one of these still refuses before the access check runs, and still
-    // refuses with a bare `{ authorized: false }` that discloses nothing to the
-    // caller. The only new thing is that the server now knows which it was.
+    // Permission refusals remain opaque; undecidable checks are retryable without minting access.
     const who = typeof locals.user?.uuid === 'string' ? { userId: locals.user.uuid } : {}
     const precondition = this.refusedByPrecondition(locals, input, signal)
     if (precondition !== undefined) {
@@ -276,18 +273,17 @@ export class CollaborationAuthorizationService {
   }
 
   /**
-   * Record a refusal and return the refusal the caller has always received.
-   *
-   * The returned value is byte-identical to the bare `{ authorized: false }`
-   * this method replaced: nothing about WHY crosses the service boundary, so a
-   * caller still cannot distinguish "this note does not exist" from "it exists
-   * and you may not edit it". The reason exists for the operator's log only.
+   * Record a refusal, separating unavailable checks from permission decisions.
+   * No resource existence or membership detail crosses the boundary.
    *
    * The NOTE UUID is deliberately absent, here and in the access-check error
    * metadata. One line per refusal, and the line says what kind of refusal it
    * was, not which resource it was about.
    */
-  private deny(reason: CollaborationDenialReason, context: Record<string, unknown>): { authorized: false } {
+  private deny(
+    reason: CollaborationDenialReason,
+    context: Record<string, unknown>,
+  ): { authorized: false; code?: 'AUTHORIZATION_UNAVAILABLE' } {
     const category = collaborationDenialCategory(reason)
     // `action`, `reason` and `category` are written LAST so merged exception
     // metadata (which carries its own `action`) cannot rename the verdict.
@@ -300,7 +296,9 @@ export class CollaborationAuthorizationService {
     } else {
       this.logger?.info('Collaboration authorization denied.', metadata)
     }
-    return { authorized: false }
+    return category === 'unreadable' || category === 'abandoned'
+      ? { authorized: false, code: 'AUTHORIZATION_UNAVAILABLE' }
+      : { authorized: false }
   }
 
   private async checkAccessWithSyncingServer(

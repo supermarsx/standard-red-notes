@@ -355,13 +355,16 @@ describe('SyncWebSocketCommandAdapter.refreshSession', () => {
       ['auth reports the token merely expired', AUTH_REFUSALS.expiredAccessToken],
       ['auth answered 500', { status: 500, data: { error: { message: 'boom' } } }],
       ['auth answered 200 with no token', { status: 200, data: {} }],
-    ])('reports SESSION_STALE when %s', async (_name, refusal) => {
+    ])('distinguishes stale credentials from unavailable auth: %s', async (_name, refusal) => {
       const { proxy } = proxyAnswering(refusal)
       const collaboration = collaborationService(true)
 
       await expect(
         adapterFor(proxy, collaboration).authorizeCollaboration(collaborationInput, signal()),
-      ).resolves.toEqual({ authorized: false, code: 'SESSION_STALE' })
+      ).resolves.toEqual({
+        authorized: false,
+        code: _name === 'auth reports the token merely expired' ? 'SESSION_STALE' : 'AUTHORIZATION_UNAVAILABLE',
+      })
       // The stale verdict is reached before the note is ever presented, which is
       // what keeps it from revealing whether the note exists.
       expect(collaboration.authorize).not.toHaveBeenCalled()
@@ -406,7 +409,7 @@ describe('SyncWebSocketCommandAdapter.refreshSession', () => {
       expect(collaboration.authorize).toHaveBeenCalledTimes(1)
     })
 
-    it('says nothing about the credential when the operation was aborted', async () => {
+    it('reports retryable unavailability when the operation was aborted', async () => {
       // The handler's own timeout owns an abort; the session was never judged, so
       // the socket is told nothing about its credential.
       const controller = new AbortController()
@@ -417,7 +420,7 @@ describe('SyncWebSocketCommandAdapter.refreshSession', () => {
 
       await expect(
         adapterFor(proxy, collaborationService(true)).authorizeCollaboration(collaborationInput, controller.signal),
-      ).resolves.toEqual({ authorized: false })
+      ).resolves.toEqual({ authorized: false, code: 'AUTHORIZATION_UNAVAILABLE' })
     })
   })
 

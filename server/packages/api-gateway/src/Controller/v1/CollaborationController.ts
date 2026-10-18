@@ -31,7 +31,8 @@ import {
  *
  * FAILS CLOSED everywhere: missing/invalid input, no signing secret configured,
  * a read-only session, an unauthorized result, a non-2xx / unparseable
- * syncing-server response, or any thrown error all yield 403 with NO capability.
+ * syncing-server response, or any thrown error never mint a capability.
+ * Actual denials return 403; undecidable backend checks return retryable 503.
  */
 @controller('/v1/collaboration')
 export class CollaborationController extends BaseHttpController {
@@ -65,6 +66,15 @@ export class CollaborationController extends BaseHttpController {
       })
     }
 
+    const unavailable = (): void => {
+      response.status(503).json({
+        error: {
+          tag: 'collaboration-authorization-unavailable',
+          message: 'Live collaboration authorization is temporarily unavailable. Retry shortly.',
+        },
+      })
+    }
+
     try {
       const authorization = await this.authorizationService.authorize(
         request,
@@ -72,7 +82,11 @@ export class CollaborationController extends BaseHttpController {
         request.body as CollaborationAuthorizationRequest,
       )
       if (!authorization.authorized) {
-        denied()
+        if (authorization.code === 'AUTHORIZATION_UNAVAILABLE') {
+          unavailable()
+        } else {
+          denied()
+        }
         return
       }
       const { authorized: _authorized, ...responseBody } = authorization
@@ -86,7 +100,7 @@ export class CollaborationController extends BaseHttpController {
           method: 'POST',
         }),
       )
-      denied()
+      unavailable()
     }
   }
 }

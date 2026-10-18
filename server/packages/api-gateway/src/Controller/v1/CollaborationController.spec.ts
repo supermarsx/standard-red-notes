@@ -158,7 +158,7 @@ describe('CollaborationController', () => {
     expect(jsonMock).not.toHaveBeenCalledWith(expect.objectContaining({ capability: expect.anything() }))
   })
 
-  it('DENIES (403) on a non-2xx syncing-server response, and calls it UNREADABLE', async () => {
+  it('UNAVAILABLE (503) on a non-2xx syncing-server response, and calls it UNREADABLE', async () => {
     // REGRESSION (0a6897b3): the multi-container defect dispatched `POST
     // items/collaboration-authorization` as a GET, the route did not exist, and
     // the 404 was read as `{ authorized: false }` with nothing logged. The
@@ -166,18 +166,18 @@ describe('CollaborationController', () => {
     serviceProxy.callSyncingServer = proxyReturning({ error: 'nope' }, 500)
     const response = responseWith('user-1')
     await makeController().authorize(requestWith('note-1'), response)
-    expect(statusMock).toHaveBeenCalledWith(403)
+    expect(statusMock).toHaveBeenCalledWith(503)
     expect(logger.error).toHaveBeenCalledWith(
       'Collaboration authorization could not be decided.',
       expect.objectContaining({ reason: 'access-check-http-status', category: 'unreadable', accessCheckStatus: 500 }),
     )
   })
 
-  it('DENIES (403) when the syncing-server response has no authorized flag, and calls it UNREADABLE', async () => {
+  it('UNAVAILABLE (503) when the syncing-server response has no authorized flag, and calls it UNREADABLE', async () => {
     serviceProxy.callSyncingServer = proxyReturning({})
     const response = responseWith('user-1')
     await makeController().authorize(requestWith('note-1'), response)
-    expect(statusMock).toHaveBeenCalledWith(403)
+    expect(statusMock).toHaveBeenCalledWith(503)
     expect(logger.error).toHaveBeenCalledWith(
       'Collaboration authorization could not be decided.',
       expect.objectContaining({ reason: 'access-check-unreadable', category: 'unreadable' }),
@@ -199,21 +199,21 @@ describe('CollaborationController', () => {
   })
 
   it.each([undefined, 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
-    'DENIES (403) when the authorized response has invalid canonical revision %p',
+    'UNAVAILABLE (503) when the authorized response has invalid canonical revision %p',
     async (serverUpdatedAtTimestamp) => {
       serviceProxy.callSyncingServer = proxyReturning({ authorized: true, serverUpdatedAtTimestamp })
       const response = responseWith('user-1')
       await makeController().authorize(requestWith('note-1'), response)
-      expect(statusMock).toHaveBeenCalledWith(403)
+      expect(statusMock).toHaveBeenCalledWith(503)
     },
   )
 
-  it('DENIES (403) when the access-check call THROWS', async () => {
+  it('UNAVAILABLE (503) when the access-check call THROWS', async () => {
     serviceProxy.callSyncingServer = jest.fn().mockRejectedValue(new Error('collaboration-credential-sentinel'))
     const response = responseWith('user-1')
     await makeController().authorize(requestWith('note-1'), response)
 
-    expect(statusMock).toHaveBeenCalledWith(403)
+    expect(statusMock).toHaveBeenCalledWith(503)
     // ONE line, at error, carrying both the exception detail and the verdict:
     // an access check that could not be reached is `unreadable`, never a
     // policy refusal. A fail-closed authorizer that logged neither is how this
@@ -309,7 +309,7 @@ describe('CollaborationController', () => {
 
     await makeController().authorize(requestWith('note-1'), response)
 
-    expect(statusMock).toHaveBeenCalledWith(403)
+    expect(statusMock).toHaveBeenCalledWith(503)
   })
 
   it('discovers an opaque deterministic epoch without minting a join capability', async () => {
