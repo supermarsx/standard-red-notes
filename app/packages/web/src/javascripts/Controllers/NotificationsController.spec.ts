@@ -1,4 +1,4 @@
-import { ApplicationEvent, ContentType } from '@standardnotes/snjs'
+import { ApplicationEvent, ContentType, VaultLockServiceEvent } from '@standardnotes/snjs'
 import { readDisplayNoteComments } from '@/Comments/CommentAuthorship'
 import { ALL_NOTE_MEMBERS_RECIPIENT } from '@/Comments/CommentPreferences'
 import { WebApplication } from '@/Application/WebApplication'
@@ -130,6 +130,81 @@ describe('NotificationsController', () => {
     controller.deinit()
     controller = undefined
     expect(streams.size).toBe(0)
+  })
+
+  it('projects only changed notes after initialization and invalidates on trust changes', () => {
+    const { application, observers } = createApplication({ signedOut: false })
+    const notes = Array.from({ length: 100 }, (_, index) => ({
+      uuid: `note-${index}`,
+      shared_vault_uuid: 'vault',
+      title: 'Title',
+    }))
+    const streams = new Map<string, (change?: unknown) => void>()
+    const getItems = jest.fn(() => notes)
+    let vaultEvent: (event: VaultLockServiceEvent) => void = () => undefined
+    const stopVaultObserver = jest.fn()
+    Object.assign(application, {
+      vaultLocks: {
+        addEventObserver: (callback: typeof vaultEvent) => {
+          vaultEvent = callback
+          return stopVaultObserver
+        },
+      },
+    })
+    const authorize = jest.fn(() => true)
+    Object.assign(application, {
+      items: {
+        getItems,
+        streamItems: (type: string, callback: (change?: unknown) => void) => {
+          streams.set(type, callback)
+          return () => streams.delete(type)
+        },
+      },
+      isAuthorizedToRenderItem: authorize,
+    })
+    Object.assign(application.sessions, { getUser: () => ({ uuid: 'self' }) })
+    jest.mocked(readDisplayNoteComments).mockReturnValue({
+      comments: [
+        {
+          id: 'comment',
+          verifiedAuthorUuid: 'other',
+          authorshipStatus: 'verified',
+          displayAuthorName: 'Peer',
+          mentions: ['self'],
+        },
+      ],
+      quarantinedCount: 0,
+    } as never)
+    controller = new NotificationsController(application)
+    expect(controller.notifications).toHaveLength(100)
+    getItems.mockClear()
+    authorize.mockClear()
+    const changed = { ...notes[0], title: 'Updated' }
+    streams.get(ContentType.TYPES.Note)!({ changed: [changed], inserted: [], removed: [] })
+    expect(getItems).not.toHaveBeenCalled()
+    expect(authorize).toHaveBeenCalledTimes(1)
+    expect(controller.notifications.find((entry) => entry.id.includes(':note-0:'))?.subtitle).toBe('Updated')
+    streams.get(ContentType.TYPES.Note)!({ changed: [], inserted: [], removed: [changed] })
+    expect(controller.notifications).toHaveLength(99)
+    authorize.mockReturnValue(false)
+    streams.get(ContentType.TYPES.TrustedContact)!()
+    expect(getItems).toHaveBeenCalledTimes(1)
+    expect(controller.notifications).toHaveLength(0)
+    authorize.mockReturnValue(true)
+    observers.forEach((observer) => void observer(ApplicationEvent.UnprotectedSessionBegan))
+    expect(controller.notifications).toHaveLength(100)
+    authorize.mockReturnValue(false)
+    observers.forEach((observer) => void observer(ApplicationEvent.UnprotectedSessionExpired))
+    expect(controller.notifications).toHaveLength(0)
+    authorize.mockReturnValue(true)
+    vaultEvent(VaultLockServiceEvent.VaultUnlocked)
+    expect(controller.notifications).toHaveLength(100)
+    authorize.mockReturnValue(false)
+    vaultEvent(VaultLockServiceEvent.VaultLocked)
+    expect(controller.notifications).toHaveLength(0)
+    controller.deinit()
+    controller = undefined
+    expect(stopVaultObserver).toHaveBeenCalledTimes(1)
   })
 
   it('opens actual sync recovery and switches to reauthentication if the session changes before clicking', () => {

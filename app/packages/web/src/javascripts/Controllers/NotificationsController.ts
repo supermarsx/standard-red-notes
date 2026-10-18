@@ -1,4 +1,4 @@
-import { ApplicationEvent, ContentType, SNNote } from '@standardnotes/snjs'
+import { ApplicationEvent, ContentType, SNNote, VaultLockServiceEvent } from '@standardnotes/snjs'
 import { addToast, dismissToast, ToastType } from '@standardnotes/toast'
 import { action, computed, makeObservable, observable, observableShallow, reaction, runInAction } from 'mobx'
 import type { ReactNode } from 'react'
@@ -94,6 +94,14 @@ export class NotificationsController extends AbstractViewController {
   private syncFailing = false
   private syncRateLimited = false
   private commentReader = new CommentNotificationReader()
+  private commentNotifications: Map<string, AppNotification[]> | undefined
+  private commentPrincipal: string | undefined
+
+  private invalidateComments(): void {
+    this.commentReader.invalidate()
+    this.commentNotifications = undefined
+    this.commentPrincipal = undefined
+  }
 
   private reminderTimer: ReturnType<typeof setInterval> | null = null
   private readTimer: ReturnType<typeof setTimeout> | null = null
@@ -139,10 +147,12 @@ export class NotificationsController extends AbstractViewController {
           case ApplicationEvent.SignedIn:
           case ApplicationEvent.SignedOut:
           case ApplicationEvent.KeyStatusChanged:
+          case ApplicationEvent.UnprotectedSessionBegan:
+          case ApplicationEvent.UnprotectedSessionExpired:
           case ApplicationEvent.PreferencesChanged:
           case ApplicationEvent.Started:
           case ApplicationEvent.LocalDataLoaded:
-            this.commentReader.invalidate()
+            this.invalidateComments()
             this.recompute()
             break
           default:
@@ -152,17 +162,48 @@ export class NotificationsController extends AbstractViewController {
     )
 
     if (application.items?.streamItems) {
-      this.disposers.push(application.items.streamItems(ContentType.TYPES.Note, () => this.recompute()))
+      this.disposers.push(
+        application.items.streamItems(ContentType.TYPES.Note, (change) => {
+          const selfUuid = !application.sessions.isSignedOut() ? application.sessions.getUser?.()?.uuid : undefined
+          if (!change || !selfUuid || selfUuid !== this.commentPrincipal || !this.commentNotifications) {
+            this.invalidateComments()
+          } else {
+            for (const note of change.removed) {
+              this.commentNotifications.delete(note.uuid)
+            }
+            for (const note of [...change.changed, ...change.inserted]) {
+              const notifications = this.commentReader.read(application, note as SNNote, selfUuid)
+              if (notifications.length) {
+                this.commentNotifications.set(note.uuid, notifications)
+              } else {
+                this.commentNotifications.delete(note.uuid)
+              }
+            }
+          }
+          this.recompute()
+        }),
+      )
       this.disposers.push(
         application.items.streamItems(ContentType.TYPES.TrustedContact, () => {
-          this.commentReader.invalidate()
+          this.invalidateComments()
           this.recompute()
         }),
       )
       this.disposers.push(
         application.items.streamItems(ContentType.TYPES.VaultListing, () => {
-          this.commentReader.invalidate()
+          this.invalidateComments()
           this.recompute()
+        }),
+      )
+    }
+
+    if (application.vaultLocks?.addEventObserver) {
+      this.disposers.push(
+        application.vaultLocks.addEventObserver((event) => {
+          if (event === VaultLockServiceEvent.VaultLocked || event === VaultLockServiceEvent.VaultUnlocked) {
+            this.invalidateComments()
+            this.recompute()
+          }
         }),
       )
     }
@@ -355,9 +396,22 @@ export class NotificationsController extends AbstractViewController {
     }
 
     const selfUuid = !signedOut ? application.sessions.getUser?.()?.uuid : undefined
+    if (!selfUuid) {
+      this.invalidateComments()
+    }
     if (selfUuid && this.settings.sources.comments && application.items?.getItems) {
-      for (const note of application.items.getItems<SNNote>(ContentType.TYPES.Note)) {
-        notifications.push(...this.commentReader.read(application, note, selfUuid))
+      if (!this.commentNotifications || this.commentPrincipal !== selfUuid) {
+        this.commentNotifications = new Map()
+        this.commentPrincipal = selfUuid
+        for (const note of application.items.getItems<SNNote>(ContentType.TYPES.Note)) {
+          const entries = this.commentReader.read(application, note, selfUuid)
+          if (entries.length) {
+            this.commentNotifications.set(note.uuid, entries)
+          }
+        }
+      }
+      for (const entries of this.commentNotifications.values()) {
+        notifications.push(...entries)
       }
     }
 
@@ -555,6 +609,7 @@ export class NotificationsController extends AbstractViewController {
   override deinit(): void {
     super.deinit()
     this.clearTimers()
+    this.invalidateComments()
     ;(this.application as unknown) = undefined
   }
 }
