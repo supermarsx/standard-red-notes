@@ -476,3 +476,108 @@ describe('assistant Super-note structural patches', () => {
     expect(forbidden).not.toContain('replace-text')
   })
 })
+
+describe('Mermaid structural edits', () => {
+  const diagram = {
+    type: 'mermaid',
+    version: 4,
+    code: 'flowchart LR\nA-->B',
+    theme: 'forest',
+    viewMode: 'split',
+    width: '60%',
+    height: 240,
+    fitMode: 'fitBoth',
+    alignment: 'center',
+    background: 'auto',
+    zoomPan: true,
+    future: { preserved: true },
+  }
+  const document = () =>
+    JSON.stringify({
+      root: { type: 'root', children: [{ type: 'paragraph', children: [textNode('Untouched')] }, diagram] },
+    })
+  beforeEach(ensureCrypto)
+  it('exposes source and settings and preserves every unrelated field on an audited source/settings edit', async () => {
+    const text = document()
+    const read = await readAssistantSuperStructure(text, { view: 'blocks' })
+    expect(read.blocks?.find((block) => block.type === 'mermaid')?.mermaid).toEqual({
+      source: diagram.code,
+      sourceTruncated: false,
+      settings: { fitMode: 'fitBoth', alignment: 'center', background: 'auto', zoomPan: true },
+    })
+    const result = await applyAssistantSuperPatch(text, {
+      base: read.revision,
+      operations: [
+        {
+          type: 'update-mermaid',
+          target: { path: [1] },
+          expectedSource: diagram.code,
+          source: 'flowchart LR\nA-->C',
+          mermaidSettings: { alignment: 'right' },
+          operationId: 'diagram-edit',
+        },
+      ],
+    })
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error('Expected applied patch')
+    expect(JSON.parse(result.text).root.children).toEqual([
+      JSON.parse(text).root.children[0],
+      { ...diagram, code: 'flowchart LR\nA-->C', alignment: 'right' },
+    ])
+    expect(result.operationEffects[0]).toMatchObject({
+      operationId: 'diagram-edit',
+      type: 'update-mermaid',
+      affected: [{ path: [1] }],
+    })
+  })
+  it.each([
+    { source: '' },
+    { source: 'x'.repeat(16385) },
+    { expectedSource: 'stale', source: 'graph TD' },
+    { mermaidSettings: { alignment: 'invalid' } },
+    { mermaidSettings: { theme: 'dark' } },
+    {},
+  ])('refuses malformed or stale diagram edits atomically: %p', async (patch) => {
+    const text = document()
+    const result = await applyAssistantSuperPatch(text, {
+      base: await assistantSuperRevision(text),
+      operations: [{ type: 'update-mermaid', target: { path: [1] }, ...patch } as never],
+    })
+    expect(result.ok).toBe(false)
+    expect(result).not.toHaveProperty('text')
+  })
+  it('rejects a non-diagram locator and stale note revision', async () => {
+    const text = document()
+    const operation = { type: 'update-mermaid' as const, target: { path: [0] }, source: 'graph TD' }
+    expect(
+      (await applyAssistantSuperPatch(text, { base: await assistantSuperRevision(text), operations: [operation] })).ok,
+    ).toBe(false)
+    expect(
+      (
+        await applyAssistantSuperPatch(text, {
+          base: { contentHash: 'stale' },
+          operations: [{ ...operation, target: { path: [1] } }],
+        })
+      ).status,
+    ).toBe('conflict')
+  })
+  it('marks oversized source reads truncated without changing stored diagrams', async () => {
+    const text = JSON.stringify({ root: { type: 'root', children: [{ ...diagram, code: 'x'.repeat(16385) }] } })
+    const read = await readAssistantSuperStructure(text, { view: 'blocks' })
+    expect(read.blocks?.[0].mermaid).toMatchObject({ source: 'x'.repeat(16384), sourceTruncated: true })
+  })
+})
+
+it('reports effective legacy diagram fitting and refuses settings the legacy version would discard', async () => {
+  ensureCrypto()
+  const text = JSON.stringify({
+    root: { type: 'root', children: [{ type: 'mermaid', version: 4, code: 'graph TD', fitMode: 'fitWidth' }] },
+  })
+  const read = await readAssistantSuperStructure(text, { view: 'blocks' })
+  expect(read.blocks?.[0].mermaid?.settings.fitMode).toBe('fitBoth')
+  const result = await applyAssistantSuperPatch(text, {
+    base: read.revision,
+    operations: [{ type: 'update-mermaid', target: { path: [0] }, mermaidSettings: { fitMode: 'fitWidth' } }],
+  })
+  expect(result.ok).toBe(false)
+})

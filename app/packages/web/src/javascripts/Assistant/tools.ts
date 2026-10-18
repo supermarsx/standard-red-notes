@@ -2517,7 +2517,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'notes.patchBlocks',
     description:
-      'Atomically patch exact Super/Lexical blocks against the base revision from notes.readBlocks. For formatted content insert block.kind:"markdown-fragment" (canonical Markdown -> native Lexical heading/list/check/quote/code/link/marks) or block.kind:"rich-fragment" (explicit runs including underline). paragraph/heading/list-item/checklist-item text is deliberately literal. Also supports exact formatted-leaf replacement, checklist toggle, move/delete, and bounded attrs. Refuses stale/ambiguous locators and never recreates a note.',
+      'Atomically patch exact Super/Lexical blocks against the base revision from notes.readBlocks. For formatted content insert block.kind:"markdown-fragment" (canonical Markdown -> native Lexical heading/list/check/quote/code/link/marks) or block.kind:"rich-fragment" (explicit runs including underline). paragraph/heading/list-item/checklist-item text is deliberately literal. Also supports exact formatted-leaf replacement, checklist toggle, move/delete, bounded attrs, and update-mermaid (source/expectedSource/mermaidSettings) preserving existing diagram settings. Insert diagrams with markdown-fragment containing a fenced mermaid block. Refuses stale/ambiguous locators and never recreates a note.',
     mutating: true,
     inputSchema: {
       type: 'object',
@@ -2535,7 +2535,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
           items: {
             type: 'object',
             description:
-              'Operation object. type is insert, replace-text, toggle-checklist, move, delete, or update-attrs. All targets use an exact locator returned by notes.readBlocks.',
+              'Operation object. type is insert, replace-text, toggle-checklist, move, delete, update-attrs, or update-mermaid. All targets use an exact locator returned by notes.readBlocks.',
             properties: {
               operationId: {
                 type: 'string',
@@ -2544,11 +2544,34 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
               },
               type: {
                 type: 'string',
-                enum: ['insert', 'replace-text', 'toggle-checklist', 'move', 'delete', 'update-attrs'],
+                enum: [
+                  'insert',
+                  'replace-text',
+                  'toggle-checklist',
+                  'move',
+                  'delete',
+                  'update-attrs',
+                  'update-mermaid',
+                ],
               },
               target: ASSISTANT_BLOCK_LOCATOR_SCHEMA,
               position: { type: 'string', enum: ['before', 'after', 'inside-section'] },
               block: ASSISTANT_INSERT_BLOCK_SCHEMA,
+              source: { type: 'string', minLength: 1, maxLength: 16384 },
+              expectedSource: {
+                type: 'string',
+                description: 'Exact source from readBlocks, never a truncated prefix.',
+              },
+              mermaidSettings: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  fitMode: { type: 'string', enum: ['fitWidth', 'fitBoth', 'actual'] },
+                  alignment: { type: 'string', enum: ['left', 'center', 'right'] },
+                  background: { type: 'string', enum: ['auto', 'transparent', 'themed'] },
+                  zoomPan: { type: 'boolean' },
+                },
+              },
               expectedText: { type: 'string' },
               text: { type: 'string' },
               marks: { type: 'integer', minimum: 0 },

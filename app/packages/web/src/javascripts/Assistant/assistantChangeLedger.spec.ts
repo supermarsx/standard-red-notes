@@ -128,6 +128,16 @@ describe('assistant encrypted per-note change ledger', () => {
     expect(getAssistantChangeLedger(noteWithLedger('other-note', () => stored)).records).toEqual([])
   })
 
+  it('retains Mermaid edit effects when reloading the change ledger', () => {
+    const created = record({
+      operations: [{ ...effect(), type: 'update-mermaid', summary: 'Updated a Mermaid diagram.' }],
+    })
+    const stored = { version: 1, records: [created] } satisfies AssistantChangeLedgerEnvelope
+    const loaded = getAssistantChangeLedger(noteWithLedger('note-1', () => stored))
+    expect(loaded.records[0].operations[0].type).toBe('update-mermaid')
+    expect(loaded.records[0].undo).toEqual(created.undo)
+  })
+
   it('keeps bounded newest history and removes duplicate operation ids', () => {
     let stored: AssistantChangeLedgerEnvelope | undefined
     const note = noteWithLedger('note-1', () => stored)

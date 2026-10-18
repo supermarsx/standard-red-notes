@@ -1,3 +1,9 @@
+import {
+  MERMAID_FIT_MODES,
+  migrateMermaidFitMode,
+  MERMAID_ALIGNMENTS,
+  MERMAID_BACKGROUNDS,
+} from '@/Components/SuperEditor/Lexical/Nodes/MermaidSettings'
 import { createChecklistTodoId } from '@/Components/SuperEditor/Lexical/Nodes/ChecklistItemNode'
 import { serializedChecklistCompletion } from './noteChecklistContext'
 import {
@@ -9,6 +15,14 @@ import {
 export const MAX_ASSISTANT_SUPER_PATCH_OPERATIONS = 32
 export const MAX_ASSISTANT_SUPER_PATCH_BYTES = 64 * 1024
 export const MAX_ASSISTANT_STRUCTURE_BLOCKS = 100
+
+export const MAX_ASSISTANT_MERMAID_SOURCE = 16_384
+export type AssistantMermaidSettings = {
+  fitMode?: (typeof MERMAID_FIT_MODES)[number]
+  alignment?: (typeof MERMAID_ALIGNMENTS)[number]
+  background?: (typeof MERMAID_BACKGROUNDS)[number]
+  zoomPan?: boolean
+}
 
 type JsonObject = Record<string, unknown>
 
@@ -40,6 +54,13 @@ type AssistantStructuralPatchOperationBody =
       expectedText: string
       text: string
       marks?: number
+    }
+  | {
+      type: 'update-mermaid'
+      target: AssistantBlockLocator
+      source?: string
+      expectedSource?: string
+      mermaidSettings?: AssistantMermaidSettings
     }
   | { type: 'toggle-checklist'; target: AssistantBlockLocator; checked: boolean }
   | {
@@ -118,6 +139,7 @@ export type AssistantStructureBlock = {
     tag?: string
     value?: number
   }
+  mermaid?: { source: string; sourceTruncated: boolean; settings: AssistantMermaidSettings }
   attrs?: Record<string, unknown>
 }
 
@@ -149,6 +171,11 @@ export const ASSISTANT_SUPER_SUPPORTED_SCHEMA = {
   insertKinds: ['paragraph', 'heading', 'checklist-item', 'list-item', 'rich-fragment', 'markdown-fragment'] as const,
   richBlockTypes: ['paragraph', 'heading', 'quote', 'code', 'list'] as const,
   richListTypes: ['bullet', 'number', 'check'] as const,
+  mermaid: {
+    operation: 'update-mermaid',
+    maxSourceLength: MAX_ASSISTANT_MERMAID_SOURCE,
+    settings: ['fitMode', 'alignment', 'background', 'zoomPan'],
+  },
   inlineMarks: ['bold', 'italic', 'underline', 'strikethrough', 'code'] as const,
   markdownFragment: {
     parser: 'canonical-lexical-markdown',
@@ -455,6 +482,8 @@ function operationSummary(operation: AssistantStructuralPatchOperation): string 
       return `Moved one structural block ${operation.destination.position}.`
     case 'delete':
       return 'Deleted one structural block.'
+    case 'update-mermaid':
+      return 'Updated one Mermaid diagram.'
     case 'update-attrs':
       return 'Updated formatting or attributes on one structural block.'
   }
@@ -521,6 +550,15 @@ function safeBlock(record: NodeRecord): AssistantStructureBlock {
     path: record.path,
     type: typeof node.type === 'string' ? node.type : 'unknown',
     text: textContent(node).slice(0, 4_096),
+    ...(node.type === 'mermaid' && typeof node.code === 'string'
+      ? {
+          mermaid: {
+            source: node.code.slice(0, MAX_ASSISTANT_MERMAID_SOURCE),
+            sourceTruncated: node.code.length > MAX_ASSISTANT_MERMAID_SOURCE,
+            settings: mermaidSettings({ ...node, fitMode: migrateMermaidFitMode(node.fitMode, node.version) }, false),
+          },
+        }
+      : {}),
     ...(level ? { headingLevel: level } : {}),
     ...(completion ? { ...completion, checked: completion.checked ?? undefined } : {}),
     ...(id ? { todoId: id } : {}),
@@ -875,6 +913,30 @@ function insertExistingInsideSection(root: JsonObject, heading: NodeRecord, move
   section.children.splice(section.end, 0, moved)
 }
 
+function mermaidSettings(value: JsonObject, strict: boolean): AssistantMermaidSettings {
+  const result: AssistantMermaidSettings = {}
+  const choices = { fitMode: MERMAID_FIT_MODES, alignment: MERMAID_ALIGNMENTS, background: MERMAID_BACKGROUNDS }
+  if (strict && Object.keys(value).some((key) => ![...Object.keys(choices), 'zoomPan'].includes(key))) {
+    throw new RefusedPatchError('Unsupported Mermaid setting.')
+  }
+  for (const key of Object.keys(choices) as (keyof typeof choices)[]) {
+    if (value[key] === undefined) {
+      continue
+    }
+    if (typeof value[key] === 'string' && (choices[key] as readonly string[]).includes(value[key] as string)) {
+      Object.assign(result, { [key]: value[key] })
+    } else if (strict) {
+      throw new RefusedPatchError('Invalid Mermaid setting value.')
+    }
+  }
+  if (typeof value.zoomPan === 'boolean') {
+    result.zoomPan = value.zoomPan
+  } else if (strict && value.zoomPan !== undefined) {
+    throw new RefusedPatchError('Mermaid zoomPan must be boolean.')
+  }
+  return result
+}
+
 function applyOperation(root: JsonObject, operation: AssistantStructuralPatchOperation, idFactory: () => string): void {
   if (operation.type === 'insert') {
     const target = resolveLocator(root, operation.target)
@@ -895,6 +957,43 @@ function applyOperation(root: JsonObject, operation: AssistantStructuralPatchOpe
       throw new RefusedPatchError('toggle-checklist requires an exact checklist item locator.')
     }
     target.node.checked = operation.checked
+    return
+  }
+  if (operation.type === 'update-mermaid') {
+    const target = resolveLocator(root, operation.target)
+    if (target.node.type !== 'mermaid' || typeof target.node.code !== 'string') {
+      throw new RefusedPatchError('update-mermaid requires an exact Mermaid diagram locator.')
+    }
+    if (operation.expectedSource !== undefined && operation.expectedSource !== target.node.code) {
+      throw new RefusedPatchError('Mermaid source does not match expectedSource; re-read the diagram.')
+    }
+    if (
+      operation.source !== undefined &&
+      (typeof operation.source !== 'string' ||
+        !operation.source.trim() ||
+        operation.source.length > MAX_ASSISTANT_MERMAID_SOURCE)
+    ) {
+      throw new RefusedPatchError('Mermaid source must be nonempty and at most 16384 characters.')
+    }
+    if (operation.mermaidSettings !== undefined && !isObject(operation.mermaidSettings)) {
+      throw new RefusedPatchError('Mermaid settings must be an object.')
+    }
+    const settings = mermaidSettings(operation.mermaidSettings ?? {}, true)
+    if (
+      settings.fitMode !== undefined &&
+      migrateMermaidFitMode(settings.fitMode, target.node.version) !== settings.fitMode
+    ) {
+      throw new RefusedPatchError(
+        'This legacy diagram cannot preserve fitWidth. Open and save it in the editor before changing that setting.',
+      )
+    }
+    if (operation.source === undefined && Object.keys(settings).length === 0) {
+      throw new RefusedPatchError('update-mermaid requires source or supported settings.')
+    }
+    if (operation.source !== undefined) {
+      target.node.code = operation.source
+    }
+    Object.assign(target.node, settings)
     return
   }
   if (operation.type === 'update-attrs') {

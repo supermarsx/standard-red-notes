@@ -152,6 +152,7 @@ const OPERATION_TYPES = new Set<AssistantChangeOperation['type']>([
   'move',
   'delete',
   'update-attrs',
+  'update-mermaid',
 ])
 
 function sanitizeOperation(value: unknown): AssistantChangeOperation | undefined {

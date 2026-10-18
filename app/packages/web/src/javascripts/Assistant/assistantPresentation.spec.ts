@@ -70,3 +70,16 @@ describe('assistant tool presentation', () => {
     expect(formatAssistantConfirmationText(confirmation)).not.toContain('private-id')
   })
 })
+
+it('labels Mermaid edits without exposing diagram source in the activity summary', () => {
+  expect(
+    describeAssistantTool('notes.patchBlocks', {
+      operations: [{ type: 'update-mermaid', source: 'private diagram text' }],
+    }),
+  ).toEqual({ label: 'Updating Mermaid diagrams', detail: 'Editing diagram source or display settings in place.' })
+  expect(
+    describeAssistantTool('notes.patchBlocks', {
+      operations: [{ type: 'update-mermaid' }, { type: 'delete' }],
+    }).label,
+  ).toBe('Patching note blocks')
+})
