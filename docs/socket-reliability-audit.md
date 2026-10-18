@@ -5,7 +5,21 @@ title: Socket reliability audit
 # Socket reliability audit — 18 October 2026
 
 Reviewed revision: `76460bd88b2f130c35d429e286e23fa570f7dc8d`.
-This is an investigation, not a production fix or a claim that every socket defect has been found.
+The findings below describe that reviewed revision. The subsequent repair is recorded here; this is not a claim that every socket defect has been found.
+
+## Repair status
+
+The follow-up implementation addresses the reproduced failures:
+
+- A single generation-scoped writer orders command journaling and numbered frames across the socket lanes. Cancelled sends consume no sequence; obsolete queued work cannot act on a replacement socket. Heartbeats use the same writer.
+- Journal recovery, execution admission, and checkpoint deletion are serialized. Late checkpoints clear the matching in-memory command, without clearing unrelated pending work. Asynchronous reads recheck ownership before adopting work.
+- Undecidable authorization returns HTTP 503 or a retryable socket backend error. Real permission denials remain terminal. Authorization promises are session-fenced, one-use grants are not retained, and the reusable cache expires and is capped at 128 entries.
+- Protocol diagnostics now distinguish frame ordering, invalid envelopes, sequence exhaustion, and invalid invitation acknowledgements. Central gateway metrics record protocol closes, and recovery errors retain a closed cause code.
+- Reauthentication uses a rolling eight-per-minute budget instead of eight per socket lifetime. Socket connection establishment now has a generation-bound deadline before `onopen`.
+
+The historical reproduction patches below target the audited revision, not the repaired checkout. Their corrected regression tests now live in the normal worker, recovery, authorization, and protocol suites. Production deployment and a live browser acceptance run remain separate from these repository-level checks.
+
+Repair validation: 227 worker/recovery tests, 314 transport/diagnostics tests, 184 collaboration/shared-worker/file-transfer tests, 87 services tests, 210 API authorization tests, and 163 gateway tests passed. Web, services, and API TypeScript checks passed, with the gateway built to verify its exported contract. Scoped lint reported no errors.
 
 ## Incident and scope
 
@@ -121,4 +135,4 @@ Existing shared broker, shared-worker client, protocol mapping, and save-lane su
 
 An additional static concern needs fault-injection verification: the worker starts its AUTH deadline only after socket `onopen`, and pending recovery has no independent deadline. A connection stuck in CONNECTING could hold the ordered queue until the browser reports failure. This was not reproduced and is not counted among the confirmed runtime defects above.
 
-No production source changes were made for this audit. No assertion is made that the deployed incident is conclusively attributed, or that all race conditions are known. The next repair should address ordered sending, checkpoint reconciliation, and unavailable-versus-denied authorization together with their focused regressions, followed by multi-tab, streaming-plus-save, sleep/resume, disconnect-during-checkpoint, and genuine access-revocation integration tests. Raising limits or suppressing warnings does not repair these defects.
+The initial audit made no production source changes; the follow-up repair is summarized above. No assertion is made that the deployed incident is conclusively attributed, or that all race conditions are known. Live acceptance should include multi-tab use, streaming-plus-save, sleep/resume, disconnect-during-checkpoint, and genuine access revocation. Raising limits or suppressing warnings alone does not repair these defects.
