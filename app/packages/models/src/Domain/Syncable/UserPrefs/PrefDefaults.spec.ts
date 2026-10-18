@@ -20,6 +20,10 @@ import { PrefKey } from './PrefKey'
  * therefore a storage migration, not a rename.
  */
 describe('PrefDefaults', () => {
+  it('defaults assistant web access to Allow under its stable synced key', () => {
+    expect(PrefKey.AssistantWebAccessMode).toBe('assistantWebAccessMode')
+    expect(PrefDefaults[PrefKey.AssistantWebAccessMode]).toBe('allow')
+  })
   it('does not create a private-comment payload until the account adds a comment', () => {
     expect(PrefKey.PrivateNoteComments).toBe('privateNoteComments')
     expect(PrefDefaults[PrefKey.PrivateNoteComments]).toBeUndefined()

@@ -1,3 +1,4 @@
+import { AssistantWebAccessPolicy, getAssistantWebAccessMode } from './assistantWebAccessPolicy'
 import {
   AssistantUserQuestion,
   AssistantUserAnswer,
@@ -213,6 +214,8 @@ export interface AssistantToolContext {
   /** Resolves to true if the user approves a mutating action. */
   requestConfirmation: (request: AssistantToolConfirmation, signal?: AbortSignal) => Promise<boolean>
   /** Optional policy hook; when present it decides whether this call needs an approval. */
+  isWebToolDenied?: (action: 'search' | 'fetch') => boolean
+  requestWebConfirmation?: (action: 'search' | 'fetch', value: string) => Promise<boolean>
   shouldRequestConfirmation?: (request: AssistantToolConfirmation, mutating: boolean) => boolean
   /** Records a bounded display-only authorization decision against a live tool card. */
   onAuthorization?: (
@@ -368,6 +371,8 @@ export class AssistantTools implements ToolSession {
   }
 
   /** True if the SuperEditor feature is entitled (Super notes can be created). */
+  private readonly webAccessPolicy = new AssistantWebAccessPolicy()
+
   private canUseSuper(): boolean {
     return (
       this.application.features.getFeatureStatus(
@@ -409,18 +414,31 @@ export class AssistantTools implements ToolSession {
     }
 
     const confirmationRequest = this.buildConfirmationRequest(name, args, callId)
-    // Without a richer policy hook, preserve the legacy behavior: web tools
-    // always ask because they disclose a query/URL outside the encrypted client.
-    // When supplied, the hook is authoritative so the explicit bypass mode can
-    // skip confirmation UI; dispatch-time authorization and validation below
-    // remain unchanged.
+    // Web disclosure uses its independent Allow/Safe/Strict policy. General
+    // mutation bypass cannot weaken Strict web approvals or explicit denials.
     const isExternalDisclosure = name === 'web.search' || name === 'web.fetch'
+    const webAction = name === 'web.search' ? 'search' : 'fetch'
+    const webValue = String(name === 'web.search' ? (args.query ?? '') : (args.url ?? ''))
+    const webMode = getAssistantWebAccessMode(this.application)
+    if (isExternalDisclosure && this.context.isWebToolDenied?.(webAction)) {
+      throw new AssistantActionNotAllowedError('This web action is denied for this chat.')
+    }
+    if (isExternalDisclosure && this.webAccessPolicy.requiresApproval(webMode, webAction, webValue)) {
+      const approved = this.context.requestWebConfirmation
+        ? await this.context.requestWebConfirmation(webAction, webValue)
+        : await this.context.requestConfirmation(confirmationRequest, this.context.signal)
+      this.throwIfAborted()
+      if (!approved || this.context.isWebToolDenied?.(webAction)) {
+        throw new AssistantActionNotAllowedError('This web action was not allowed.')
+      }
+    }
     const commentPurge = name === 'comments.manage' && (args.action === 'purge-mine' || args.action === 'purge-all')
     const needsConfirmation =
-      commentPurge ||
-      (this.context.shouldRequestConfirmation
-        ? this.context.shouldRequestConfirmation(confirmationRequest, definition.mutating)
-        : isExternalDisclosure || (definition.mutating && this.context.confirmBeforeWrite))
+      !isExternalDisclosure &&
+      (commentPurge ||
+        (this.context.shouldRequestConfirmation
+          ? this.context.shouldRequestConfirmation(confirmationRequest, definition.mutating)
+          : definition.mutating && this.context.confirmBeforeWrite))
     if (needsConfirmation && name !== 'assistant.askUser') {
       this.throwIfAborted()
       const approved = this.context.signal
@@ -441,7 +459,25 @@ export class AssistantTools implements ToolSession {
       // policy (including bypass) is never an authorization decision.
       this.assertMutationAuthorized(args, name === 'notes.patchBlocks')
     }
+    if (
+      isExternalDisclosure &&
+      (!assistantInternetAccessEnabled(this.application) || this.context.isWebToolDenied?.(webAction))
+    ) {
+      throw new AssistantActionNotAllowedError('Internet access became unavailable.')
+    }
     const result = await this.dispatch(name, args, callId)
+    if (
+      name === 'web.search' &&
+      result &&
+      typeof result === 'object' &&
+      'results' in result &&
+      Array.isArray(result.results)
+    ) {
+      this.webAccessPolicy.recordSearch(
+        webMode,
+        result.results.map((entry: { url: string }) => entry.url),
+      )
+    }
     if (definition.mutating) {
       return this.markCompletedAfterCancellation(result)
     }

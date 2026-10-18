@@ -1,3 +1,6 @@
+import type { AgentOptions } from './agent'
+import { AssistantWebAccessPolicy, getAssistantWebAccessMode } from './assistantWebAccessPolicy'
+import { assistantInternetAccessEnabled } from './assistantInternetAccess'
 import { confirmDialog } from '@standardnotes/ui-services'
 import type { WebApplication } from '@/Application/WebApplication'
 import { webFetch, webSearch } from './webTools'
@@ -10,11 +13,20 @@ export interface ResearchWebSource {
 }
 
 export interface ResearchWebEvidence {
+  rateLimited?: true
   sources: ResearchWebSource[]
   status: 'retrieved' | 'unavailable' | 'declined' | 'no-results'
 }
 
+let webActivitySequence = 0
+
 export interface ResearchWebOptions {
+  onToolCall?: AgentOptions['onToolCall']
+  onToolResult?: AgentOptions['onToolResult']
+  maxSources?: number
+  excludeUrls?: ReadonlySet<string>
+  webAccessPolicy?: AssistantWebAccessPolicy
+  isWebToolDenied?: (action: 'search' | 'fetch') => boolean
   signal?: AbortSignal
   isCurrent: () => boolean
   requestConfirmation?: (action: 'search' | 'fetch', value: string) => Promise<boolean>
@@ -42,17 +54,45 @@ export async function gatherResearchWebEvidence(
       throw new Error('Research stopped because it was cancelled or the active account changed.')
     }
   }
+  const policy = options.webAccessPolicy ?? new AssistantWebAccessPolicy()
+  const maxSources = Math.min(10, Math.max(1, Math.floor(options.maxSources ?? 3)))
   const confirm = options.requestConfirmation ?? requestWebConfirmation
   const approve = async (action: 'search' | 'fetch', value: string) => {
     check()
-    const result = await confirm(action, value)
+    if (!assistantInternetAccessEnabled(application) || options.isWebToolDenied?.(action)) {
+      throw new AssistantActionNotAllowedError('This web action is disabled or denied.')
+    }
+    const needsApproval = policy.requiresApproval(getAssistantWebAccessMode(application), action, value)
+    const result = !needsApproval || (await confirm(action, value))
     check()
-    if (!result) {
+    if (!result || !assistantInternetAccessEnabled(application) || options.isWebToolDenied?.(action)) {
       throw new AssistantActionNotAllowedError(
         `The web ${action === 'search' ? 'search' : 'page read'} was not allowed. Research stopped.`,
       )
     }
     return result
+  }
+  const dispatch = async <T extends object>(
+    name: 'web.search' | 'web.fetch',
+    args: Record<string, unknown>,
+    operation: () => Promise<T>,
+  ): Promise<T> => {
+    check()
+    const id = `research-web-${Date.now()}-${++webActivitySequence}`
+    options.onToolCall?.({ id, name, args })
+    try {
+      const result = await operation()
+      const failed = 'error' in result
+      options.onToolResult?.(
+        id,
+        JSON.stringify(result).slice(0, 1000),
+        failed ? ('cancelled' in result && result.cancelled ? 'denied' : 'failed') : 'succeeded',
+      )
+      return result
+    } catch (error) {
+      options.onToolResult?.(id, 'Web request did not complete.', current() ? 'failed' : 'interrupted')
+      throw error
+    }
   }
   const query = topic.trim()
   if (!query) {
@@ -61,19 +101,26 @@ export async function gatherResearchWebEvidence(
   if (!(await approve('search', query))) {
     return { sources: [], status: 'declined' }
   }
-  const search = await webSearch(application, query, { limit: 3, signal: options.signal })
+  const searchMode = getAssistantWebAccessMode(application)
+  const search = await dispatch('web.search', { query, limit: maxSources }, () =>
+    webSearch(application, query, { limit: maxSources, signal: options.signal }),
+  )
   check()
   if ('error' in search) {
     if (search.cancelled) {
       throw new AssistantActionNotAllowedError(search.message ?? search.error)
     }
-    return { sources: [], status: 'unavailable' }
+    return { sources: [], status: 'unavailable', ...(search.rateLimited ? { rateLimited: true } : {}) }
   }
+  policy.recordSearch(
+    searchMode,
+    search.results.map((result) => result.url),
+  )
   const sources: ResearchWebSource[] = []
   let failed = false
   let declined = false
-  const seen = new Set<string>()
-  for (const result of search.results.slice(0, 3)) {
+  const seen = new Set<string>(options.excludeUrls)
+  for (const result of search.results.slice(0, maxSources)) {
     if (seen.has(result.url)) {
       continue
     }
@@ -82,10 +129,15 @@ export async function gatherResearchWebEvidence(
       declined = true
       continue
     }
-    const page = await webFetch(application, result.url, { signal: options.signal })
+    const page = await dispatch('web.fetch', { url: result.url }, () =>
+      webFetch(application, result.url, { signal: options.signal }),
+    )
     check()
     if ('error' in page && page.cancelled) {
       throw new AssistantActionNotAllowedError(page.message ?? page.error)
+    }
+    if ('error' in page && page.rateLimited) {
+      return { sources, status: 'unavailable', rateLimited: true }
     }
     if ('error' in page || !page.text.trim()) {
       failed = true

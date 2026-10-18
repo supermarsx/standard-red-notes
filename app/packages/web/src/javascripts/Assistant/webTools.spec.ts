@@ -7,6 +7,28 @@ const makeApplication = (response: unknown) => {
 }
 
 describe('assistant web tools', () => {
+  it('honors typed upstream throttling even when the gateway request succeeds', async () => {
+    const search = makeApplication({
+      ok: true,
+      status: 200,
+      data: { results: [], error: 'Upstream unavailable', rateLimited: true },
+    })
+    await expect(webSearch(search.application, 'research')).resolves.toMatchObject({ rateLimited: true })
+    const fetch = makeApplication({ ok: true, status: 200, data: { status: 429, text: 'Rate limit page' } })
+    await expect(webFetch(fetch.application, 'https://example.test')).resolves.toMatchObject({ rateLimited: true })
+    const missing = makeApplication({ ok: true, status: 200, data: { status: 404, text: 'Missing page' } })
+    expect(await webFetch(missing.application, 'https://example.test')).not.toHaveProperty('text')
+  })
+  it('marks HTTP 429 as rate-limited, not permission denied', async () => {
+    const { application } = makeApplication({ ok: false, status: 429, data: {} })
+    for (const response of [
+      await webSearch(application, 'research'),
+      await webFetch(application, 'https://example.test'),
+    ]) {
+      expect(response).toMatchObject({ rateLimited: true })
+      expect(response).not.toHaveProperty('cancelled')
+    }
+  })
   it.each([401, 403])('marks HTTP %i as a terminal permission refusal for search and fetch', async (status) => {
     const { application } = makeApplication({ ok: false, status, data: { error: { message: 'Access denied.' } } })
     await expect(webSearch(application, 'research')).resolves.toMatchObject({

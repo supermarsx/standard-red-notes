@@ -55,11 +55,7 @@ describe('AssistantTools delegate', () => {
     expect(requestConfirmation).not.toHaveBeenCalled()
     enabled = true
     expect(tools.tools().some((tool) => tool.name === 'web.search')).toBe(true)
-    await expect(tools.call('web.search', { query: 'research' })).resolves.toEqual({
-      error: expect.stringContaining('disabled in Assistant settings'),
-      cancelled: true,
-      message: expect.stringContaining('disabled in Assistant settings'),
-    })
+    await expect(tools.call('web.search', { query: 'research' })).rejects.toMatchObject({ code: 'ASSISTANT_ACTION_NOT_ALLOWED' })
     expect(serverJsonRequest).not.toHaveBeenCalled()
   })
   it('exposes the delegate tool at the top level when a sub-agent runner is provided', () => {
@@ -186,11 +182,14 @@ describe('AssistantTools runtime safety', () => {
     expect(runSubAgent).not.toHaveBeenCalled()
   })
 
-  it('keeps the legacy fallback prompt before an external web disclosure and forwards the run signal', async () => {
+  it('keeps the Strict fallback prompt before an external web disclosure and forwards the run signal', async () => {
     const controller = new AbortController()
     const requestConfirmation = jest.fn(async () => true)
     const serverJsonRequest = jest.fn(async () => ({ ok: true, status: 200, data: { results: [] } }))
-    const application = { serverJsonRequest } as unknown as WebApplication
+    const application = {
+      serverJsonRequest,
+      getPreference: (key: string, fallback: unknown) => (key === 'assistantWebAccessMode' ? 'strict' : fallback),
+    } as unknown as WebApplication
     const tools = new AssistantTools(application, {
       ...makeContext(),
       signal: controller.signal,
@@ -234,14 +233,20 @@ describe('AssistantTools runtime safety', () => {
   it('rechecks cancellation after an inline decision before dispatching', async () => {
     const controller = new AbortController()
     const serverJsonRequest = jest.fn()
-    const tools = new AssistantTools({ serverJsonRequest } as unknown as WebApplication, {
-      ...makeContext(),
-      signal: controller.signal,
-      requestConfirmation: async () => {
-        controller.abort()
-        return true
+    const tools = new AssistantTools(
+      {
+        serverJsonRequest,
+        getPreference: (key: string, fallback: unknown) => (key === 'assistantWebAccessMode' ? 'strict' : fallback),
+      } as unknown as WebApplication,
+      {
+        ...makeContext(),
+        signal: controller.signal,
+        requestConfirmation: async () => {
+          controller.abort()
+          return true
+        },
       },
-    })
+    )
 
     await expect(tools.call('web.fetch', { url: 'https://example.test' })).rejects.toMatchObject({
       name: 'AbortError',
@@ -252,14 +257,20 @@ describe('AssistantTools runtime safety', () => {
   it('rechecks the account principal after an inline decision before dispatching', async () => {
     let sessionCurrent = true
     const serverJsonRequest = jest.fn()
-    const tools = new AssistantTools({ serverJsonRequest } as unknown as WebApplication, {
-      ...makeContext(),
-      isSessionCurrent: () => sessionCurrent,
-      requestConfirmation: async () => {
-        sessionCurrent = false
-        return true
+    const tools = new AssistantTools(
+      {
+        serverJsonRequest,
+        getPreference: (key: string, fallback: unknown) => (key === 'assistantWebAccessMode' ? 'strict' : fallback),
+      } as unknown as WebApplication,
+      {
+        ...makeContext(),
+        isSessionCurrent: () => sessionCurrent,
+        requestConfirmation: async () => {
+          sessionCurrent = false
+          return true
+        },
       },
-    })
+    )
 
     await expect(tools.call('web.fetch', { url: 'https://example.test' }, 'call-a')).rejects.toMatchObject({
       name: 'AbortError',
@@ -898,5 +909,59 @@ describe('AssistantTools trusted confirmation identity', () => {
       }),
     })
     expect(JSON.stringify(requestConfirmation.mock.calls[0][0])).not.toContain('private body')
+  })
+})
+
+describe('Assistant web access modes', () => {
+  it('Safe approves search and unrelated fetch, but not pages returned by that search', async () => {
+    const requestWebConfirmation = jest.fn(async () => true)
+    const serverJsonRequest = jest.fn(async (route: string) => ({
+      ok: true,
+      status: 200,
+      data: route.endsWith('search')
+        ? { results: [{ title: 'Result', url: 'https://example.test/result', snippet: '' }] }
+        : { title: 'Page', text: 'Evidence' },
+    }))
+    const tools = new AssistantTools(
+      {
+        serverJsonRequest,
+        getPreference: (key: string, fallback: unknown) => (key === 'assistantWebAccessMode' ? 'safe' : fallback),
+      } as unknown as WebApplication,
+      { ...makeContext(), requestWebConfirmation },
+    )
+    await tools.call('web.search', { query: 'topic' })
+    await tools.call('web.fetch', { url: 'https://example.test/result' })
+    await tools.call('web.fetch', { url: 'https://example.test/other' })
+    expect(requestWebConfirmation.mock.calls).toEqual([
+      ['search', 'topic'],
+      ['fetch', 'https://example.test/other'],
+    ])
+  })
+  it('Allow still honors explicit chat denial before dispatch', async () => {
+    const serverJsonRequest = jest.fn()
+    const tools = new AssistantTools({ serverJsonRequest } as unknown as WebApplication, {
+      ...makeContext(),
+      isWebToolDenied: () => true,
+    })
+    await expect(tools.call('web.search', { query: 'topic' })).rejects.toMatchObject({
+      code: 'ASSISTANT_ACTION_NOT_ALLOWED',
+    })
+    expect(serverJsonRequest).not.toHaveBeenCalled()
+  })
+  it('Strict asks even when general tool permissions use bypass', async () => {
+    const serverJsonRequest = jest.fn()
+    const requestWebConfirmation = jest.fn(async () => false)
+    const tools = new AssistantTools(
+      {
+        serverJsonRequest,
+        getPreference: (key: string, fallback: unknown) => (key === 'assistantWebAccessMode' ? 'strict' : fallback),
+      } as unknown as WebApplication,
+      { ...makeContext(), shouldRequestConfirmation: () => false, requestWebConfirmation },
+    )
+    await expect(tools.call('web.search', { query: 'topic' })).rejects.toMatchObject({
+      code: 'ASSISTANT_ACTION_NOT_ALLOWED',
+    })
+    expect(requestWebConfirmation).toHaveBeenCalledWith('search', 'topic')
+    expect(serverJsonRequest).not.toHaveBeenCalled()
   })
 })

@@ -5,13 +5,31 @@ import { webFetch, webSearch } from './webTools'
 jest.mock('./webTools', () => ({ webSearch: jest.fn(), webFetch: jest.fn() }))
 const search = jest.mocked(webSearch)
 const fetchPage = jest.mocked(webFetch)
-const application = {} as WebApplication
+const application = {
+  getPreference: (key: string, fallback: unknown) => (key === 'assistantWebAccessMode' ? 'strict' : fallback),
+} as WebApplication
 const result = (n: number) => ({ title: `Page ${n}`, url: `https://example.com/${n}`, snippet: 'Search snippet' })
 
 beforeEach(() => {
   jest.clearAllMocks()
   search.mockResolvedValue({ results: [result(1), result(2), result(3), result(4)] })
   fetchPage.mockResolvedValue({ title: 'Fetched page', text: 'Actual page evidence' })
+})
+
+it('stops further page requests on rate limiting while retaining already retrieved sources', async () => {
+  fetchPage
+    .mockResolvedValueOnce({ title: 'First', text: 'Evidence' })
+    .mockResolvedValueOnce({ error: 'Rate limited', rateLimited: true })
+  const onToolResult = jest.fn()
+  const evidence = await gatherResearchWebEvidence(application, 'topic', {
+    isCurrent: () => true,
+    requestConfirmation: async () => true,
+    onToolResult,
+  })
+  expect(fetchPage).toHaveBeenCalledTimes(2)
+  expect(evidence).toMatchObject({ status: 'unavailable', rateLimited: true })
+  expect(evidence.sources).toHaveLength(1)
+  expect(onToolResult).toHaveBeenLastCalledWith(expect.any(String), expect.any(String), 'failed')
 })
 
 it('approves exactly one topic query and at most three pages before server dispatch', async () => {
@@ -123,4 +141,37 @@ it('deduplicates returned URLs and records only successfully retrieved pages', a
   })
   expect(fetchPage).toHaveBeenCalledTimes(2)
   expect(evidence.sources.map((source) => source.url)).toEqual(['https://example.com/2'])
+})
+
+it.each(['allow', 'safe'])('uses %s web policy for research with explicit denials still enforced', async (mode) => {
+  const app = {
+    getPreference: (key: string, fallback: unknown) => (key === 'assistantWebAccessMode' ? mode : fallback),
+  } as WebApplication
+  const requestConfirmation = jest.fn(async () => true)
+  await gatherResearchWebEvidence(app, 'topic', { isCurrent: () => true, requestConfirmation })
+  expect(requestConfirmation).toHaveBeenCalledTimes(mode === 'safe' ? 1 : 0)
+  await expect(
+    gatherResearchWebEvidence(app, 'topic', {
+      isCurrent: () => true,
+      requestConfirmation,
+      isWebToolDenied: () => true,
+    }),
+  ).rejects.toMatchObject({ code: 'ASSISTANT_ACTION_NOT_ALLOWED' })
+})
+
+it('reports each actual web request as a correlated tool activity and skips duplicates', async () => {
+  const onToolCall = jest.fn()
+  const onToolResult = jest.fn()
+  await gatherResearchWebEvidence(application, 'topic', {
+    isCurrent: () => true,
+    requestConfirmation: async () => true,
+    excludeUrls: new Set([result(1).url]),
+    onToolCall,
+    onToolResult,
+  })
+  expect(onToolCall.mock.calls.map(([call]) => call.name)).toEqual(['web.search', 'web.fetch', 'web.fetch'])
+  expect(onToolResult.mock.calls.map(([id, , outcome]) => [id, outcome])).toEqual(
+    onToolCall.mock.calls.map(([call]) => [call.id, 'succeeded']),
+  )
+  expect(new Set(onToolCall.mock.calls.map(([call]) => call.id)).size).toBe(3)
 })

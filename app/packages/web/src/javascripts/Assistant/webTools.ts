@@ -45,18 +45,22 @@ export interface WebFetchResponse {
 /** Shape of an error the model can read instead of a thrown exception. */
 export interface WebToolError {
   error: string
+  rateLimited?: true
   /** Permission refusals are terminal for an active run, not retryable evidence failures. */
   cancelled?: true
   message?: string
 }
 
 interface RawSearchData {
+  rateLimited?: unknown
   results?: unknown
   error?: unknown
   message?: unknown
 }
 
 interface RawFetchData {
+  status?: unknown
+  rateLimited?: unknown
   title?: unknown
   text?: unknown
   error?: unknown
@@ -195,12 +199,15 @@ export async function webSearch(
         const message = describeHttpError(status, data)
         return { error: message, cancelled: true, message }
       }
-      return { error: describeHttpError(status, data) }
+      return { error: describeHttpError(status, data), ...(status === 429 ? { rateLimited: true as const } : {}) }
     }
 
     const serverError = asSafeErrorMessage(data.error) || asSafeErrorMessage(data.message)
     if (serverError) {
-      return { error: `Web search is unavailable: ${serverError}` }
+      return {
+        error: `Web search is unavailable: ${serverError}`,
+        ...(data.rateLimited === true ? { rateLimited: true as const } : {}),
+      }
     }
     if (!Array.isArray(data.results)) {
       return { error: 'Web search returned an invalid response. Please try again later.' }
@@ -278,14 +285,23 @@ export async function webFetch(
         const message = describeHttpError(status, data)
         return { error: message, cancelled: true, message }
       }
-      return { error: describeHttpError(status, data) }
+      return { error: describeHttpError(status, data), ...(status === 429 ? { rateLimited: true as const } : {}) }
     }
 
     const serverError = asSafeErrorMessage(data.error) || asSafeErrorMessage(data.message)
     if (serverError) {
-      return { error: `Web fetch is unavailable: ${serverError}` }
+      return {
+        error: `Web fetch is unavailable: ${serverError}`,
+        ...(data.rateLimited === true ? { rateLimited: true as const } : {}),
+      }
     }
 
+    if (typeof data.status === 'number' && data.status >= 400) {
+      return {
+        error: `Web page returned HTTP ${data.status}.`,
+        ...(data.status === 429 ? { rateLimited: true as const } : {}),
+      }
+    }
     return {
       title: asString(data.title),
       text: asString(data.text),
