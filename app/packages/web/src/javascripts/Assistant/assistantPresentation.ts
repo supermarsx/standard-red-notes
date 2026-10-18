@@ -118,6 +118,8 @@ export function describeAssistantTool(name: string, rawArgs: unknown): Assistant
     typeof args.title === 'string' && args.title.trim() ? `“${truncate(args.title.trim(), 100)}”` : undefined
 
   switch (name) {
+    case 'assistant.askUser':
+      return { label: 'Clarifying your request', detail: 'Choose a suggested answer or provide your own.' }
     case 'notes.create':
     case 'notes.createSuper':
       return { label: 'Creating a note', detail: title ? `New note ${title}` : 'Preparing a new note' }

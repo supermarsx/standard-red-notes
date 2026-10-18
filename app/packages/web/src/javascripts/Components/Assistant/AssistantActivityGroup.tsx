@@ -37,7 +37,11 @@ export default function AssistantActivityGroup({
         <span className="min-w-0 truncate" title={pending?.label}>
           {pending ? pending.label : `${succeeded} completed`}
         </span>
-        {(pending || streaming) && <span className="shrink-0">· Working…</span>}
+        {(pending || streaming) && (
+          <span className="shrink-0" aria-label={streaming ? 'Generating response' : undefined}>
+            · Working…
+          </span>
+        )}
         {issues.map(({ outcome, count }) => (
           <span key={outcome} className={outcome === 'interrupted' ? 'shrink-0' : 'text-danger shrink-0'}>
             · {count} {outcome}

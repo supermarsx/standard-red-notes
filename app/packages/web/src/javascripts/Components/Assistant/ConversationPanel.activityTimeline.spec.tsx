@@ -204,6 +204,45 @@ describe('Assistant conversation activity timeline', () => {
     expect(runConversationMode).toHaveBeenCalledTimes(1)
   })
 
+  it('keeps clarification answers in transcript order and encrypted history', async () => {
+    await act(async () => {
+      render()
+      await flush()
+    })
+    let answer!: ReturnType<NonNullable<AssistantToolContext['requestUserAnswer']>>
+    await act(async () => {
+      options.onTextDelta?.('I need to clarify scope.')
+      options.onToolCall?.({ id: 'question', name: 'assistant.askUser', args: {} })
+      answer = mockToolContext.requestUserAnswer!({
+        question: 'Which scope?',
+        options: ['Section', 'Note', 'Selection'],
+      })
+      await flush()
+    })
+    await act(async () => {
+      ;[...container.querySelectorAll('button')].find((button) => button.textContent === 'Section')!.click()
+      await flush()
+    })
+    await expect(answer).resolves.toEqual({ answer: 'Section', optionIndex: 0 })
+    await act(async () => {
+      options.onToolResult?.('question', '{"answer":"Section"}', 'succeeded')
+      options.onTextDelta?.('I will use that section.')
+      resolveRun({ finalText: 'I will use that section.', steps: 2, stopReason: 'end_turn' })
+      await flush()
+    })
+    const history = readAssistantChatHistoryResult(storage, scope, 'timeline-chat')
+    expect(history.status).toBe('found')
+    if (history.status === 'found') {
+      const texts = history.messages.map((message) => message.text)
+      expect(texts).toEqual(
+        expect.arrayContaining(['Question: Which scope?\n\nAnswer: Section', 'I will use that section.']),
+      )
+      expect(texts.indexOf('Question: Which scope?\n\nAnswer: Section')).toBeLessThan(
+        texts.indexOf('I will use that section.'),
+      )
+    }
+  })
+
   it('updates late tool effects in the original group and marks pending work interrupted on abort', async () => {
     await act(async () => {
       render()

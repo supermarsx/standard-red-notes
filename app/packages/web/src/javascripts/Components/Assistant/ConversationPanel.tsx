@@ -22,6 +22,8 @@ import { AssistantActionNotAllowedError } from '@/Assistant/AssistantActionNotAl
 import type { AssistantChatContextSnapshot } from '@/Assistant/assistantDirectiveContext'
 import AssistantComposer from './AssistantComposer'
 import AssistantModeSelector from './AssistantModeSelector'
+import AssistantQuestionCard from './AssistantQuestionCard'
+import { useAssistantUserQuestion } from './useAssistantUserQuestion'
 import AssistantToolPermissionSelector from './AssistantToolPermissionSelector'
 import { useAssistantComposerSync } from './useAssistantComposerSync'
 import type { AssistantChatComposerPatch } from '@/Assistant/assistantChatComposerState'
@@ -504,6 +506,8 @@ function ConversationPanelImpl({
   conversationIdentityRef.current = { accountScope, tabId }
   const consumedDirectiveIdsRef = useRef(new Set<string>())
   const sessionEpochRef = useRef(0)
+  const userQuestion = useAssistantUserQuestion(JSON.stringify([accountScope, tabId, sessionEpochRef.current]))
+  const requestUserAnswer = userQuestion.request
   const observedPrincipalRef = useRef(captureAssistantSessionPrincipal(application.sessions))
   const composerSessionValidRef = useRef(true)
   const composerSync = useAssistantComposerSync({
@@ -1835,6 +1839,7 @@ function ConversationPanelImpl({
           allowMutatingTools: false,
           onAuthorization: undefined,
           onTodosChanged: undefined,
+          requestUserAnswer: undefined,
           onNoteChange: undefined,
         }
         const subTools = new AssistantTools(application, subContext, false)
@@ -1861,6 +1866,27 @@ function ConversationPanelImpl({
         isSessionCurrent,
         confirmBeforeWrite,
         requestConfirmation,
+        requestUserAnswer: async (question, signal) => {
+          if (!isSessionCurrent()) {
+            return null
+          }
+          const answer = await requestUserAnswer(question, signal ?? controller.signal)
+          if (!isSessionCurrent() || !answer) {
+            return null
+          }
+          // Keep the explicit clarification in encrypted chat history and future
+          // context, rather than losing it with transient tool protocol results.
+          setMessagesSynced((current) => [
+            ...current,
+            {
+              kind: 'user',
+              id: newId(),
+              text: `Question: ${question.question}\n\nAnswer: ${answer.answer}`,
+            },
+          ])
+          beginSteeredResponse()
+          return answer
+        },
         shouldRequestConfirmation,
         onAuthorization: recordToolAuthorization,
         presentPane: (paneId: AppPaneId) => presentPane(paneId),
@@ -2119,6 +2145,7 @@ function ConversationPanelImpl({
       refreshUsage,
       proxyImagesAllowed,
       requestConfirmation,
+      requestUserAnswer,
       recordToolAuthorization,
       setMessagesSynced,
       setInput,
@@ -2403,6 +2430,13 @@ function ConversationPanelImpl({
               irreversible={isIrreversibleAssistantTool(pendingConfirmation.request)}
               canAllowAll={canPreflightAutoAllow(pendingConfirmation.request)}
               onResolve={resolveConfirmation}
+            />
+          )}
+          {userQuestion.pending && (
+            <AssistantQuestionCard
+              key={userQuestion.pending.token}
+              question={userQuestion.pending.question}
+              onAnswer={userQuestion.answer}
             />
           )}
           {safetyReview && (

@@ -1,4 +1,10 @@
 import {
+  AssistantUserQuestion,
+  AssistantUserAnswer,
+  normalizeAssistantUserQuestion,
+  MAX_ASSISTANT_USER_ANSWER_LENGTH,
+} from './assistantUserQuestion'
+import {
   ContentType,
   NoteContent,
   NoteMutator,
@@ -200,6 +206,8 @@ export interface AssistantToolContext {
   assistantRunId?: string
   /** Nested research agents are read-only; the visible parent owns all writes. */
   allowMutatingTools?: boolean
+  /** Resolves material ambiguity; missing UI withholds the question tool. */
+  requestUserAnswer?: (question: AssistantUserQuestion, signal?: AbortSignal) => Promise<AssistantUserAnswer | null>
   /** Whether mutating tools require user confirmation before executing. */
   confirmBeforeWrite: boolean
   /** Resolves to true if the user approves a mutating action. */
@@ -374,6 +382,7 @@ export class AssistantTools implements ToolSession {
     const allowInternet = assistantInternetAccessEnabled(this.application)
     return available.filter(
       (tool) =>
+        (tool.name !== 'assistant.askUser' || !!this.context.requestUserAnswer) &&
         !(this.context.allowMutatingTools === false && tool.mutating) &&
         (allowInternet || !tool.name.startsWith('web.')),
     )
@@ -412,7 +421,7 @@ export class AssistantTools implements ToolSession {
       (this.context.shouldRequestConfirmation
         ? this.context.shouldRequestConfirmation(confirmationRequest, definition.mutating)
         : isExternalDisclosure || (definition.mutating && this.context.confirmBeforeWrite))
-    if (needsConfirmation) {
+    if (needsConfirmation && name !== 'assistant.askUser') {
       this.throwIfAborted()
       const approved = this.context.signal
         ? await this.context.requestConfirmation(confirmationRequest, this.context.signal)
@@ -442,6 +451,8 @@ export class AssistantTools implements ToolSession {
 
   private dispatch(name: string, args: Record<string, unknown>, callId?: string): unknown | Promise<unknown> {
     switch (name) {
+      case 'assistant.askUser':
+        return this.askUser(args)
       case 'notes.list':
         return this.notesList(args)
       case 'notes.search':
@@ -508,6 +519,41 @@ export class AssistantTools implements ToolSession {
         return this.todoWrite(args)
       default:
         throw new Error(`Unhandled tool: ${name}`)
+    }
+  }
+
+  private async askUser(
+    args: Record<string, unknown>,
+  ): Promise<AssistantUserAnswer | { cancelled: true; message: string }> {
+    const question = normalizeAssistantUserQuestion(args)
+    if (!question) {
+      throw new Error(
+        'A question requires nonempty text (up to 1000 characters) and exactly three distinct options (up to 200 characters each).',
+      )
+    }
+    if (!this.context.requestUserAnswer) {
+      throw new AssistantActionNotAllowedError('Questions are unavailable in this view.')
+    }
+    const response = await this.context.requestUserAnswer(question, this.context.signal)
+    this.throwIfAborted()
+    if (response === null) {
+      return { cancelled: true, message: 'The user dismissed the question. Do not assume an answer.' }
+    }
+    if (
+      typeof response?.answer !== 'string' ||
+      !response.answer.trim() ||
+      response.answer.length > MAX_ASSISTANT_USER_ANSWER_LENGTH ||
+      (response.optionIndex !== undefined &&
+        (!Number.isInteger(response.optionIndex) ||
+          response.optionIndex < 0 ||
+          response.optionIndex > 2 ||
+          response.answer !== question.options[response.optionIndex]))
+    ) {
+      throw new Error('The question response was invalid.')
+    }
+    return {
+      answer: response.answer,
+      ...(response.optionIndex !== undefined ? { optionIndex: response.optionIndex } : {}),
     }
   }
 
@@ -2409,9 +2455,30 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
+    name: 'assistant.askUser',
+    description:
+      'Ask one concise clarification only when material ambiguity or missing information prevents the requested work. Provide exactly three distinct options; the user can also type a custom answer. Await the answer before dependent actions. Do not ask for routine implementation choices or repeat a clear instruction. A dismissed question does not authorize anything.',
+    mutating: false,
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        question: { type: 'string', minLength: 1, maxLength: 1000 },
+        options: {
+          type: 'array',
+          minItems: 3,
+          maxItems: 3,
+          uniqueItems: true,
+          items: { type: 'string', minLength: 1, maxLength: 200 },
+        },
+      },
+      required: ['question', 'options'],
+    },
+  },
+  {
     name: 'notes.create',
     description:
-      'Create a new note. By default the text is stored as PLAIN text. Pass format:"super" together with `markdown` (instead of `text`) to create a rich Super note from markdown — including ```mermaid fenced blocks, which become live diagrams (prefer notes.createSuper for this). Optionally pass editorIdentifier to create a typed note (e.g. "org.standardnotes.calendar" for a Calendar note).',
+      'Create a new note only when the user explicitly requests a new note. Otherwise edit the existing selected context; if the intended target is materially ambiguous, use assistant.askUser first. By default the text is stored as PLAIN text. Pass format:"super" together with `markdown` (instead of `text`) to create a rich Super note from markdown — including ```mermaid fenced blocks, which become live diagrams (prefer notes.createSuper for this). Optionally pass editorIdentifier to create a typed note (e.g. "org.standardnotes.calendar" for a Calendar note).',
     mutating: true,
     inputSchema: {
       type: 'object',
@@ -2457,7 +2524,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'notes.createSuper',
     description:
-      'Create a rich Super (Lexical) note from MARKDOWN. The markdown may contain headings, lists, tables, code, and ```mermaid fenced blocks (which render as live Mermaid diagrams). This is the correct way to author formatted/diagram notes — do NOT write Lexical JSON into a plain note.',
+      'Create a new rich Super (Lexical) note only when the user explicitly requests a new note; otherwise edit the selected existing note with notes.patchBlocks. Ask assistant.askUser only if the intended target is ambiguous. Takes MARKDOWN. The markdown may contain headings, lists, tables, code, and ```mermaid fenced blocks (which render as live Mermaid diagrams). This is the correct way to author formatted/diagram notes — do NOT write Lexical JSON into a plain note.',
     mutating: true,
     inputSchema: {
       type: 'object',
