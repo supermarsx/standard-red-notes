@@ -36,7 +36,7 @@ beforeEach(() => {
 describe('sampling settings clamping', () => {
   it('ships with bounded production agent defaults', () => {
     expect(DEFAULT_SAMPLING_SETTINGS.maxSteps).toBeGreaterThan(0)
-    expect(DEFAULT_SAMPLING_SETTINGS.maxSteps).toBeLessThanOrEqual(20)
+    expect(DEFAULT_SAMPLING_SETTINGS.maxSteps).toBe(50)
     expect(getMaxRunTimeMs(DEFAULT_SAMPLING_SETTINGS)).toBeLessThanOrEqual(15 * 60 * 1000)
   })
 

@@ -40,9 +40,7 @@ export interface SamplingSettings {
   /**
    * Default agent-loop step cap (model turns before a forced summary).
    * 0 means UNLIMITED (no cap — not recommended). Otherwise clamped to
-   * [1, MAX_STEPS_MAX]. The production default is deliberately modest: 16
-   * turns is enough for a useful plan/tool/result loop without allowing a
-   * forgotten run to consume hundreds of requests.
+   * [1, MAX_STEPS_MAX]. The default is 50 turns; the separate run-time limit also bounds long runs.
    */
   maxSteps: number
   /**
@@ -69,7 +67,7 @@ export const DEFAULT_SAMPLING_SETTINGS: SamplingSettings = {
   temperature: 0.7,
   topP: 1,
   maxTokens: 0,
-  maxSteps: 16,
+  maxSteps: 50,
   maxRunTime: 10,
   maxRunTimeUnit: 'minutes',
   // Provider/server profiles are authoritative until the user deliberately

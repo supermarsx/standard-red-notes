@@ -5,6 +5,7 @@ import { Title, Subtitle, Text } from '../Preferences/PreferencesComponents/Cont
 import HorizontalSeparator from '@/Components/Shared/HorizontalSeparator'
 import Switch from '@/Components/Switch/Switch'
 import {
+  DEFAULT_SAMPLING_SETTINGS,
   clampMaxRunTime,
   clampMaxSteps,
   clampTemperature,
@@ -88,8 +89,8 @@ const AgentRuntimeSettings = ({
 
         <Subtitle>Max agent steps</Subtitle>
         <Text>
-          How many model turns the agent loop may take before it stops and summarizes. Default 16. Up to {MAX_STEPS_MAX}
-          . <strong>0 = unlimited (not recommended)</strong>.
+          How many model turns the agent loop may take before it stops and summarizes. Default{' '}
+          {DEFAULT_SAMPLING_SETTINGS.maxSteps}. Up to {MAX_STEPS_MAX}. <strong>0 = unlimited (not recommended)</strong>.
         </Text>
         <input
           className="border-border bg-default mt-2 w-28 rounded border px-2 py-1.5 text-sm"
