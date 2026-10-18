@@ -304,7 +304,10 @@ export function validatePairingDockerfileContract(dockerfile) {
     errors.push(`server Dockerfile: must create ${dataPath} before USER srn`);
   }
   if (
-    !/\bchown\s+-R\s+srn:srn\b[^\n]*(?:\/opt\/server(?:\s|$)|\/opt\/server\/packages\/api-gateway\/data)/i.test(
+    !/\bchown\s+-R\s+srn:srn\b[^;&|\n]*\/opt\/server(?:\s|$)/i.test(
+      beforeUser,
+    ) &&
+    !/\bchown\s+(?:-R\s+)?srn:srn\b[^;&|\n]*\/opt\/server\/packages\/api-gateway\/data(?:\s|$)/i.test(
       beforeUser,
     )
   ) {
@@ -1435,7 +1438,9 @@ export function validateQueueEmulatorContract(
     );
   }
   if (!/^\s*if \[\[ "\$\{1:-\}" == "--check" \]\]; then$/m.test(source)) {
-    errors.push(`${label} bootstrap: must offer the --check mode the health check runs`);
+    errors.push(
+      `${label} bootstrap: must offer the --check mode the health check runs`,
+    );
   }
   if (/^\s*sleep\b/m.test(source)) {
     errors.push(`${label} bootstrap: must not sleep inside the ready hook`);
@@ -1460,9 +1465,9 @@ export function validateQueueEmulatorContract(
   const mountsBootstrap = (emulator.volumes ?? []).some(
     (volume) =>
       volume?.target === QUEUE_EMULATOR_BOOTSTRAP_TARGET &&
-      String(volume?.source ?? "").replaceAll("\\", "/").endsWith(
-        "server/docker/localstack_bootstrap.sh",
-      ),
+      String(volume?.source ?? "")
+        .replaceAll("\\", "/")
+        .endsWith("server/docker/localstack_bootstrap.sh"),
   );
   if (!mountsBootstrap) {
     errors.push(
@@ -1473,9 +1478,7 @@ export function validateQueueEmulatorContract(
   const healthCommand = Array.isArray(healthTest)
     ? healthTest.join(" ")
     : String(healthTest ?? "");
-  if (
-    !healthCommand.includes(`${QUEUE_EMULATOR_BOOTSTRAP_TARGET} --check`)
-  ) {
+  if (!healthCommand.includes(`${QUEUE_EMULATOR_BOOTSTRAP_TARGET} --check`)) {
     errors.push(
       `${label} ${serviceName}: healthcheck must run the bootstrap --check (the emulator's own health endpoint is green while no queue exists)`,
     );

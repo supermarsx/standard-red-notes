@@ -149,3 +149,17 @@ test("web artifacts are copied with their writable runtime owner instead of a re
   assert.match(source, /RUN chown nginx:nginx \/usr\/share\/nginx\/html/);
   assert.match(source, /USER nginx/);
 });
+
+test("server artifact ownership is assigned during copy without rewriting dependencies", () => {
+  const source = runtime("server/Dockerfile");
+  const copy = source.indexOf(
+    "COPY --from=build --chown=10001:10001 /opt/server /opt/server",
+  );
+  assert.ok(copy > 0);
+  assert.ok(source.indexOf("addgroup -g 10001") < copy);
+  assert.doesNotMatch(source.slice(copy), /chown -R[^\n]*\/opt\/server/);
+  assert.match(
+    source,
+    /chown srn:srn \/opt\/server \/opt\/server\/packages\/api-gateway\/data/,
+  );
+});

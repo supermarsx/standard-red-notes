@@ -129,6 +129,14 @@ RUN npm install -g corepack@0.35.0 && corepack enable
 
 WORKDIR /opt/server
 
+# Create the runtime identity/directories in a stable layer. Assign workspace
+# ownership while copying it, avoiding a recursive ownership rewrite of the
+# entire source/dependency tree on every server source change.
+RUN addgroup -g 10001 -S srn \
+  && adduser -u 10001 -S srn -G srn \
+  && mkdir -p /var/lib/server/logs /opt/shared/uploads \
+  && chown -R srn:srn /var/lib/server/logs /opt/shared/uploads
+
 # Supervisor config + entrypoint (rarely change).
 COPY docker/supervisord.conf /etc/supervisord.conf
 COPY docker/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
@@ -142,20 +150,18 @@ COPY docker/srn-admin.sh /usr/local/bin/srn-admin
 # The fully built workspace (sources, per-package dist, .yarn cache + unplugged
 # native addons, the PnP map). PnP loads packages from .yarn at runtime, so the
 # whole tree comes across from the build stage rather than re-installing.
-COPY --from=build /opt/server /opt/server
+COPY --from=build --chown=10001:10001 /opt/server /opt/server
 
 # Normalize line endings (a CRLF checkout leaves `#!/bin/bash\r`), create the
-# writable runtime dirs, and create + own everything as the unprivileged `srn`
-# user. All service ports are >1024 so no CAP_NET_BIND_SERVICE is needed.
+# writable runtime dirs. The copied workspace already belongs to `srn`.
+# All service ports are >1024 so no CAP_NET_BIND_SERVICE is needed.
 RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh /usr/local/bin/deployment-identity-env.sh /usr/local/bin/internal-grpc-lane-env.sh /usr/local/bin/srn-admin /etc/supervisord.conf \
   && find /opt/server -path '*/supervisor/*.sh' -exec sed -i 's/\r$//' {} + \
   && find /opt/server/docker -name '*.sh' -exec sed -i 's/\r$//' {} + \
   && mkdir -p /var/lib/server/logs /opt/shared/uploads /opt/server/packages/api-gateway/data \
   && chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/deployment-identity-env.sh /usr/local/bin/internal-grpc-lane-env.sh /usr/local/bin/srn-admin \
   && find /opt/server -path '*/supervisor/*.sh' -exec chmod +x {} + \
-  && addgroup -g 10001 -S srn \
-  && adduser -u 10001 -S srn -G srn \
-  && chown -R srn:srn /opt/server /var/lib/server/logs /opt/shared/uploads
+  && chown srn:srn /opt/server /opt/server/packages/api-gateway/data
 
 USER srn:srn
 

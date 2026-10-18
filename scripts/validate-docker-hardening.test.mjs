@@ -55,7 +55,8 @@ import {
 } from "./validate-docker-hardening.mjs";
 
 function deploymentIdentityFixture() {
-  const read = (relativePath) => readFileSync(resolve(relativePath), "utf8");
+  const read = (relativePath) =>
+    readFileSync(resolve(relativePath), "utf8").replace(/\r\n/g, "\n");
   return {
     appDockerfileSource: read("app/Dockerfile"),
     serverDockerfileSource: read("server/Dockerfile"),
@@ -132,6 +133,11 @@ test("ratchets immutable deployment identity across every container topology", (
       ...valid,
       [field]: valid[field].replace(current, replacement),
     };
+    assert.notEqual(
+      broken[field],
+      valid[field],
+      `fixture mutation must apply: ${field}`,
+    );
     assert.match(
       validateDeploymentIdentityContract(broken).join("\n"),
       expected,
@@ -1147,6 +1153,25 @@ test("requires the multi image to create and own the persistent gateway data dir
     USER srn:srn
   `;
   assert.deepEqual(validatePairingDockerfileContract(valid), []);
+  assert.deepEqual(
+    validatePairingDockerfileContract(
+      valid.replace(
+        "chown -R srn:srn /opt/server",
+        "chown srn:srn /opt/server /opt/server/packages/api-gateway/data",
+      ),
+    ),
+    [],
+  );
+  assert.equal(
+    validatePairingDockerfileContract(
+      valid.replace(
+        "chown -R srn:srn /opt/server",
+        "chown srn:srn /opt/server",
+      ),
+    ).length,
+    1,
+  );
+
   assert.deepEqual(
     validatePairingDockerfileContract(`
       FROM node:26-alpine
@@ -2276,7 +2301,8 @@ test("keeps the queue emulator bootstrap fast and its health meaning the topolog
     resolve("server/docker/localstack_bootstrap.sh"),
     "utf8",
   );
-  const bootstrapTarget = "/etc/localstack/init/ready.d/localstack_bootstrap.sh";
+  const bootstrapTarget =
+    "/etc/localstack/init/ready.d/localstack_bootstrap.sh";
   const config = () => ({
     services: {
       floci: {
@@ -2297,7 +2323,10 @@ test("keeps the queue emulator bootstrap fast and its health meaning the topolog
     },
   });
   const options = { label: "multi compose" };
-  assert.deepEqual(validateQueueEmulatorContract(config(), bootstrap, options), []);
+  assert.deepEqual(
+    validateQueueEmulatorContract(config(), bootstrap, options),
+    [],
+  );
 
   const failures = (mutate, source = bootstrap) => {
     const mutated = config();
@@ -2310,7 +2339,13 @@ test("keeps the queue emulator bootstrap fast and its health meaning the topolog
     /must not call awslocal/,
   );
   assert.match(
-    failures(() => {}, bootstrap.replace('if [[ "${1:-}" == "--check" ]]; then', "if false; then")),
+    failures(
+      () => {},
+      bootstrap.replace(
+        'if [[ "${1:-}" == "--check" ]]; then',
+        "if false; then",
+      ),
+    ),
     /must offer the --check mode/,
   );
   assert.match(
@@ -2339,7 +2374,7 @@ test("keeps the queue emulator bootstrap fast and its health meaning the topolog
     failures((c) => {
       c.services.floci.healthcheck.test = [
         "CMD-SHELL",
-        "curl -fsS http://localhost:4566/_localstack/health | grep -q '\"sqs\":\"running\"'",
+        'curl -fsS http://localhost:4566/_localstack/health | grep -q \'"sqs":"running"\'',
       ];
     }),
     /healthcheck must run the bootstrap --check/,
