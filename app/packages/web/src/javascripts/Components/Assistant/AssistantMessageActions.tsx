@@ -95,6 +95,10 @@ export default function AssistantMessageActions({ message, children, onRemoveMes
     }
 
     closeMenu(true)
+    const collapsedActivity = textElement.closest('details')
+    if (collapsedActivity) {
+      collapsedActivity.open = true
+    }
     const range = document.createRange()
     range.selectNodeContents(textElement)
     selection.removeAllRanges()

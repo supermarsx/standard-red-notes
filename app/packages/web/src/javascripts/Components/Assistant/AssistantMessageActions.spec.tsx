@@ -5,6 +5,7 @@ import { createRoot, Root } from 'react-dom/client'
 import { UNTRUSTED_CONTEXT_BEGIN, UNTRUSTED_CONTEXT_END } from '@/Assistant/prompts'
 import { copyTextToClipboard } from '@/Utils/copyTextToClipboard'
 import AssistantMessageActions, { assistantMessageTextForCopy } from './AssistantMessageActions'
+import { MessageBubble } from './ConversationPanel'
 
 jest.mock('@/Components/Icon/Icon', () => ({ __esModule: true, default: () => <span aria-hidden="true" /> }))
 jest.mock('@/Components/Popover/Popover', () => ({
@@ -127,6 +128,34 @@ describe('AssistantMessageActions', () => {
     )
     expect(window.getSelection()?.toString()).toBe('Only this answer')
     expect(window.getSelection()?.toString()).not.toContain('Undo tool change')
+  })
+
+  it('expands and selects progress-only text without selecting activity controls', () => {
+    const text = 'I will inspect this note.'
+    act(() =>
+      root.render(
+        <MessageBubble
+          message={{
+            id: 'progress',
+            kind: 'assistant',
+            text,
+            progressTextLength: text.length,
+            tools: [{ id: 'read', name: 'notes.read', args: {}, outcome: 'interrupted' }],
+          }}
+          onApplyNoteChange={jest.fn()}
+          onRemoveMessage={jest.fn()}
+        />,
+      ),
+    )
+    const details = container.querySelector('details')!
+    expect(details.open).toBe(false)
+    openOptions()
+    click(
+      Array.from(container.querySelectorAll('[role="menuitem"]')).find((item) => item.textContent === 'Select all')!,
+    )
+    expect(details.open).toBe(true)
+    expect(window.getSelection()?.toString()).toBe(text)
+    expect(window.getSelection()?.toString()).not.toContain('interrupted')
   })
 
   it('opens from right-click, Shift+F10, and the ContextMenu key', () => {

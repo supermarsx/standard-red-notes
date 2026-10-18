@@ -2640,7 +2640,11 @@ export const MessageBubble = memo(function MessageBubble({
               }))}
             >
               {progressText && (
-                <div aria-label="Activity updates" className="text-passive-1 whitespace-pre-wrap">
+                <div
+                  ref={!answerText ? messageTextRef : undefined}
+                  aria-label="Activity updates"
+                  className="text-passive-1 whitespace-pre-wrap"
+                >
                   {progressText}
                 </div>
               )}
