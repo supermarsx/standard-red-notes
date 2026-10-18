@@ -54,7 +54,9 @@ export class SQSEventMessageHandler implements DomainEventMessageHandlerInterfac
   /**
    * An unhandled type is acknowledged and gone, so the first occurrence per
    * type is a warning: a worker that keeps seeing types it never registered is
-   * almost always polling another service's queue.
+   * receiving unfiltered topic fan-out or polling another service's queue.
+   * Bundled deployments deliberately fan out several topics to multiple workers;
+   * this warning alone cannot distinguish that topology from misrouting.
    */
   private recordUnhandledEventType(type: string): void {
     const count = (this.unhandledEventTypes.get(type) ?? 0) + 1
@@ -65,7 +67,9 @@ export class SQSEventMessageHandler implements DomainEventMessageHandlerInterfac
     }
     this.unhandledEventTypes.set(type, count)
     if (count === 1) {
-      this.logger.warn(`unhandled event type ${type}; check the SQS_QUEUE_URL of this worker`)
+      this.logger.warn(
+        `unhandled event type ${type}; no handler registered here; verify topic subscription filters and the worker queue`,
+      )
 
       return
     }

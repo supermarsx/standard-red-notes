@@ -70,6 +70,11 @@ describe('QueuedEmailSender', () => {
 
     await expect(sender.isConfigured()).resolves.toBe(false)
     await expect(sender.sendEmail('person@example.com', 'subject', 'body')).resolves.toBe(false)
+    expect(logger.error).toHaveBeenCalledWith('Durable email delivery worker is not ready', {
+      codeTag: 'QueuedEmailSender',
+      reason: 'worker-readiness-unconfirmed',
+      action: expect.stringContaining('EmailDeliveryReadiness'),
+    })
     expect(producer.isReady).toHaveBeenCalledTimes(2)
     expect(producer.enqueue).not.toHaveBeenCalled()
   })

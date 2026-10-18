@@ -92,13 +92,91 @@ describe('EmailDeliveryRuntime', () => {
     const audit = logger()
     const runtime = new EmailDeliveryRuntime(cache, consumer, async () => true, {}, stableSecret, audit)
 
-    await expect(runtime.start()).resolves.toBe(false)
+    await expect(runtime.start()).resolves.toBe(true)
     expect(consumer.start).not.toHaveBeenCalled()
     expect(runtime.isAcceptingEmails()).toBe(false)
     expect(audit.error).toHaveBeenCalledWith(
       expect.stringContaining('capacity'),
       expect.objectContaining({ errorName: 'InsufficientCapacity' }),
     )
+    await runtime.stop()
+  })
+
+  it('retries a capacity refusal and starts delivery after capacity is restored', async () => {
+    jest.useFakeTimers()
+    const cache = redis()
+    cache.config.mockResolvedValue(['maxmemory', '1'])
+    const consumer = worker()
+    const audit = logger()
+    const runtime = new EmailDeliveryRuntime(cache, consumer, async () => true, {}, stableSecret, audit)
+    try {
+      await runtime.start()
+      await jest.advanceTimersByTimeAsync(5_000)
+      expect(runtime.isAcceptingEmails()).toBe(false)
+      expect(consumer.start).not.toHaveBeenCalled()
+      expect(cache.set).not.toHaveBeenCalled()
+      expect(audit.error).toHaveBeenCalledTimes(1)
+      cache.config.mockResolvedValue(['maxmemory', '0'])
+      await jest.advanceTimersByTimeAsync(5_000)
+      expect(runtime.isAcceptingEmails()).toBe(true)
+      expect(consumer.start).toHaveBeenCalledTimes(1)
+    } finally {
+      await runtime.stop()
+      expect(jest.getTimerCount()).toBe(0)
+      jest.useRealTimers()
+    }
+  })
+
+  it('does not resurrect the worker or heartbeat when stopped during startup', async () => {
+    jest.useFakeTimers()
+    const cache = redis()
+    let finishCapacity!: (result: unknown) => void
+    cache.config.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finishCapacity = resolve
+        }),
+    )
+    const consumer = worker()
+    const runtime = new EmailDeliveryRuntime(cache, consumer, async () => true, {}, stableSecret, logger())
+    try {
+      const starting = runtime.start()
+      await expect(runtime.start()).resolves.toBe(false)
+      const stopping = runtime.stop()
+      finishCapacity(['maxmemory', '0'])
+      await expect(starting).resolves.toBe(false)
+      await stopping
+      expect(consumer.start).not.toHaveBeenCalled()
+      expect(cache.set).not.toHaveBeenCalled()
+      expect(runtime.isAcceptingEmails()).toBe(false)
+      expect(jest.getTimerCount()).toBe(0)
+    } finally {
+      await runtime.stop()
+      jest.useRealTimers()
+    }
+  })
+
+  it('does not republish readiness when shutdown happens during relay lookup', async () => {
+    const cache = redis()
+    let finishRelay!: (result: boolean) => void
+    const configured = jest.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          finishRelay = resolve
+        }),
+    )
+    const consumer = worker()
+    const runtime = new EmailDeliveryRuntime(cache, consumer, configured, {}, stableSecret, logger())
+    const starting = runtime.start()
+    await Promise.resolve()
+    await Promise.resolve()
+    const stopping = runtime.stop()
+    finishRelay(true)
+    await starting
+    await stopping
+    expect(consumer.start).not.toHaveBeenCalled()
+    expect(cache.set).not.toHaveBeenCalled()
+    expect(runtime.isAcceptingEmails()).toBe(false)
   })
 
   it('fails readiness closed and logs only the error class when relay settings cannot be read', async () => {
@@ -120,6 +198,7 @@ describe('EmailDeliveryRuntime', () => {
     expect(cache.del).not.toHaveBeenCalled()
     expect(audit.error).toHaveBeenCalledWith('Email delivery readiness refresh failed.', {
       codeTag: 'EmailDeliveryReadiness',
+      stage: 'relay-configuration',
       errorName: 'TypeError',
     })
     expect(JSON.stringify(audit.error.mock.calls)).not.toContain('secret-bearing')
@@ -153,6 +232,33 @@ describe('EmailDeliveryRuntime', () => {
     await runtime.stop()
     expect(consumer.stop).toHaveBeenCalledTimes(2)
   })
+
+  it.each(['readiness-write', 'aof-confirmation'] as const)(
+    'identifies %s failures without exception details',
+    async (stage) => {
+      const cache = redis()
+      const failure = new Error('private redis endpoint or credentials')
+      if (stage === 'readiness-write') {
+        cache.set.mockRejectedValue(failure)
+      } else {
+        cache.waitaof.mockRejectedValue(failure)
+      }
+      const audit = logger()
+      const runtime = new EmailDeliveryRuntime(cache, worker(), async () => true, {}, stableSecret, audit)
+      try {
+        await runtime.start()
+        expect(runtime.isAcceptingEmails()).toBe(false)
+        expect(audit.error).toHaveBeenCalledWith('Email delivery readiness refresh failed.', {
+          codeTag: 'EmailDeliveryReadiness',
+          stage,
+          errorName: 'Error',
+        })
+        expect(JSON.stringify(audit.error.mock.calls)).not.toContain('private redis')
+      } finally {
+        await runtime.stop()
+      }
+    },
+  )
 
   it('continues under managed Redis when CONFIG inspection is denied', async () => {
     const cache = redis()

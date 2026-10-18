@@ -104,6 +104,9 @@ export class QueuedEmailSender implements EmailSenderInterface {
       if (!(await this.producer.isReady())) {
         this.logger.error('Durable email delivery worker is not ready', {
           codeTag: 'QueuedEmailSender',
+          reason: 'worker-readiness-unconfirmed',
+          action:
+            'Check gateway EmailDeliveryReadiness and EmailDeliveryRedisCapacity logs, relay configuration, and matching queue settings.',
         })
         return false
       }

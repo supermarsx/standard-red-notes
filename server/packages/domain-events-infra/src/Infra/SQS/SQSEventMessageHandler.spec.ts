@@ -89,7 +89,7 @@ describe('SQSEventMessageHandler', () => {
     expect(handler.handle).not.toHaveBeenCalled()
     expect(logger.warn).toHaveBeenCalledTimes(1)
     expect(logger.warn).toHaveBeenCalledWith(
-      'unhandled event type UNREGISTERED; check the SQS_QUEUE_URL of this worker',
+      'unhandled event type UNREGISTERED; no handler registered here; verify topic subscription filters and the worker queue',
     )
     expect(logger.debug).not.toHaveBeenCalled()
 
@@ -98,7 +98,7 @@ describe('SQSEventMessageHandler', () => {
 
     expect(logger.warn).toHaveBeenCalledTimes(2)
     expect(logger.warn).toHaveBeenLastCalledWith(
-      'unhandled event type ALSO_UNREGISTERED; check the SQS_QUEUE_URL of this worker',
+      'unhandled event type ALSO_UNREGISTERED; no handler registered here; verify topic subscription filters and the worker queue',
     )
     expect(logger.debug).toHaveBeenCalledWith(
       'Event handler for event type UNREGISTERED does not exist (2 unhandled so far)',

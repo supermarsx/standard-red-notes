@@ -147,7 +147,11 @@ export class EmailDeliveryRuntime {
   private started = false
   private workerRunning = false
   private acceptingEmails = false
-  private readinessState: 'unknown' | 'ready' | 'unconfigured' | 'error' = 'unknown'
+  private readinessState: 'unknown' | 'ready' | 'unconfigured' | 'capacity' | 'error' = 'unknown'
+  private generation = 0
+  private stopping: Promise<void> | undefined
+  private capacityValidated = false
+  private lastFailureStage: string | undefined
   private refreshInFlight: Promise<void> | undefined
   private readonly queueCompatibility: ValidatedEmailQueueProducerLimits
 
@@ -164,15 +168,18 @@ export class EmailDeliveryRuntime {
   }
 
   async start(): Promise<boolean> {
-    if (this.started) {
+    if (this.started || this.stopping) {
       return false
     }
-    if (!(await this.redisCapacityIsSafe())) {
-      await this.removeReadinessBestEffort()
-      return false
-    }
+    // Claim startup synchronously: concurrent start calls and shutdown cannot
+    // leave multiple heartbeat timers or resurrect the worker after stop.
     this.started = true
+    const generation = ++this.generation
+    this.capacityValidated = false
     await this.refreshReadiness()
+    if (!this.started || generation !== this.generation) {
+      return false
+    }
     this.heartbeat = setInterval(() => void this.refreshReadiness(), READINESS_HEARTBEAT_MS)
     this.heartbeat.unref?.()
     return true
@@ -190,7 +197,7 @@ export class EmailDeliveryRuntime {
       return this.refreshInFlight
     }
 
-    const operation = this.performReadinessRefresh()
+    const operation = this.performReadinessRefresh(this.generation)
     const tracked = operation.finally(() => {
       if (this.refreshInFlight === tracked) {
         this.refreshInFlight = undefined
@@ -200,36 +207,70 @@ export class EmailDeliveryRuntime {
     return tracked
   }
 
-  async stop(): Promise<void> {
+  stop(): Promise<void> {
+    if (this.stopping) {
+      return this.stopping
+    }
     this.started = false
+    this.generation++
     this.acceptingEmails = false
     if (this.heartbeat) {
       clearInterval(this.heartbeat)
       this.heartbeat = undefined
     }
-    // Begin the worker drain before awaiting a readiness refresh. This prevents
-    // an in-flight provider failure from advancing to another relay while the
-    // process is already shutting down.
-    await this.stopWorker()
-    await this.refreshInFlight
-    // A refresh that crossed the stop boundary may have started the worker;
-    // close that race before returning.
-    await this.stopWorker()
-    await this.removeReadinessBestEffort()
+    const operation = this.drainWorker().finally(() => {
+      if (this.stopping === operation) {
+        this.stopping = undefined
+      }
+    })
+    this.stopping = operation
+    return operation
   }
 
-  private async performReadinessRefresh(): Promise<void> {
+  private async drainWorker(): Promise<void> {
+    // Drain immediately, then wait for the in-flight refresh to observe its
+    // invalidated generation before finishing shutdown.
+    try {
+      await this.stopWorker()
+    } finally {
+      await this.refreshInFlight
+      await this.stopWorker()
+      await this.removeReadinessBestEffort()
+    }
+  }
+
+  private async performReadinessRefresh(generation: number): Promise<void> {
+    const current = (): boolean => this.started && this.generation === generation
     const readinessKey = emailQueueWorkerReadinessKey(
       emailQueueCompatibleKeyPrefix(this.stableSecret, undefined, this.queueCompatibility),
     )
+    let stage: 'capacity' | 'relay-configuration' | 'worker-start' | 'readiness-write' | 'aof-confirmation' = 'capacity'
     try {
-      if (!(await this.relayConfigured())) {
+      if (!this.capacityValidated) {
+        const safe = await this.redisCapacityIsSafe()
+        if (!current()) {
+          return
+        }
+        if (!safe) {
+          this.acceptingEmails = false
+          this.readinessState = 'capacity'
+          return
+        }
+        this.capacityValidated = true
+      }
+      stage = 'relay-configuration'
+      const configured = await this.relayConfigured()
+      if (!current()) {
+        return
+      }
+      if (!configured) {
         this.acceptingEmails = false
         await this.stopWorker()
         this.logReadinessTransition('unconfigured', 'Email delivery worker is waiting for an enabled relay profile.')
         return
       }
 
+      stage = 'worker-start'
       if (!this.workerRunning) {
         if (!this.worker.start()) {
           this.acceptingEmails = false
@@ -238,31 +279,38 @@ export class EmailDeliveryRuntime {
         this.workerRunning = true
       }
 
+      stage = 'readiness-write'
       await this.redis.set(
         readinessKey,
         emailQueueWorkerReadinessValue(this.stableSecret, this.queueCompatibility),
         'PX',
         READINESS_TTL_MS,
       )
+      stage = 'aof-confirmation'
       await confirmEmailQueueAofPersistence(this.redis)
+      if (!current()) {
+        return
+      }
       this.acceptingEmails = true
       this.logReadinessTransition('ready', 'Email delivery worker is ready.')
     } catch (error) {
       this.acceptingEmails = false
       await this.removeReadinessBestEffort()
       await this.stopWorker()
-      if (this.readinessState !== 'error') {
+      if (this.readinessState !== 'error' || this.lastFailureStage !== stage) {
         this.logger.error('Email delivery readiness refresh failed.', {
           codeTag: 'EmailDeliveryReadiness',
+          stage,
           errorName: errorName(error),
         })
       }
+      this.lastFailureStage = stage
       this.readinessState = 'error'
     }
   }
 
   private logReadinessTransition(
-    next: Exclude<EmailDeliveryRuntime['readinessState'], 'unknown' | 'error'>,
+    next: Exclude<EmailDeliveryRuntime['readinessState'], 'unknown' | 'error' | 'capacity'>,
     message: string,
   ): void {
     if (this.readinessState !== next) {
@@ -282,10 +330,12 @@ export class EmailDeliveryRuntime {
     try {
       const maxmemory = parseRedisMaxmemory(await this.redis.config('GET', 'maxmemory'))
       if (maxmemory > 0 && maxmemory <= this.queueCompatibility.maxTotalBytes + REDIS_CAPACITY_HEADROOM_BYTES) {
-        this.logger.error('Email delivery worker is disabled because Redis capacity is below the safety floor.', {
-          codeTag: 'EmailDeliveryRedisCapacity',
-          errorName: 'InsufficientCapacity',
-        })
+        if (this.readinessState !== 'capacity') {
+          this.logger.error('Email delivery worker is waiting because Redis capacity is below the safety floor.', {
+            codeTag: 'EmailDeliveryRedisCapacity',
+            errorName: 'InsufficientCapacity',
+          })
+        }
         return false
       }
     } catch (error) {
