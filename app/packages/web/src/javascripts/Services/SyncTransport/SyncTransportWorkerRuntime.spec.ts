@@ -239,9 +239,8 @@ const serverFrame = (
 })
 
 const flush = async () => {
-  await Promise.resolve()
-  await Promise.resolve()
-  await Promise.resolve()
+  // Drain the ordered dispatch queue and its journal/cleanup continuations.
+  for (let i = 0; i < 24; i++) await Promise.resolve()
 }
 
 const REMOTE_IDENTIFIER = 'remote-identifier-9f3c.a:b-1'
@@ -332,6 +331,248 @@ describe('SyncTransportWorkerRuntime', () => {
     })
     return { runtime, messages, sockets, outbox: sharedOutbox }
   }
+
+  it.each([1, 2])(
+    'preserves wire sequence while command journal write %s overlaps another RPC',
+    async (pausedWrite) => {
+      const harness = setup()
+      let resume!: () => void
+      const gate = new Promise<void>((resolve) => {
+        resume = resolve
+      })
+      const put = harness.outbox.put.bind(harness.outbox)
+      let writes = 0
+      jest.spyOn(harness.outbox, 'put').mockImplementation(async (record) => {
+        await put(record)
+        if (++writes === pausedWrite) await gate
+      })
+      const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS', 'API_RPC'])
+      expect(writes).toBe(pausedWrite)
+      const reading = harness.runtime.handle({
+        type: 'OPEN_RPC',
+        clientRequestId: 'concurrent-read',
+        sessionScope: SESSION_A,
+        request: {
+          method: 'GET',
+          path: '/v1/workflows/status',
+          deadlineMs: 30_000,
+          initialCreditBytes: 4096,
+          stream: false,
+        },
+      })
+      resume()
+      await reading
+      for (let i = 0; i < 8; i++) await flush()
+      const frames = socket.sent.map((entry) => JSON.parse(entry)).filter((frame) => frame.type !== 'AUTH')
+      expect(frames.map((frame) => frame.sequence)).toEqual([1, 2])
+    },
+  )
+
+  it('keeps queued RPC and invite frames ordered behind backpressure and drops cancelled work without a sequence gap', async () => {
+    const harness = setup()
+    const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, [
+      'SYNC_ITEMS',
+      'API_RPC',
+      'INVITE_EVENTS',
+    ])
+    socket.bufferedAmount = MAX_SYNC_BUFFERED_BYTES + 1
+    const open = (id: string) =>
+      harness.runtime.handle({
+        type: 'OPEN_RPC',
+        clientRequestId: id,
+        sessionScope: SESSION_A,
+        request: {
+          method: 'GET',
+          path: '/v1/workflows/status',
+          deadlineMs: 30_000,
+          initialCreditBytes: 4096,
+          stream: false,
+        },
+      })
+    const cancelled = open('cancelled-read')
+    await flush()
+    const reading = open('retained-read')
+    const subscribing = harness.runtime.handle({
+      type: 'SUBSCRIBE_INVITE_EVENTS',
+      clientRequestId: 'invite-client',
+      sessionScope: SESSION_A,
+      limit: 1,
+    })
+    await harness.runtime.handle({ type: 'CANCEL_RPC', clientRequestId: 'cancelled-read' })
+    socket.bufferedAmount = 0
+    jest.advanceTimersByTime(10)
+    await Promise.all([cancelled, reading, subscribing])
+    const frames = socket.sent.map((entry) => JSON.parse(entry)).filter((frame) => frame.type !== 'AUTH')
+    expect(frames.map((frame) => frame.type)).toEqual(['COMMAND', 'RPC_REQUEST', 'INVITE_SUBSCRIBE'])
+    expect(frames.map((frame) => frame.sequence)).toEqual([1, 2, 3])
+    expect(
+      harness.messages.filter(
+        (message) => message.type === 'RPC_ERROR' && message.clientRequestId === 'cancelled-read',
+      ),
+    ).toEqual([expect.objectContaining({ code: 'CANCELLED', safeToFallback: true })])
+  })
+
+  it('never moves an old queued frame to a replacement socket', async () => {
+    const harness = setup()
+    const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS', 'API_RPC'])
+    socket.bufferedAmount = MAX_SYNC_BUFFERED_BYTES + 1
+    const reading = harness.runtime.handle({
+      type: 'OPEN_RPC',
+      clientRequestId: 'old-read',
+      sessionScope: SESSION_A,
+      request: {
+        method: 'GET',
+        path: '/v1/workflows/status',
+        deadlineMs: 30_000,
+        initialCreditBytes: 4096,
+        stream: false,
+      },
+    })
+    await flush()
+    socket.abort()
+    await flush()
+    jest.advanceTimersByTime(1_000)
+    await flush()
+    await harness.runtime.handle({
+      type: 'CONNECT',
+      clientRequestId: 'client-1',
+      sessionScope: SESSION_A,
+      authorization: {
+        endpoint: 'wss://sync.example.test/sockets/sync',
+        ticket: 'r'.repeat(40),
+        expiresAt: Date.now() + 30_000,
+        deviceId: 'device-1',
+      },
+    })
+    const replacement = harness.sockets.at(-1)!
+    expect(replacement).not.toBe(socket)
+    replacement.open()
+    const auth = JSON.parse(replacement.sent[0])
+    replacement.receive(
+      serverFrame('AUTHENTICATED', auth.commandId, {
+        capability: 'ws-sync',
+        protocolVersion: 1,
+        operations: ['SYNC_ITEMS', 'API_RPC'],
+        nextClientSequence: 1,
+      }),
+    )
+    jest.advanceTimersByTime(10)
+    await reading
+    await flush()
+    expect(replacement.sent.map((entry) => JSON.parse(entry)).filter((frame) => frame.type === 'RPC_REQUEST')).toEqual(
+      [],
+    )
+    expect(socket.sent.map((entry) => JSON.parse(entry)).filter((frame) => frame.type === 'RPC_REQUEST')).toEqual([])
+  })
+
+  it('bounds a connection that never opens and does not let its deadline close the replacement', async () => {
+    const harness = setup()
+    await harness.runtime.handle({
+      type: 'EXECUTE',
+      clientRequestId: 'client-1',
+      body: body(),
+      sessionScope: SESSION_A,
+    })
+    const connect = () =>
+      harness.runtime.handle({
+        type: 'CONNECT',
+        clientRequestId: 'client-1',
+        sessionScope: SESSION_A,
+        authorization: {
+          endpoint: 'wss://sync.example.test/sockets/sync',
+          ticket: 't'.repeat(40),
+          expiresAt: Date.now() + 30_000,
+          deviceId: 'device-1',
+        },
+      })
+    await connect()
+    const stalled = harness.sockets[0]
+    jest.advanceTimersByTime(7_000)
+    await flush()
+    expect(stalled.closes).toContainEqual({ code: 4000, reason: 'ack-timeout' })
+    jest.advanceTimersByTime(1_000)
+    await flush()
+    await connect()
+    const replacement = harness.sockets.at(-1)!
+    replacement.open()
+    const auth = JSON.parse(replacement.sent[0])
+    replacement.receive(
+      serverFrame('AUTHENTICATED', auth.commandId, {
+        capability: 'ws-sync',
+        protocolVersion: 1,
+        operations: ['SYNC_ITEMS'],
+        nextClientSequence: 1,
+      }),
+    )
+    await flush()
+    expect(replacement.readyState).toBe(1)
+    expect(replacement.sent.map((entry) => JSON.parse(entry).type)).toContain('COMMAND')
+  })
+
+  it('does not consume a wire sequence when a congested heartbeat is skipped', async () => {
+    const harness = setup()
+    const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['API_RPC'])
+    socket.bufferedAmount = MAX_SYNC_BUFFERED_BYTES + 1
+    jest.advanceTimersByTime(30_000)
+    await flush()
+    socket.bufferedAmount = 0
+    await harness.runtime.handle({
+      type: 'OPEN_RPC',
+      clientRequestId: 'after-heartbeat',
+      sessionScope: SESSION_A,
+      request: {
+        method: 'GET',
+        path: '/v1/workflows/status',
+        deadlineMs: 30_000,
+        initialCreditBytes: 4096,
+        stream: false,
+      },
+    })
+    const frames = socket.sent.map((entry) => JSON.parse(entry)).filter((frame) => frame.type !== 'AUTH')
+    expect(frames.map((frame) => frame.type)).toEqual(['RPC_REQUEST'])
+    expect(frames.map((frame) => frame.sequence)).toEqual([1])
+  })
+
+  it('does not let a cancelled queued authorization tear down its replacement', async () => {
+    const harness = setup()
+    const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['AUTHORIZE_COLLABORATION'])
+    socket.bufferedAmount = MAX_SYNC_BUFFERED_BYTES + 1
+    const start = (id: string) =>
+      harness.runtime.handle({
+        type: 'AUTHORIZE_COLLABORATION',
+        clientRequestId: id,
+        sessionScope: SESSION_A,
+        request: {
+          noteUuid: 'note-1',
+          collaborationProtocolVersion: 3,
+          expectedRoomEpoch: ROOM_EPOCH,
+          leaseRequestId: id,
+          bootstrapChallenge: 'bootstrap-challenge-1',
+        },
+      })
+    const old = start('old-authorization')
+    await flush()
+    await harness.runtime.detachBrokerClient(new Set(['old-authorization']))
+    const replacement = start('new-authorization')
+    await flush()
+    jest.advanceTimersByTime(10)
+    await old
+    expect(socket.readyState).toBe(1)
+    expect(
+      harness.messages.filter(
+        (message) => message.type === 'COLLABORATION_FALLBACK' && message.clientRequestId === 'new-authorization',
+      ),
+    ).toEqual([])
+    socket.bufferedAmount = 0
+    jest.advanceTimersByTime(10)
+    await replacement
+    const frames = socket.sent
+      .map((entry) => JSON.parse(entry))
+      .filter((frame) => frame.type === 'COLLABORATION_AUTHORIZE')
+    expect(frames).toHaveLength(1)
+    expect(frames[0].sequence).toBe(1)
+    expect(socket.readyState).toBe(1)
+  })
 
   it('does not mint two command identities when reconnect overlaps a pending digest', async () => {
     let resume!: (value: ArrayBuffer) => void
@@ -827,7 +1068,7 @@ describe('SyncTransportWorkerRuntime', () => {
     operationId: string,
   ) => {
     expect(commandId).toBe(operationId)
-    expect(harness.messages).toContainEqual({ type: 'RECOVERY_REQUIRED', clientRequestId })
+    expect(harness.messages).toContainEqual(expect.objectContaining({ type: 'RECOVERY_REQUIRED', clientRequestId }))
     expect(harness.messages.filter((message) => message.type === 'HTTP_FALLBACK')).toHaveLength(0)
     expect(harness.outbox.records.get(commandId)).toEqual(
       expect.objectContaining({
@@ -2407,7 +2648,9 @@ describe('SyncTransportWorkerRuntime', () => {
       clientRequestId: 'client-1',
       reason: 'capability-unavailable',
     })
-    expect(recovered.messages).not.toContainEqual({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' })
+    expect(recovered.messages).not.toContainEqual(
+      expect.objectContaining({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' }),
+    )
     expect(recovered.messages.filter((message) => message.type === 'HTTP_FALLBACK')).toEqual([
       {
         type: 'HTTP_FALLBACK',
@@ -2441,7 +2684,9 @@ describe('SyncTransportWorkerRuntime', () => {
       reason: 'ticket-unavailable',
     })
 
-    expect(recovered.messages).toContainEqual({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' })
+    expect(recovered.messages).toContainEqual(
+      expect.objectContaining({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' }),
+    )
     expect(recovered.messages.filter((message) => message.type === 'HTTP_FALLBACK')).toHaveLength(0)
     expect(recovered.outbox.records.get(persistedCommand.commandId)).toEqual(
       expect.objectContaining({ dispatchedAt: expect.any(Number) }),
@@ -2657,7 +2902,9 @@ describe('SyncTransportWorkerRuntime', () => {
         await flush()
 
         expect(harness.messages).not.toContainEqual(expect.objectContaining({ type: 'RESULT' }))
-        expect(harness.messages).not.toContainEqual({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' })
+        expect(harness.messages).not.toContainEqual(
+          expect.objectContaining({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' }),
+        )
         expect(harness.messages.filter((message) => message.type === 'HTTP_FALLBACK')).toEqual([
           {
             type: 'HTTP_FALLBACK',
@@ -2789,7 +3036,9 @@ describe('SyncTransportWorkerRuntime', () => {
     await flush()
 
     expect(socket.readyState).toBe(3)
-    expect(harness.messages).not.toContainEqual({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' })
+    expect(harness.messages).not.toContainEqual(
+      expect.objectContaining({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' }),
+    )
     expect(harness.messages.at(-1)).toEqual({ type: 'NEED_TICKET', clientRequestId: 'client-1', reconnect: true })
 
     await harness.runtime.handle({
@@ -2832,7 +3081,9 @@ describe('SyncTransportWorkerRuntime', () => {
     expect(secondRefresh).toHaveLength(2)
     await harness.runtime.handle({ type: 'SESSION_REFRESH_UNAVAILABLE', refreshId: secondRefresh[1].refreshId })
     await flush()
-    expect(harness.messages).toContainEqual({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' })
+    expect(harness.messages).toContainEqual(
+      expect.objectContaining({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' }),
+    )
     expect(harness.messages.filter((message) => message.type === 'NEED_TICKET')).toHaveLength(2)
   })
 
@@ -3454,7 +3705,9 @@ describe('SyncTransportWorkerRuntime', () => {
       // minted and spent to be told the same thing.
       expect(refreshRequests(harness)).toHaveLength(1)
       expect(framesOfType(fresh, 'REAUTH')).toHaveLength(0)
-      expect(harness.messages).toContainEqual({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' })
+      expect(harness.messages).toContainEqual(
+        expect.objectContaining({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' }),
+      )
     })
 
     it('terminates without retrying when the gateway reports the session is no longer authorized', async () => {
@@ -3475,7 +3728,9 @@ describe('SyncTransportWorkerRuntime', () => {
       await flush()
 
       expect(harness.messages).toContainEqual({ type: 'SESSION_NOT_AUTHORIZED', sessionScope: SESSION_A })
-      expect(harness.messages).toContainEqual({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' })
+      expect(harness.messages).toContainEqual(
+        expect.objectContaining({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' }),
+      )
       // No re-dial and no second refresh: a revoked session is not a retryable one.
       expect(harness.messages.filter((message) => message.type === 'NEED_TICKET')).toHaveLength(1)
       expect(refreshRequests(harness)).toHaveLength(1)
@@ -3587,7 +3842,9 @@ describe('SyncTransportWorkerRuntime', () => {
     )
     await flush()
 
-    expect(harness.messages).not.toContainEqual({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' })
+    expect(harness.messages).not.toContainEqual(
+      expect.objectContaining({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' }),
+    )
     expect(harness.messages.filter((message) => message.type === 'HTTP_FALLBACK')).toEqual([
       {
         type: 'HTTP_FALLBACK',
@@ -5029,10 +5286,10 @@ describe('SyncTransportWorkerRuntime', () => {
     it.each([
       ['SOCKET_LIMIT', 'socket-limit'],
       ['SOCKET_BUDGET_LOST', 'socket-limit'],
-      ['OUT_OF_ORDER', 'server-policy'],
-      ['SEQUENCE_EXHAUSTED', 'server-policy'],
-      ['INVITE_ACK_INVALID', 'server-policy'],
-      ['INVALID_ENVELOPE', 'server-policy'],
+      ['OUT_OF_ORDER', 'frame-out-of-order'],
+      ['SEQUENCE_EXHAUSTED', 'sequence-exhausted'],
+      ['INVITE_ACK_INVALID', 'invite-ack-invalid'],
+      ['INVALID_ENVELOPE', 'invalid-envelope'],
       ['SYNC_DISABLED', 'server-unavailable'],
       ['AUTH_TIMEOUT', 'auth-failed'],
     ])('carries the gateway %s through to the fallback reason %s', async (code, reason) => {
@@ -5289,7 +5546,9 @@ describe('SyncTransportWorkerRuntime', () => {
       await flush()
       await flush()
 
-      expect(harness.messages).toContainEqual({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' })
+      expect(harness.messages).toContainEqual(
+        expect.objectContaining({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' }),
+      )
       expect(socket.readyState).toBe(3)
       expect(framesOf(socket, 'COMMAND')).toHaveLength(3)
     })
@@ -5389,7 +5648,9 @@ describe('SyncTransportWorkerRuntime', () => {
         await flush()
         await flush()
 
-        expect(harness.messages).toContainEqual({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' })
+        expect(harness.messages).toContainEqual(
+          expect.objectContaining({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' }),
+        )
         expect(harness.messages.some((message) => message.type === 'HTTP_FALLBACK')).toBe(false)
         expect(socket.readyState).toBe(3)
         expect(framesOf(socket, 'COMMAND')).toHaveLength(1)
@@ -5560,7 +5821,9 @@ describe('SyncTransportWorkerRuntime', () => {
       )
       expect(framesOf(socket, 'COMMAND')).toHaveLength(0)
       expect(httpFallbacks(harness)).toEqual([])
-      expect(harness.messages).toContainEqual({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' })
+      expect(harness.messages).toContainEqual(
+        expect.objectContaining({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' }),
+      )
     })
 
     it('waits for deletion of a proven unexecuted save before attempting durable recovery', async () => {
@@ -5854,7 +6117,9 @@ describe('SyncTransportWorkerRuntime', () => {
       await flush()
       await flush()
 
-      expect(harness.messages).toContainEqual({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' })
+      expect(harness.messages).toContainEqual(
+        expect.objectContaining({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' }),
+      )
       expect(httpFallbacks(harness)).toEqual([])
     })
 
@@ -5869,7 +6134,9 @@ describe('SyncTransportWorkerRuntime', () => {
       await flush()
       await flush()
 
-      expect(harness.messages).toContainEqual({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' })
+      expect(harness.messages).toContainEqual(
+        expect.objectContaining({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' }),
+      )
       expect(httpFallbacks(harness)).toEqual([])
     })
   })

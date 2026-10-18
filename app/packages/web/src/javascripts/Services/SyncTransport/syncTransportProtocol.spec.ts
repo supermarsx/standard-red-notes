@@ -274,6 +274,14 @@ describe('syncCloseFallbackReason', () => {
   })
 
   it('separates the eleven causes the gateway sends as 1008', () => {
+    for (const [reason, expected] of [
+      ['Sync frame sequence is out of order.', 'frame-out-of-order'],
+      ['Invalid sync protocol frame.', 'invalid-envelope'],
+      ['Sync response sequence was exhausted.', 'sequence-exhausted'],
+      ['Invite acknowledgement did not match the outstanding batch.', 'invite-ack-invalid'],
+    ] as const) {
+      expect(syncCloseFallbackReason({ code: 1008, reason, wasClean: true })).toBe(expected)
+    }
     expect(syncCloseFallbackReason({ code: 1008, reason: 'per-user connection limit exceeded', wasClean: true })).toBe(
       'socket-limit',
     )
@@ -392,13 +400,13 @@ describe('syncCloseFallbackReason', () => {
       'auth-failed',
     )
     expect(syncCloseFallbackReason({ code: 1008, wasClean: true, protocolErrorCode: 'OUT_OF_ORDER' })).toBe(
-      'server-policy',
+      'frame-out-of-order',
     )
     expect(syncCloseFallbackReason({ code: 1008, wasClean: true, protocolErrorCode: 'SEQUENCE_EXHAUSTED' })).toBe(
-      'server-policy',
+      'sequence-exhausted',
     )
     expect(syncCloseFallbackReason({ code: 1008, wasClean: true, protocolErrorCode: 'INVITE_ACK_INVALID' })).toBe(
-      'server-policy',
+      'invite-ack-invalid',
     )
     expect(syncCloseFallbackReason({ code: 1012, wasClean: true, protocolErrorCode: 'SYNC_DISABLED' })).toBe(
       'server-unavailable',

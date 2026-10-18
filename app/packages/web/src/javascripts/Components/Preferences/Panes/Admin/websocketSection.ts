@@ -251,6 +251,10 @@ export const SOCKET_FALLBACK_REASONS = [
   // through `syncFallbackDisposition`, never re-derived here.
   'rate-limited',
   'server-policy',
+  'frame-out-of-order',
+  'invalid-envelope',
+  'sequence-exhausted',
+  'invite-ack-invalid',
   'server-unavailable',
   'socket-limit',
   // One save refused before execution; counted as a lane stand-down, never a state.

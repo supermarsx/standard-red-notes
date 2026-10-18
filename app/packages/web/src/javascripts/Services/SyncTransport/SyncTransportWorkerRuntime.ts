@@ -677,7 +677,17 @@ export class SyncTransportWorkerRuntime {
   private sessionScope?: string
   private transportScope?: string
   private outboxRecord?: SyncOutboxRecord
+  /** Keep journal reads/adoption and checkpoint deletion in the same order. */
+  private journalReconciliation: Promise<void> = Promise.resolve()
+
+  private reconcileJournal(operation: () => Promise<void>): Promise<void> {
+    const pending = this.journalReconciliation.then(operation)
+    this.journalReconciliation = pending.catch(() => undefined)
+    return pending
+  }
   private sequence = 1
+  private outboundTail: Promise<void> = Promise.resolve()
+  private outboundGeneration = -1
   private accepted = false
   /** True once COMMAND bytes have been handed to WebSocket.send. */
   private commandSent = false
@@ -964,7 +974,11 @@ export class SyncTransportWorkerRuntime {
     }
   }
 
-  private async recover(
+  private recover(clientRequestId: string, sessionScope: string, replayOverHttp?: SyncFallbackReason): Promise<void> {
+    return this.reconcileJournal(() => this.recoverJournal(clientRequestId, sessionScope, replayOverHttp))
+  }
+
+  private async recoverJournal(
     clientRequestId: string,
     sessionScope: string,
     replayOverHttp?: SyncFallbackReason,
@@ -998,6 +1012,15 @@ export class SyncTransportWorkerRuntime {
     }
     try {
       if (!record || record.sessionScope !== sessionScope || record.revoked === true) {
+        // A different attached page may have completed the checkpoint. Only a
+        // successful empty read reconciles memory; storage errors never do.
+        if (!record && this.outboxRecord?.sessionScope === sessionScope) {
+          this.outboxRecord = undefined
+          this.accepted = false
+          this.commandSent = false
+          this.resultDelivered = false
+          this.cancelCommandRetry()
+        }
         this.dependencies.postMessage({ type: 'RECOVERY_EMPTY', clientRequestId })
         return
       }
@@ -1036,6 +1059,16 @@ export class SyncTransportWorkerRuntime {
           clientRequestId,
           reason: 'multi-tab-not-owner',
         })
+        return
+      }
+      // A collaboration request or shutdown can arrive during the store/owner
+      // reads even though journal consumers themselves are serialized.
+      if (
+        this.shuttingDown ||
+        this.activeBlocksNewWork() ||
+        (this.sessionScope !== undefined && this.sessionScope !== sessionScope)
+      ) {
+        this.dependencies.postMessage({ type: 'RECOVERY_REQUIRED', clientRequestId })
         return
       }
       const recoveredBody = parseStoredBody(record)
@@ -1079,7 +1112,16 @@ export class SyncTransportWorkerRuntime {
     }
   }
 
-  private async execute(
+  private execute(
+    clientRequestId: string,
+    body: AccountSyncTransportRequest,
+    sessionScope: string,
+    context?: AccountSyncTransportContext,
+  ): Promise<void> {
+    return this.reconcileJournal(() => this.executeAfterJournal(clientRequestId, body, sessionScope, context))
+  }
+
+  private async executeAfterJournal(
     clientRequestId: string,
     body: AccountSyncTransportRequest,
     sessionScope: string,
@@ -1136,6 +1178,16 @@ export class SyncTransportWorkerRuntime {
         this.postFallback(clientRequestId, normalizedBody, 'outbox-unavailable')
         return
       }
+      this.dependencies.postMessage({ type: 'RECOVERY_REQUIRED', clientRequestId })
+      return
+    }
+    // Collaboration/bootstrap messages do not use the journal queue and can
+    // acquire the active slot while the IndexedDB/owner reads are suspended.
+    if (
+      this.shuttingDown ||
+      this.activeBlocksNewWork() ||
+      (this.sessionScope !== undefined && this.sessionScope !== sessionScope)
+    ) {
       this.dependencies.postMessage({ type: 'RECOVERY_REQUIRED', clientRequestId })
       return
     }
@@ -1365,7 +1417,7 @@ export class SyncTransportWorkerRuntime {
         type: 'RPC_CANCEL',
         requestId: this.uuid(),
         commandId: this.uuid(),
-        sequence: this.sequence++,
+        sequence: this.sequence,
         payloadLength: payloadByteLength(payload),
         payload,
       }
@@ -1375,7 +1427,9 @@ export class SyncTransportWorkerRuntime {
         // The terminal local cancellation below is authoritative for the caller.
       }
     }
-    this.failRpc(rpc, code, code === 'DEADLINE_EXCEEDED', !rpc.sent)
+    if (this.rpcRequests.get(clientRequestId) === rpc) {
+      this.failRpc(rpc, code, code === 'DEADLINE_EXCEEDED', !rpc.sent)
+    }
   }
 
   private async creditRpc(clientRequestId: string, creditBytes: number): Promise<void> {
@@ -1397,14 +1451,16 @@ export class SyncTransportWorkerRuntime {
       type: 'RPC_CREDIT',
       requestId: this.uuid(),
       commandId: this.uuid(),
-      sequence: this.sequence++,
+      sequence: this.sequence,
       payloadLength: payloadByteLength(payload),
       payload,
     }
     try {
-      await this.sendWithBackpressure(JSON.stringify(frame))
+      await this.sendWithBackpressure(JSON.stringify(frame), () => this.rpcRequests.get(clientRequestId) === rpc)
     } catch {
-      this.failRpc(rpc, 'SOCKET_CLOSED', true, false)
+      if (this.rpcRequests.get(clientRequestId) === rpc) {
+        this.failRpc(rpc, 'SOCKET_CLOSED', true, false)
+      }
     }
   }
 
@@ -1487,6 +1543,7 @@ export class SyncTransportWorkerRuntime {
   }
 
   private async sendInviteAckIfReady(subscription: ActiveInviteSubscription): Promise<void> {
+    const generation = this.socketGeneration
     const cursor = subscription.awaitingAck
     if (
       this.inviteSubscription !== subscription ||
@@ -1506,18 +1563,24 @@ export class SyncTransportWorkerRuntime {
       type: 'INVITE_ACK',
       requestId: this.uuid(),
       commandId: this.uuid(),
-      sequence: this.sequence++,
+      sequence: this.sequence,
       payloadLength: payloadByteLength(payload),
       payload,
     }
     try {
-      await this.sendWithBackpressure(JSON.stringify(frame))
-      if (this.inviteSubscription === subscription) {
+      await this.sendWithBackpressure(
+        JSON.stringify(frame),
+        () => this.inviteSubscription === subscription && subscription.awaitingAck === cursor,
+      )
+      if (this.inviteSubscription === subscription && this.socketGeneration === generation) {
         subscription.cursor = cursor
         subscription.awaitingAck = undefined
         subscription.ackReady = undefined
       }
     } catch {
+      if (this.inviteSubscription !== subscription || this.socketGeneration !== generation) {
+        return
+      }
       this.dependencies.postMessage({
         type: 'INVITE_ERROR',
         clientRequestId: subscription.clientRequestId,
@@ -1613,15 +1676,17 @@ export class SyncTransportWorkerRuntime {
       type: 'FILES_DOWNLOAD_OPEN',
       requestId: download.requestId,
       commandId: download.commandId,
-      sequence: this.sequence++,
+      sequence: this.sequence,
       payloadLength: payloadByteLength(payload),
       payload,
     }
     try {
-      await this.sendWithBackpressure(JSON.stringify(frame))
+      await this.sendWithBackpressure(JSON.stringify(frame), () => this.fileDownloads.get(clientRequestId) === download)
       download.outstandingCreditBytes = request.initialCreditBytes
     } catch {
-      this.failFileDownload(download, 'SOCKET_CLOSED', true)
+      if (this.fileDownloads.get(download.clientRequestId) === download) {
+        this.failFileDownload(download, 'SOCKET_CLOSED', true)
+      }
     }
   }
 
@@ -1657,15 +1722,17 @@ export class SyncTransportWorkerRuntime {
       type: 'FILES_CREDIT',
       requestId: this.uuid(),
       commandId: this.uuid(),
-      sequence: this.sequence++,
+      sequence: this.sequence,
       payloadLength: payloadByteLength(payload),
       payload,
     }
     try {
-      await this.sendWithBackpressure(JSON.stringify(frame))
+      await this.sendWithBackpressure(JSON.stringify(frame), () => this.fileDownloads.get(clientRequestId) === download)
       download.outstandingCreditBytes += granted
     } catch {
-      this.failFileDownload(download, 'SOCKET_CLOSED', true)
+      if (this.fileDownloads.get(download.clientRequestId) === download) {
+        this.failFileDownload(download, 'SOCKET_CLOSED', true)
+      }
     }
   }
 
@@ -1687,7 +1754,7 @@ export class SyncTransportWorkerRuntime {
         type: 'FILES_CANCEL',
         requestId: this.uuid(),
         commandId: this.uuid(),
-        sequence: this.sequence++,
+        sequence: this.sequence,
         payloadLength: payloadByteLength(payload),
         payload,
       }
@@ -1697,7 +1764,9 @@ export class SyncTransportWorkerRuntime {
         // The local termination below is authoritative for the caller either way.
       }
     }
-    this.failFileDownload(download, code, code === 'DEADLINE_EXCEEDED')
+    if (this.fileDownloads.get(clientRequestId) === download) {
+      this.failFileDownload(download, code, code === 'DEADLINE_EXCEEDED')
+    }
   }
 
   private handleFilesServerFrame(download: ActiveFileDownload, frame: SyncServerFrame): void {
@@ -1981,14 +2050,16 @@ export class SyncTransportWorkerRuntime {
       type: 'FILES_UPLOAD_OPEN',
       requestId: upload.requestId,
       commandId: upload.commandId,
-      sequence: this.sequence++,
+      sequence: this.sequence,
       payloadLength: payloadByteLength(payload),
       payload,
     }
     try {
-      await this.sendWithBackpressure(JSON.stringify(frame))
+      await this.sendWithBackpressure(JSON.stringify(frame), () => this.fileUploads.get(clientRequestId) === upload)
     } catch {
-      this.failFileUpload(upload, 'SOCKET_CLOSED', true)
+      if (this.fileUploads.get(upload.clientRequestId) === upload) {
+        this.failFileUpload(upload, 'SOCKET_CLOSED', true)
+      }
     }
   }
 
@@ -2044,7 +2115,9 @@ export class SyncTransportWorkerRuntime {
     try {
       await this.sendBinaryWithBackpressure(encoded)
     } catch {
-      this.failFileUpload(upload, 'SOCKET_CLOSED', true)
+      if (this.fileUploads.get(upload.clientRequestId) === upload) {
+        this.failFileUpload(upload, 'SOCKET_CLOSED', true)
+      }
     }
   }
 
@@ -2079,7 +2152,7 @@ export class SyncTransportWorkerRuntime {
       type: 'FILES_UPLOAD_FINISH',
       requestId: this.uuid(),
       commandId: upload.commandId,
-      sequence: this.sequence++,
+      sequence: this.sequence,
       payloadLength: payloadByteLength(payload),
       payload,
     }
@@ -2088,9 +2161,14 @@ export class SyncTransportWorkerRuntime {
     // never under-estimates the risk of the upload already having been applied.
     upload.finishSent = true
     try {
-      await this.sendWithBackpressure(JSON.stringify(frame))
+      await this.sendWithBackpressure(
+        JSON.stringify(frame),
+        () => this.fileUploads.get(upload.clientRequestId) === upload,
+      )
     } catch {
-      this.failFileUpload(upload, 'SOCKET_CLOSED', true)
+      if (this.fileUploads.get(upload.clientRequestId) === upload) {
+        this.failFileUpload(upload, 'SOCKET_CLOSED', true)
+      }
     }
   }
 
@@ -2112,7 +2190,7 @@ export class SyncTransportWorkerRuntime {
         type: 'FILES_CANCEL',
         requestId: this.uuid(),
         commandId: this.uuid(),
-        sequence: this.sequence++,
+        sequence: this.sequence,
         payloadLength: payloadByteLength(payload),
         payload,
       }
@@ -2122,7 +2200,9 @@ export class SyncTransportWorkerRuntime {
         // The local termination below is authoritative for the caller regardless.
       }
     }
-    this.failFileUpload(upload, code, code === 'DEADLINE_EXCEEDED')
+    if (this.fileUploads.get(clientRequestId) === upload) {
+      this.failFileUpload(upload, code, code === 'DEADLINE_EXCEEDED')
+    }
   }
 
   private handleFileUploadServerFrame(upload: ActiveFileUpload, frame: SyncServerFrame): void {
@@ -2359,6 +2439,8 @@ export class SyncTransportWorkerRuntime {
     socket.onmessage = (event) => void this.onMessage(socket, event.data)
     socket.onerror = () => undefined
     socket.onclose = (event) => void this.onClose(socket, event)
+    // CONNECTING can otherwise wait forever without an onopen or onclose event.
+    this.startAckDeadline(AUTH_ACK_TIMEOUT_MS)
   }
 
   private onOpen(socket: SyncSocketLike): void {
@@ -2627,6 +2709,14 @@ export class SyncTransportWorkerRuntime {
             clientRequestId,
             reason: 'rate-limited',
             retryAfterMs: 10_000,
+          })
+        } else if (frame.payload.code === 'BACKEND_ERROR' || frame.payload.code === 'BACKEND_TIMEOUT') {
+          this.active = undefined
+          this.dependencies.postMessage({
+            type: 'COLLABORATION_DENIED',
+            clientRequestId: active.clientRequestId,
+            reason: 'authorization-unavailable',
+            retryAfterMs: 2_000,
           })
         } else if (frame.payload.code === 'NOT_AUTHORIZED') {
           const clientRequestId = active.clientRequestId
@@ -2937,7 +3027,7 @@ export class SyncTransportWorkerRuntime {
       type: 'REAUTH',
       requestId: refresh.commandId,
       commandId: refresh.commandId,
-      sequence: this.sequence++,
+      sequence: this.sequence,
       payloadLength: payloadByteLength(payload),
       payload,
     }
@@ -2946,9 +3036,11 @@ export class SyncTransportWorkerRuntime {
       return
     }
     try {
-      await this.sendWithBackpressure(JSON.stringify(frame))
+      await this.sendWithBackpressure(JSON.stringify(frame), () => this.sessionRefresh === refresh)
     } catch {
-      await this.settleSessionRefresh('failed')
+      if (this.sessionRefresh === refresh) {
+        await this.settleSessionRefresh('failed')
+      }
       return
     }
     if (this.sessionRefresh === refresh) {
@@ -3386,6 +3478,7 @@ export class SyncTransportWorkerRuntime {
   }
 
   private async sendInviteSubscription(subscription: ActiveInviteSubscription): Promise<void> {
+    const generation = this.socketGeneration
     if (this.inviteSubscription !== subscription || this.state !== 'READY' || this.socket?.readyState !== 1) {
       return
     }
@@ -3409,13 +3502,13 @@ export class SyncTransportWorkerRuntime {
       type: 'INVITE_SUBSCRIBE',
       requestId: subscription.commandId,
       commandId: subscription.commandId,
-      sequence: this.sequence++,
+      sequence: this.sequence,
       payloadLength: payloadByteLength(payload),
       payload,
     }
     try {
-      await this.sendWithBackpressure(JSON.stringify(frame))
-      if (this.inviteSubscription === subscription) {
+      await this.sendWithBackpressure(JSON.stringify(frame), () => this.inviteSubscription === subscription)
+      if (this.inviteSubscription === subscription && this.socketGeneration === generation) {
         subscription.sent = true
         subscription.settled = false
         // The lane is open again: whatever ownership the watch was waiting for has
@@ -3423,6 +3516,9 @@ export class SyncTransportWorkerRuntime {
         this.cancelDeferredInviteWatch()
       }
     } catch {
+      if (this.inviteSubscription !== subscription || this.socketGeneration !== generation) {
+        return
+      }
       this.dependencies.postMessage({
         type: 'INVITE_ERROR',
         clientRequestId: subscription.clientRequestId,
@@ -3631,7 +3727,7 @@ export class SyncTransportWorkerRuntime {
       type: 'RPC_REQUEST',
       requestId: rpc.commandId,
       commandId: rpc.commandId,
-      sequence: this.sequence++,
+      sequence: this.sequence,
       payloadLength: payloadByteLength(payload),
       payload,
     }
@@ -3640,10 +3736,15 @@ export class SyncTransportWorkerRuntime {
       return
     }
     try {
-      await this.sendWithBackpressure(JSON.stringify(frame))
+      await this.sendWithBackpressure(
+        JSON.stringify(frame),
+        () => this.rpcRequests.get(rpc.clientRequestId) === rpc && !rpc.sent,
+      )
       rpc.sent = true
     } catch {
-      this.failRpc(rpc, 'SOCKET_CLOSED', true, false)
+      if (this.rpcRequests.get(rpc.clientRequestId) === rpc && !rpc.sent) {
+        this.failRpc(rpc, 'SOCKET_CLOSED', true, true)
+      }
     }
   }
 
@@ -3919,7 +4020,7 @@ export class SyncTransportWorkerRuntime {
       type: 'COLLABORATION_AUTHORIZE',
       requestId,
       commandId: active.commandId,
-      sequence: this.sequence++,
+      sequence: this.sequence,
       payloadLength: payloadByteLength(payload),
       payload,
     }
@@ -3928,10 +4029,14 @@ export class SyncTransportWorkerRuntime {
       return
     }
     try {
-      await this.sendWithBackpressure(JSON.stringify(frame))
-      this.startAckDeadline(COMMAND_ACK_TIMEOUT_MS)
+      await this.sendWithBackpressure(JSON.stringify(frame), () => this.active === active)
+      if (this.active === active && this.socketGeneration === socketGeneration) {
+        this.startAckDeadline(COMMAND_ACK_TIMEOUT_MS)
+      }
     } catch {
-      await this.fallbackCollaboration('proxy-failed', false)
+      if (this.active === active && this.socketGeneration === socketGeneration) {
+        await this.fallbackCollaboration('proxy-failed', false)
+      }
     }
   }
 
@@ -4063,77 +4168,82 @@ export class SyncTransportWorkerRuntime {
       if (!current()) {
         return
       }
-      const payload = { command: 'SYNC_ITEMS' as const, body: active.body }
-      const operationId = validOperationId(active.context?.operationId) ? active.context.operationId : undefined
-      const operationIndex = validOperationIndex(active.context?.operationIndex) ? active.context.operationIndex : 0
-      const stableCommandId = operationId
-        ? operationIndex === 0
-          ? operationId
-          : `${operationId}:${operationIndex}`
-        : undefined
-      const frame: SyncClientFrame = {
-        version: SYNC_PROTOCOL_VERSION,
-        channel: SYNC_CHANNEL,
-        type: 'COMMAND',
-        requestId: this.uuid(),
-        commandId: stableCommandId ?? this.uuid(),
-        sequence: this.sequence++,
-        payloadLength: payloadByteLength(payload),
-        payload,
-        digest,
-      }
-      if (frameByteLength(frame) > MAX_SYNC_FRAME_BYTES) {
-        await this.fallback('frame-too-large', undefined, true)
-        return
-      }
-      const record: SyncOutboxRecord = {
-        ...(active.context?.socketOnly ? { socketOnly: true } : {}),
-        sessionScope: active.sessionScope,
-        transportScope,
-        commandId: frame.commandId,
-        digest,
-        sequence: frame.sequence,
-        bytes: JSON.stringify(frame),
-        createdAt: this.now(),
-        ...(operationId ? { operationId } : {}),
-      }
-      await this.persistCommandRecord(record)
-      // A committed journal write survives its socket. Keep its exact identity
-      // for the replacement's STATUS query; never mint a second command for it.
-      if (!this.shuttingDown && this.active === active) {
-        this.outboxRecord = record
-      }
-      if (!current()) {
-        return
-      }
-      this.dependencies.postMessage({
-        type: 'COMMAND_PERSISTED',
-        clientRequestId: active.clientRequestId,
-        body: active.body,
-        command: {
-          id: record.commandId,
-          digest: record.digest,
-          sequence: record.sequence,
-          ...(record.operationId ? { operationId: record.operationId } : {}),
-        },
+      await this.enqueueOutbound(async () => {
+        if (!current()) {
+          return
+        }
+        const payload = { command: 'SYNC_ITEMS' as const, body: active.body }
+        const operationId = validOperationId(active.context?.operationId) ? active.context.operationId : undefined
+        const operationIndex = validOperationIndex(active.context?.operationIndex) ? active.context.operationIndex : 0
+        const stableCommandId = operationId
+          ? operationIndex === 0
+            ? operationId
+            : `${operationId}:${operationIndex}`
+          : undefined
+        const frame: SyncClientFrame = {
+          version: SYNC_PROTOCOL_VERSION,
+          channel: SYNC_CHANNEL,
+          type: 'COMMAND',
+          requestId: this.uuid(),
+          commandId: stableCommandId ?? this.uuid(),
+          sequence: this.sequence,
+          payloadLength: payloadByteLength(payload),
+          payload,
+          digest,
+        }
+        if (frameByteLength(frame) > MAX_SYNC_FRAME_BYTES) {
+          await this.fallback('frame-too-large', undefined, true)
+          return
+        }
+        const record: SyncOutboxRecord = {
+          ...(active.context?.socketOnly ? { socketOnly: true } : {}),
+          sessionScope: active.sessionScope,
+          transportScope,
+          commandId: frame.commandId,
+          digest,
+          sequence: frame.sequence,
+          bytes: JSON.stringify(frame),
+          createdAt: this.now(),
+          ...(operationId ? { operationId } : {}),
+        }
+        await this.persistCommandRecord(record)
+        // A committed journal write survives its socket. Keep its exact identity
+        // for the replacement's STATUS query; never mint a second command for it.
+        if (!this.shuttingDown && this.active === active) {
+          this.outboxRecord = record
+        }
+        if (!current()) {
+          return
+        }
+        this.dependencies.postMessage({
+          type: 'COMMAND_PERSISTED',
+          clientRequestId: active.clientRequestId,
+          body: active.body,
+          command: {
+            id: record.commandId,
+            digest: record.digest,
+            sequence: record.sequence,
+            ...(record.operationId ? { operationId: record.operationId } : {}),
+          },
+        })
+        // Persist the ambiguous-dispatch boundary before calling WebSocket.send.
+        // A crash after this write but before the call is conservatively recovered
+        // through STATUS; it can never create a duplicate HTTP owner.
+        const dispatchingRecord: SyncOutboxRecord = { ...record, dispatchedAt: this.now() }
+        await this.persistCommandRecord(dispatchingRecord)
+        if (!this.shuttingDown && this.active === active) {
+          this.outboxRecord = dispatchingRecord
+        }
+        if (!current()) {
+          return
+        }
+        this.commandSent = true
+        this.commandFrameRequestId = frame.requestId
+        await this.writeFrameWithBackpressure(dispatchingRecord.bytes, current)
+        if (current()) {
+          this.startAckDeadline(COMMAND_ACK_TIMEOUT_MS)
+        }
       })
-      // Persist the ambiguous-dispatch boundary before calling WebSocket.send.
-      // A crash after this write but before the call is conservatively recovered
-      // through STATUS; it can never create a duplicate HTTP owner.
-      const dispatchingRecord: SyncOutboxRecord = { ...record, dispatchedAt: this.now() }
-      await this.persistCommandRecord(dispatchingRecord)
-      if (!this.shuttingDown && this.active === active) {
-        this.outboxRecord = dispatchingRecord
-      }
-      if (!current()) {
-        return
-      }
-      this.commandSent = true
-      this.commandFrameRequestId = frame.requestId
-      await this.sendWithBackpressure(dispatchingRecord.bytes)
-      if (current()) {
-        this.startAckDeadline(COMMAND_ACK_TIMEOUT_MS)
-      }
     } catch (error) {
       if (!current()) {
         return
@@ -4251,8 +4361,13 @@ export class SyncTransportWorkerRuntime {
     }
     try {
       if (resend) {
-        await this.sendWithBackpressure(this.resequencedCommand(record))
-        this.startAckDeadline(COMMAND_ACK_TIMEOUT_MS)
+        await this.sendWithBackpressure(
+          this.resequencedCommand(record),
+          () => this.outboxRecord === record && this.active !== undefined,
+        )
+        if (this.socketGeneration === socketGeneration && this.outboxRecord === record && this.active) {
+          this.startAckDeadline(COMMAND_ACK_TIMEOUT_MS)
+        }
       } else {
         await this.sendStatus(record)
       }
@@ -4260,7 +4375,9 @@ export class SyncTransportWorkerRuntime {
       // The socket died under the retry. `fallback` routes a dispatched command to
       // durable recovery, which is exactly where it would have gone without any of
       // this, so nothing is lost by the attempt.
-      await this.fallback('server-kill', record)
+      if (this.socketGeneration === socketGeneration && this.outboxRecord === record) {
+        await this.fallback('server-kill', record)
+      }
     }
   }
 
@@ -4282,7 +4399,7 @@ export class SyncTransportWorkerRuntime {
     const frame = JSON.parse(record.bytes) as SyncClientFrame
     const requestId = this.uuid()
     this.commandFrameRequestId = requestId
-    return JSON.stringify({ ...frame, requestId, sequence: this.sequence++ })
+    return JSON.stringify({ ...frame, requestId, sequence: this.sequence })
   }
 
   /**
@@ -4442,6 +4559,8 @@ export class SyncTransportWorkerRuntime {
   }
 
   private async sendStatus(record: SyncOutboxRecord): Promise<void> {
+    const active = this.active
+    const generation = this.socketGeneration
     this.commandFrameRequestId = undefined
     const payload = {}
     const frame: SyncClientFrame = {
@@ -4450,22 +4569,54 @@ export class SyncTransportWorkerRuntime {
       type: 'STATUS',
       requestId: this.uuid(),
       commandId: record.commandId,
-      sequence: this.sequence++,
+      sequence: this.sequence,
       payloadLength: payloadByteLength(payload),
       payload,
       digest: record.digest,
     }
-    await this.sendWithBackpressure(JSON.stringify(frame))
-    this.startAckDeadline(COMMAND_ACK_TIMEOUT_MS)
+    await this.sendWithBackpressure(JSON.stringify(frame), () => this.active === active && this.outboxRecord === record)
+    if (this.active === active && this.socketGeneration === generation && this.outboxRecord === record) {
+      this.startAckDeadline(COMMAND_ACK_TIMEOUT_MS)
+    }
   }
 
-  private async sendWithBackpressure(bytes: string): Promise<void> {
+  /** One generation-scoped queue owns journal preparation and numbered wire writes. */
+  private enqueueOutbound(write: () => Promise<void>): Promise<void> {
+    const socket = this.socket
+    const generation = this.socketGeneration
+    if (this.outboundGeneration !== generation) {
+      this.outboundGeneration = generation
+      this.outboundTail = Promise.resolve()
+    }
+    const pending = this.outboundTail.then(async () => {
+      if (
+        this.shuttingDown ||
+        this.socket !== socket ||
+        this.socketGeneration !== generation ||
+        socket?.readyState !== 1
+      ) {
+        throw new Error('Sync socket changed before queued write.')
+      }
+      await write()
+    })
+    this.outboundTail = pending.catch(() => undefined)
+    return pending
+  }
+
+  private sendWithBackpressure(bytes: string, current: () => boolean = () => true): Promise<void> {
+    return this.enqueueOutbound(() => this.writeFrameWithBackpressure(bytes, current))
+  }
+
+  private async writeFrameWithBackpressure(bytes: string, current: () => boolean): Promise<void> {
     const socket = this.socket
     if (!socket || socket.readyState !== 1) {
       throw new Error('Socket is not ready')
     }
     const deadline = this.now() + COMMAND_ACK_TIMEOUT_MS
     while (socket.bufferedAmount > MAX_SYNC_BUFFERED_BYTES) {
+      if (!current() || this.shuttingDown || this.socket !== socket || socket.readyState !== 1) {
+        throw new Error('Sync request ended before write.')
+      }
       if (this.now() >= deadline) {
         throw new SyncBackpressureError('Sync socket backpressure deadline exceeded before write.')
       }
@@ -4474,7 +4625,11 @@ export class SyncTransportWorkerRuntime {
         throw new Error('Sync socket changed before write.')
       }
     }
+    if (!current() || this.socket !== socket || socket.readyState !== 1 || this.shuttingDown) {
+      throw new Error('Sync request ended before write.')
+    }
     const frame = JSON.parse(bytes) as {
+      sequence: number
       type?: string
       payload?: { command?: string; body?: AccountSyncTransportRequest }
     }
@@ -4490,7 +4645,9 @@ export class SyncTransportWorkerRuntime {
     ) {
       throw new Error('The live collaboration saver lease changed before dispatch.')
     }
-    socket.send(bytes)
+    frame.sequence = this.sequence
+    socket.send(JSON.stringify(frame))
+    this.sequence += 1
   }
 
   /**
@@ -4533,21 +4690,30 @@ export class SyncTransportWorkerRuntime {
     })
   }
 
-  private async checkpointDurable(requestId: string, sessionScope: string, commandId: string): Promise<void> {
+  private checkpointDurable(requestId: string, sessionScope: string, commandId: string): Promise<void> {
+    return this.reconcileJournal(() => this.clearDurableCheckpoint(requestId, sessionScope, commandId))
+  }
+
+  private async clearDurableCheckpoint(requestId: string, sessionScope: string, commandId: string): Promise<void> {
+    const active = this.active
     try {
       await this.outbox.delete(sessionScope, commandId)
-      if (
-        this.outboxRecord?.commandId === commandId &&
-        this.outboxRecord.sessionScope === sessionScope &&
-        this.active?.sessionScope === sessionScope
-      ) {
+      if (this.outboxRecord?.commandId === commandId && this.outboxRecord.sessionScope === sessionScope) {
         this.outboxRecord = undefined
-        this.active = undefined
-        this.accepted = false
-        this.commandSent = false
-        this.resultDelivered = false
-        this.reconnectAttempts = 0
-        this.cancelCommandRetry()
+        // A disconnected request may already have been detached. Clear its
+        // journal regardless, without clearing a replacement bootstrap/request.
+        if (
+          this.active === active &&
+          (!active ||
+            (active.sessionScope === sessionScope && (active.mode === 'execute' || active.mode === 'recover')))
+        ) {
+          this.active = undefined
+          this.accepted = false
+          this.commandSent = false
+          this.resultDelivered = false
+          this.reconnectAttempts = 0
+          this.cancelCommandRetry()
+        }
       }
       this.dependencies.postMessage({ type: 'CHECKPOINT_CLEARED', requestId, sessionScope, commandId })
     } catch {
@@ -4767,9 +4933,13 @@ export class SyncTransportWorkerRuntime {
 
   private startAckDeadline(timeoutMs: number): void {
     this.clearAckDeadline()
+    const socket = this.socket
+    const generation = this.socketGeneration
     this.ackTimeout = this.scheduleTimeout(() => {
+      if (this.socket !== socket || this.socketGeneration !== generation || this.shuttingDown) {
+        return
+      }
       this.ackTimeout = undefined
-      const socket = this.socket
       if (socket) {
         socket.close(4000, 'ack-timeout')
       } else {
@@ -4810,13 +4980,24 @@ export class SyncTransportWorkerRuntime {
         type: 'PING',
         requestId: this.uuid(),
         commandId: this.outboxRecord?.commandId ?? this.uuid(),
-        sequence: this.sequence++,
+        sequence: this.sequence,
         payloadLength: payloadByteLength(payload),
         payload,
       }
       if (frameByteLength(frame) <= MAX_SYNC_FRAME_BYTES && this.socket.bufferedAmount <= MAX_SYNC_BUFFERED_BYTES) {
-        this.socket.send(JSON.stringify(frame))
-        this.awaitPong()
+        const socket = this.socket
+        void this.sendWithBackpressure(JSON.stringify(frame))
+          .then(() => {
+            if (this.socket === socket && this.state === 'READY') {
+              this.awaitPong()
+            }
+          })
+          .catch(() => {
+            // A closing generation already owns recovery; a live congested one must reconnect.
+            if (this.socket === socket && socket.readyState === 1) {
+              socket.close(4000, 'heartbeat-write-failed')
+            }
+          })
       }
     }, HEARTBEAT_INTERVAL_MS)
   }
@@ -5109,7 +5290,7 @@ export class SyncTransportWorkerRuntime {
 
   private async requireDurableRecovery(clientRequestId: string, reason: SyncFallbackReason): Promise<void> {
     this.clearAckDeadline()
-    this.dependencies.postMessage({ type: 'RECOVERY_REQUIRED', clientRequestId })
+    this.dependencies.postMessage({ type: 'RECOVERY_REQUIRED', clientRequestId, recoveryCause: reason })
     this.active = undefined
     this.resultDelivered = false
     this.accepted = false

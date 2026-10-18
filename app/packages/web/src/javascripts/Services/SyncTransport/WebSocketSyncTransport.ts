@@ -2435,10 +2435,14 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
                 ? 'COLLABORATION_RATE_LIMITED'
                 : message.reason === 'epoch-mismatch'
                   ? 'COLLABORATION_EPOCH_CHANGED'
-                  : 'COLLABORATION_NOT_AUTHORIZED',
-              message.reason === 'rate-limited',
+                  : message.reason === 'authorization-unavailable'
+                    ? 'COLLABORATION_AUTHORIZATION_UNAVAILABLE'
+                    : 'COLLABORATION_NOT_AUTHORIZED',
+              message.reason === 'rate-limited' || message.reason === 'authorization-unavailable',
               false,
-              message.reason === 'rate-limited' ? message.retryAfterMs : undefined,
+              message.reason === 'rate-limited' || message.reason === 'authorization-unavailable'
+                ? message.retryAfterMs
+                : undefined,
             ),
           )
         } else {
@@ -2471,16 +2475,24 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
         this.announceRecoveryDeferral(message.reason)
         pending.resolve(undefined)
         break
-      case 'RECOVERY_REQUIRED':
+      case 'RECOVERY_REQUIRED': {
         this.pending.delete(message.clientRequestId)
+        const cause =
+          message.recoveryCause && Object.hasOwn(SYNC_FALLBACK_REASON_EXPLANATIONS, message.recoveryCause)
+            ? ` Recovery cause: ${message.recoveryCause}.`
+            : ''
         pending.reject(
-          transportError(
-            message.reason === 'socket-save-refused'
-              ? 'The collaboration socket save was refused. Its local changes remain pending until a saving device recovers.'
-              : 'Durable sync recovery must complete before a new command can execute.',
+          Object.assign(
+            transportError(
+              message.reason === 'socket-save-refused'
+                ? 'The collaboration socket save was refused. Its local changes remain pending until a saving device recovers.'
+                : `Durable sync recovery must complete before a new command can execute.${cause}`,
+            ),
+            { code: 'SYNC_RECOVERY_REQUIRED' },
           ),
         )
         break
+      }
       case 'HTTP_FALLBACK':
         if (message.refusal !== undefined) {
           this.announceSaveRefusal(message.refusal)

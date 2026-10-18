@@ -709,6 +709,10 @@ export type SyncFallbackReason =
    * Distinct from `auth-failed`, which is the credential being rejected.
    */
   | 'server-policy'
+  | 'frame-out-of-order'
+  | 'invalid-envelope'
+  | 'sequence-exhausted'
+  | 'invite-ack-invalid'
   /**
    * The gateway is restarting, draining, or one of the stores it needs to admit a
    * socket was not ready (`1012`/`1013`). Retryable and usually short-lived — the
@@ -805,7 +809,13 @@ export const SYNC_FALLBACK_REASON_EXPLANATIONS: Record<SyncFallbackReason, strin
   'rate-limited':
     'The gateway closed the socket because this client sent frames faster than its ingress rate limit allows. Retryable after a backoff.',
   'server-policy':
-    'The gateway refused the socket on policy grounds — a disallowed origin, or a frame it would not accept. Not a credential failure.',
+    'The gateway refused the socket on policy grounds without a more specific recognised cause. Check gateway diagnostics before changing origin settings.',
+  'frame-out-of-order':
+    'The gateway rejected an out-of-order socket frame. The connection will recover before retrying pending saves.',
+  'invalid-envelope':
+    'The gateway rejected an invalid socket protocol frame. Check that the client and server builds match.',
+  'sequence-exhausted': 'The socket reached its protocol sequence limit and needs a fresh connection.',
+  'invite-ack-invalid': 'The gateway rejected an invitation acknowledgement that did not match its pending batch.',
   'server-unavailable':
     'The gateway is restarting, draining, or a store it needs to admit a socket was not ready. Retryable, and usually short-lived.',
   'socket-limit':
@@ -922,10 +932,10 @@ const SERVER_PROTOCOL_ERROR_REASONS: Readonly<Record<string, SyncFallbackReason>
   SOCKET_LIMIT: 'socket-limit',
   SOCKET_BUDGET_LOST: 'socket-limit',
   SYNC_DISABLED: 'server-unavailable',
-  INVALID_ENVELOPE: 'server-policy',
-  OUT_OF_ORDER: 'server-policy',
-  SEQUENCE_EXHAUSTED: 'server-policy',
-  INVITE_ACK_INVALID: 'server-policy',
+  INVALID_ENVELOPE: 'invalid-envelope',
+  OUT_OF_ORDER: 'frame-out-of-order',
+  SEQUENCE_EXHAUSTED: 'sequence-exhausted',
+  INVITE_ACK_INVALID: 'invite-ack-invalid',
 }
 
 /**
@@ -944,6 +954,18 @@ const SERVER_PROTOCOL_ERROR_REASONS: Readonly<Record<string, SyncFallbackReason>
  */
 function statedCloseReason(reason: string | undefined): SyncFallbackReason | undefined {
   const text = (reason ?? '').toLowerCase()
+  if (text.includes('sequence is out of order')) {
+    return 'frame-out-of-order'
+  }
+  if (text.includes('invalid sync protocol frame')) {
+    return 'invalid-envelope'
+  }
+  if (text.includes('response sequence was exhausted')) {
+    return 'sequence-exhausted'
+  }
+  if (text.includes('invite acknowledgement did not match')) {
+    return 'invite-ack-invalid'
+  }
   if (text.includes('rate limit')) {
     return 'rate-limited'
   }
@@ -1085,7 +1107,12 @@ export type SyncWorkerToMainMessage =
     }
   | { type: 'RESULT'; clientRequestId: string; commandId: string; result: unknown }
   | { type: 'RECOVERY_EMPTY'; clientRequestId: string }
-  | { type: 'RECOVERY_REQUIRED'; clientRequestId: string; reason?: 'socket-save-refused' }
+  | {
+      type: 'RECOVERY_REQUIRED'
+      clientRequestId: string
+      reason?: 'socket-save-refused'
+      recoveryCause?: SyncFallbackReason
+    }
   /**
    * There IS a durable command in the shared outbox, and it is not this tab's to
    * reconcile: another tab of this account holds the lane, so only that tab can ask
@@ -1108,7 +1135,7 @@ export type SyncWorkerToMainMessage =
       type: 'COLLABORATION_DENIED'
       clientRequestId: string
       /** Older workers omit this; absence is never evidence of permission revocation. */
-      reason?: 'epoch-mismatch' | 'not-authorized' | 'rate-limited'
+      reason?: 'epoch-mismatch' | 'not-authorized' | 'rate-limited' | 'authorization-unavailable'
       retryAfterMs?: number
     }
   | { type: 'COLLABORATION_FALLBACK'; clientRequestId: string; reason: SyncFallbackReason }

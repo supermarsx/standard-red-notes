@@ -899,23 +899,27 @@ describe('WebSocketSyncTransport', () => {
    * this rejection carries the authored-message marker — without it the production log line
    * read `{ errorType: "Error", errorCode: undefined, status: undefined }` and nothing else.
    */
-  it('rejects a required recovery with a message a log line may carry', async () => {
-    const transport = createTransport()
-    const fallback = jest.fn().mockResolvedValue(response('must-not-be-used'))
-    const recovery = transport.recoverPending(fallback)
-    await flush()
-    const recover = worker.posts.find((message) => message.type === 'RECOVER') as Extract<
-      MainToSyncWorkerMessage,
-      { type: 'RECOVER' }
-    >
-    worker.emit({ type: 'RECOVERY_REQUIRED', clientRequestId: recover.clientRequestId })
+  it.each([undefined, 'frame-out-of-order'] as const)(
+    'rejects required recovery with a log-safe cause %s',
+    async (recoveryCause) => {
+      const transport = createTransport()
+      const fallback = jest.fn().mockResolvedValue(response('must-not-be-used'))
+      const recovery = transport.recoverPending(fallback)
+      await flush()
+      const recover = worker.posts.find((message) => message.type === 'RECOVER') as Extract<
+        MainToSyncWorkerMessage,
+        { type: 'RECOVER' }
+      >
+      worker.emit({ type: 'RECOVERY_REQUIRED', clientRequestId: recover.clientRequestId, recoveryCause })
 
-    await expect(recovery).rejects.toThrow('Durable sync recovery must complete before a new command can execute.')
-    expect(safeErrorLogMetadata(await recovery.catch((error: unknown) => error)).message).toBe(
-      'Durable sync recovery must complete before a new command can execute.',
-    )
-    expect(fallback).not.toHaveBeenCalled()
-  })
+      await expect(recovery).rejects.toThrow('Durable sync recovery must complete before a new command can execute.')
+      expect(safeErrorLogMetadata(await recovery.catch((error: unknown) => error)).message).toBe(
+        `Durable sync recovery must complete before a new command can execute.${recoveryCause ? ` Recovery cause: ${recoveryCause}.` : ''}`,
+      )
+      await expect(recovery).rejects.toMatchObject({ code: 'SYNC_RECOVERY_REQUIRED' })
+      expect(fallback).not.toHaveBeenCalled()
+    },
+  )
 
   it('returns recovered A under the recovery contract and only then executes fresh B', async () => {
     const transport = createTransport()
@@ -2013,6 +2017,7 @@ describe('WebSocketSyncTransport', () => {
     ['epoch-mismatch', 'COLLABORATION_EPOCH_CHANGED'],
     ['not-authorized', 'COLLABORATION_NOT_AUTHORIZED'],
     ['rate-limited', 'COLLABORATION_RATE_LIMITED'],
+    ['authorization-unavailable', 'COLLABORATION_AUTHORIZATION_UNAVAILABLE'],
   ] as const)('preserves typed collaboration denial %s for scoped recovery', async (reason, code) => {
     const transport = createTransport()
     const pending = transport.authorizeCollaborationRoom('note-1', 'lease-1', 'challenge-1')
