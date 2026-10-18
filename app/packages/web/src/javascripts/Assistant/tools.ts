@@ -1517,9 +1517,18 @@ export class AssistantTools implements ToolSession {
       if (!assistantNoteSnapshotMatches(current, before)) {
         const currentBridge = getAssistantSuperNoteLiveBridge(current.uuid)
         const currentOptions = { updatedAt: current.userModifiedDate?.toISOString?.() }
-        return currentBridge
-          ? currentBridge.preparePatch(request, currentOptions)
-          : applyAssistantSuperPatch(current.text, request, currentOptions)
+        // A successful prepare is not a committed edit. Even metadata-only
+        // changes require a fresh snapshot before constructing the undo ledger.
+        const structure = currentBridge
+          ? await currentBridge.read({ view: 'outline', ...currentOptions })
+          : await readAssistantSuperStructure(current.text, { view: 'outline', ...currentOptions })
+        return {
+          ok: false,
+          status: 'conflict',
+          reason: 'The note changed while the patch was being prepared. Re-read its structure and rebase the patch.',
+          currentRevision: structure.revision,
+          rebase: { outline: structure.outline },
+        }
       }
       this.throwIfAborted()
       const updated = await this.application.mutator.changeItem<NoteMutator, SNNote>(
@@ -2272,92 +2281,223 @@ export class AssistantTools implements ToolSession {
   }
 }
 
+/** Nested unions keep the tool's root an object while expressing each exact operation shape. */
+const schemaObject = (properties: Record<string, unknown>, required: string[]) => ({
+  type: 'object',
+  additionalProperties: false,
+  properties,
+  required,
+})
 const ASSISTANT_BLOCK_LOCATOR_SCHEMA = {
   type: 'object',
   description:
-    'One exact locator returned by notes.readBlocks: nodeKey, nodeUuid, todoId, path, or a semantic heading. If a heading text repeats, include its 1-based occurrence.',
-  properties: {
-    nodeKey: { type: 'string' },
-    nodeUuid: { type: 'string' },
-    todoId: { type: 'string' },
-    path: { type: 'array', items: { type: 'integer', minimum: 0 }, maxItems: 100 },
-    heading: {
-      type: 'object',
-      properties: { text: { type: 'string' }, occurrence: { type: 'integer', minimum: 1 } },
-      required: ['text'],
-    },
-  },
-} as const
+    'Copy exactly ONE locator returned by notes.readBlocks. path is an array of nonnegative child indexes, not text or a dot-separated string. Heading occurrence is 1-based.',
+  anyOf: [
+    schemaObject({ nodeKey: { type: 'string' } }, ['nodeKey']),
+    schemaObject({ nodeUuid: { type: 'string' } }, ['nodeUuid']),
+    schemaObject({ todoId: { type: 'string' } }, ['todoId']),
+    schemaObject({ path: { type: 'array', items: { type: 'integer', minimum: 0 }, maxItems: 100 } }, ['path']),
+    schemaObject(
+      { heading: schemaObject({ text: { type: 'string' }, occurrence: { type: 'integer', minimum: 1 } }, ['text']) },
+      ['heading'],
+    ),
+  ],
+}
 
+const insertFields = {
+  text: { type: 'string', description: 'Literal text, not Markdown.' },
+  marks: { type: 'integer', minimum: 0 },
+  level: { type: 'integer', minimum: 1, maximum: 6 },
+  checked: { type: 'boolean' },
+  markdown: { type: 'string', description: 'Canonical Markdown parsed into native Lexical blocks.' },
+}
+const RICH_RUN_SCHEMA = schemaObject(
+  {
+    text: { type: 'string', maxLength: 16384 },
+    marks: { type: 'array', items: { type: 'string', enum: ['bold', 'italic', 'underline', 'strikethrough', 'code'] } },
+    style: { type: 'string', maxLength: 2048 },
+    link: { type: 'string' },
+  },
+  ['text'],
+)
+const RICH_CONTENT_SCHEMA = { type: 'array', items: RICH_RUN_SCHEMA }
+// Explicit bounded schemas avoid recursive $ref support requirements in provider adapters.
+const richListFields = (depth: number): Record<string, unknown> => ({
+  listType: { type: 'string', enum: ['bullet', 'number', 'check'] },
+  start: { type: 'integer', minimum: 1 },
+  items: {
+    type: 'array',
+    minItems: 1,
+    maxItems: 100,
+    items: schemaObject(
+      {
+        content: RICH_CONTENT_SCHEMA,
+        checked: { type: 'boolean' },
+        ...(depth < 8 ? { children: schemaObject(richListFields(depth + 1), ['listType', 'items']) } : {}),
+      },
+      ['content'],
+    ),
+  },
+})
+const RICH_BLOCK_SCHEMA = {
+  type: 'object',
+  anyOf: [
+    ...(['paragraph', 'quote', 'heading'] as const).map((type) =>
+      schemaObject(
+        {
+          type: { type: 'string', enum: [type] },
+          content: RICH_CONTENT_SCHEMA,
+          ...(type === 'heading' ? { level: { type: 'integer', minimum: 1, maximum: 6 } } : {}),
+          format: { type: 'string' },
+          indent: { type: 'integer', minimum: 0, maximum: 20 },
+          direction: { anyOf: [{ type: 'string', enum: ['ltr', 'rtl'] }, { type: 'null' }] },
+        },
+        type === 'heading' ? ['type', 'content', 'level'] : ['type', 'content'],
+      ),
+    ),
+    schemaObject(
+      {
+        type: { type: 'string', enum: ['code'] },
+        text: { type: 'string', maxLength: 16384 },
+        language: { type: 'string' },
+      },
+      ['type', 'text'],
+    ),
+    schemaObject({ type: { type: 'string', enum: ['list'] }, ...richListFields(0) }, ['type', 'listType', 'items']),
+  ],
+}
 const ASSISTANT_INSERT_BLOCK_SCHEMA = {
   type: 'object',
   description:
-    'Insert native Lexical structure. Use markdown-fragment for canonical Markdown parsing, rich-fragment for explicit inline styles/marks, or paragraph/heading/checklist-item/list-item for intentionally plain text.',
-  properties: {
-    kind: {
-      type: 'string',
-      enum: ['paragraph', 'heading', 'checklist-item', 'list-item', 'rich-fragment', 'markdown-fragment'],
+    'The inserted content lives inside block. For Markdown use block:{kind:"markdown-fragment",markdown:"..."}; never put markdown or text directly on the insert operation.',
+  anyOf: [
+    ...(['paragraph', 'heading', 'checklist-item', 'list-item'] as const).map((kind) =>
+      schemaObject(
+        {
+          kind: { type: 'string', enum: [kind] },
+          text: insertFields.text,
+          marks: insertFields.marks,
+          ...(kind === 'heading' ? { level: insertFields.level } : {}),
+          ...(kind === 'checklist-item' ? { checked: insertFields.checked } : {}),
+        },
+        ['kind', 'text'],
+      ),
+    ),
+    schemaObject({ kind: { type: 'string', enum: ['markdown-fragment'] }, markdown: insertFields.markdown }, [
+      'kind',
+      'markdown',
+    ]),
+    schemaObject(
+      {
+        kind: { type: 'string', enum: ['rich-fragment'] },
+        blocks: { type: 'array', minItems: 1, maxItems: 100, items: RICH_BLOCK_SCHEMA },
+      },
+      ['kind', 'blocks'],
+    ),
+  ],
+}
+const PATCH_POSITION_SCHEMA = { type: 'string', enum: ['before', 'after', 'inside-section'] }
+const patchOperation = (type: string, fields: Record<string, unknown>, required: string[], description: string) => ({
+  ...schemaObject(
+    {
+      type: { type: 'string', enum: [type] },
+      operationId: { type: 'string', description: 'Reuse only when retrying this exact operation.' },
+      target: ASSISTANT_BLOCK_LOCATOR_SCHEMA,
+      ...fields,
     },
-    text: {
-      type: 'string',
-      description:
-        'Literal text for paragraph/heading/checklist-item/list-item. Markdown-looking characters remain literal.',
-    },
-    level: { type: 'integer', minimum: 1, maximum: 6 },
-    checked: { type: 'boolean' },
-    marks: { type: 'integer', minimum: 0 },
-    markdown: {
-      type: 'string',
-      description:
-        'Canonical Markdown fragment parsed into native heading, quote, code, link, formatted text, nested list, and checklist nodes.',
-    },
-    blocks: {
-      type: 'array',
-      minItems: 1,
-      maxItems: 100,
-      description:
-        'Structured rich blocks. Types: paragraph, heading, quote, code, list. Text runs use {text, marks:[bold|italic|underline|strikethrough|code], style?, link?}; lists use listType bullet|number|check and items with content runs, checked?, and optional nested children list.',
-      items: {
-        type: 'object',
-        properties: {
-          type: { type: 'string', enum: ['paragraph', 'heading', 'quote', 'code', 'list'] },
-          level: { type: 'integer', minimum: 1, maximum: 6 },
-          text: { type: 'string' },
-          language: { type: 'string' },
-          listType: { type: 'string', enum: ['bullet', 'number', 'check'] },
-          start: { type: 'integer', minimum: 1 },
-          content: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                text: { type: 'string' },
-                marks: {
-                  type: 'array',
-                  items: {
-                    type: 'string',
-                    enum: ['bold', 'italic', 'underline', 'strikethrough', 'code'],
-                  },
-                },
-                style: { type: 'string' },
-                link: { type: 'string' },
-              },
-              required: ['text'],
+    ['type', 'target', ...required],
+  ),
+  description,
+})
+const ASSISTANT_PATCH_OPERATION_SCHEMA = {
+  type: 'object',
+  anyOf: [
+    patchOperation(
+      'insert',
+      { position: PATCH_POSITION_SCHEMA, block: ASSISTANT_INSERT_BLOCK_SCHEMA },
+      ['position', 'block'],
+      'Insert beside target or inside a heading section. Example: {type:"insert",target:{path:[0]},position:"after",block:{kind:"markdown-fragment",markdown:"## Summary"}}. No destination field.',
+    ),
+    patchOperation(
+      'replace-text',
+      {
+        expectedText: { type: 'string', minLength: 1 },
+        text: { type: 'string' },
+        marks: {
+          type: 'integer',
+          minimum: 0,
+          description:
+            'Exact bitmask: bold=1, italic=2, strike=4, underline=8, code=16; combine by addition, 0 clears. Same expectedText/text formats only the match.',
+        },
+      },
+      ['expectedText', 'text'],
+      'Replace one exact unique substring within a text leaf. Preserve surrounding content. Use text, not markdown, replacement, or newText.',
+    ),
+    patchOperation(
+      'toggle-checklist',
+      { checked: { type: 'boolean' } },
+      ['checked'],
+      'Set one checklist item completion bit.',
+    ),
+    patchOperation(
+      'move',
+      {
+        destination: schemaObject({ position: PATCH_POSITION_SCHEMA, target: ASSISTANT_BLOCK_LOCATOR_SCHEMA }, [
+          'position',
+          'target',
+        ]),
+      },
+      ['destination'],
+      'Move the existing target block. Example: {type:"move",target:{path:[2]},destination:{position:"after",target:{path:[0]}}}. Destination indexes resolve after source removal; use stable identifiers when available.',
+    ),
+    patchOperation('delete', {}, [], 'Delete only the exact target block.'),
+    patchOperation(
+      'update-attrs',
+      {
+        attrs: {
+          ...schemaObject(
+            {
+              format: { anyOf: [{ type: 'string' }, { type: 'number' }] },
+              style: { type: 'string', maxLength: 2048 },
+              indent: { type: 'integer', minimum: 0, maximum: 20 },
+              direction: { anyOf: [{ type: 'string', enum: ['ltr', 'rtl'] }, { type: 'null' }] },
+              tag: { type: 'string', enum: ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'] },
+              checked: { type: 'boolean' },
             },
-          },
-          items: {
-            type: 'array',
-            description:
-              'List items: {content:[rich runs], checked?, children?:{listType,start?,items:[...]}}. Use markdown-fragment for deeply nested lists.',
-            items: { type: 'object' },
+            [],
+          ),
+          minProperties: 1,
+        },
+      },
+      ['attrs'],
+      'Update named block attributes inside attrs; text marks use replace-text instead.',
+    ),
+    {
+      ...patchOperation(
+        'update-mermaid',
+        {
+          source: { type: 'string', minLength: 1, maxLength: 16384 },
+          expectedSource: { type: 'string', description: 'Exact source, never a truncated prefix.' },
+          mermaidSettings: {
+            ...schemaObject(
+              {
+                fitMode: { type: 'string', enum: ['fitWidth', 'fitBoth', 'actual'] },
+                alignment: { type: 'string', enum: ['left', 'center', 'right'] },
+                background: { type: 'string', enum: ['auto', 'transparent', 'themed'] },
+                zoomPan: { type: 'boolean' },
+              },
+              [],
+            ),
+            minProperties: 1,
           },
         },
-        required: ['type'],
-      },
+        [],
+        'Update source and/or supported settings on one existing Mermaid diagram; preserve unrelated settings.',
+      ),
+      anyOf: [{ required: ['source'] }, { required: ['mermaidSettings'] }],
     },
-  },
-  required: ['kind'],
-} as const
+  ],
+}
 
 export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
@@ -2599,77 +2739,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
           type: 'array',
           minItems: 1,
           maxItems: 32,
-          items: {
-            type: 'object',
-            description:
-              'Operation object. type is insert, replace-text, toggle-checklist, move, delete, update-attrs, or update-mermaid. All targets use an exact locator returned by notes.readBlocks.',
-            properties: {
-              operationId: {
-                type: 'string',
-                description:
-                  'Stable id for idempotent multi-device application. Reuse only when retrying this exact operation.',
-              },
-              type: {
-                type: 'string',
-                enum: [
-                  'insert',
-                  'replace-text',
-                  'toggle-checklist',
-                  'move',
-                  'delete',
-                  'update-attrs',
-                  'update-mermaid',
-                ],
-              },
-              target: ASSISTANT_BLOCK_LOCATOR_SCHEMA,
-              position: { type: 'string', enum: ['before', 'after', 'inside-section'] },
-              block: ASSISTANT_INSERT_BLOCK_SCHEMA,
-              source: { type: 'string', minLength: 1, maxLength: 16384 },
-              expectedSource: {
-                type: 'string',
-                description: 'Exact source from readBlocks, never a truncated prefix.',
-              },
-              mermaidSettings: {
-                type: 'object',
-                additionalProperties: false,
-                properties: {
-                  fitMode: { type: 'string', enum: ['fitWidth', 'fitBoth', 'actual'] },
-                  alignment: { type: 'string', enum: ['left', 'center', 'right'] },
-                  background: { type: 'string', enum: ['auto', 'transparent', 'themed'] },
-                  zoomPan: { type: 'boolean' },
-                },
-              },
-              expectedText: { type: 'string' },
-              text: { type: 'string' },
-              marks: {
-                type: 'integer',
-                minimum: 0,
-                description:
-                  'Exact text formatting bitmask: bold=1, italic=2, strike=4, underline=8, code=16; combine by addition, 0 clears. For format-only replace-text, pass identical expectedText/text. Only the matched substring receives these marks.',
-              },
-              checked: { type: 'boolean' },
-              destination: {
-                type: 'object',
-                properties: {
-                  position: { type: 'string', enum: ['before', 'after', 'inside-section'] },
-                  target: ASSISTANT_BLOCK_LOCATOR_SCHEMA,
-                },
-                required: ['position', 'target'],
-              },
-              attrs: {
-                type: 'object',
-                properties: {
-                  format: { type: 'string' },
-                  style: { type: 'string' },
-                  indent: { type: 'integer', minimum: 0, maximum: 20 },
-                  direction: { type: 'string', enum: ['ltr', 'rtl'] },
-                  tag: { type: 'string', enum: ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'] },
-                  checked: { type: 'boolean' },
-                },
-              },
-            },
-            required: ['type', 'target'],
-          },
+          items: ASSISTANT_PATCH_OPERATION_SCHEMA,
         },
       },
       required: ['uuid', 'base', 'operations'],

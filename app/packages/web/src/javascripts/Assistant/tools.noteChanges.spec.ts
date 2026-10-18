@@ -496,6 +496,56 @@ describe('AssistantTools note change presentation', () => {
     expect(changeItem).not.toHaveBeenCalled()
   })
 
+  it('never reports a prepared patch as applied when metadata changes before commit', async () => {
+    const text = JSON.stringify({
+      root: {
+        type: 'root',
+        version: 1,
+        children: [{ type: 'heading', version: 1, tag: 'h2', children: [{ type: 'text', version: 1, text: 'A' }] }],
+      },
+    })
+    let live = makeNote('Original', text, { noteType: NoteType.Super })
+    const flush = jest.fn(async () => {
+      if (flush.mock.calls.length === 3) {
+        const mutator = new NoteMutator(live, MutationType.NonDirtying)
+        mutator.title = 'Concurrent title'
+        live = new SNNote(mutator.getResult())
+      }
+    })
+    const changeItem = jest.fn()
+    const application = {
+      sessions: { isCurrentSessionReadOnly: () => false },
+      isAuthorizedToRenderItem: () => true,
+      vaults: { getItemVault: () => undefined },
+      vaultUsers: { isCurrentUserReadonlyVaultMember: () => false },
+      itemControllerGroup: { itemControllers: [{ item: live, flushAndAwaitPendingSaveStrict: flush }] },
+      items: { findItem: () => live, getItems: () => [live] },
+      mutator: { changeItem },
+    } as unknown as WebApplication
+    const tools = new AssistantTools(application, {
+      selectedNoteUuids: new Set([live.uuid]),
+      expectedNoteSnapshots: new Map([[live.uuid, captureAssistantNoteSnapshot(live)]]),
+      confirmBeforeWrite: false,
+      requestConfirmation: async () => true,
+      presentPane: () => undefined,
+    })
+    const read = (await tools.call('notes.readBlocks', { uuid: live.uuid, view: 'outline' })) as {
+      revision: { contentHash: string }
+    }
+    const result = await tools.call('notes.patchBlocks', {
+      uuid: live.uuid,
+      base: read.revision,
+      operations: [
+        { type: 'insert', position: 'after', target: { path: [0] }, block: { kind: 'paragraph', text: 'Added' } },
+      ],
+    })
+    expect(result).toMatchObject({ ok: false, status: 'conflict', rebase: { outline: expect.any(Array) } })
+    expect(flush).toHaveBeenCalledTimes(3)
+    expect(changeItem).not.toHaveBeenCalled()
+    expect(live.text).toBe(text)
+    expect(live.title).toBe('Concurrent title')
+  })
+
   it('requires an explicit fullReplacement acknowledgement for a whole Super-note rewrite', async () => {
     const live = makeNote(
       'Structured',
