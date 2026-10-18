@@ -143,6 +143,20 @@ describe('parseRelayFrame rejections', () => {
     })
   })
 
+  it('preserves bounded opaque assistant activity without changing legacy awareness', () => {
+    const frame = { t: 'awareness', room: 'note-1', payload: 'human-ciphertext' }
+    expect(parseRelayFrame(JSON.stringify({ ...frame, assistantPayload: 'ai-ciphertext' }))).toEqual({
+      ...frame,
+      assistantPayload: 'ai-ciphertext',
+    })
+    for (const assistantPayload of ['', 42, {}, 'x'.repeat(8193)]) {
+      expect(parseRelayFrame(JSON.stringify({ ...frame, assistantPayload }))).toEqual(frame)
+    }
+    expect(parseRelayFrame(JSON.stringify({ ...frame, assistantPayload: 'x'.repeat(8192) }))).toHaveProperty(
+      'assistantPayload',
+    )
+  })
+
   it('rejects a yjs, awareness, or comment frame with a missing, empty or oversized payload', () => {
     expect(parseRelayFrame(JSON.stringify({ t: 'yjs', room: 'note-1' }))).toBeNull()
     expect(parseRelayFrame(JSON.stringify({ t: 'yjs', room: 'note-1', payload: '' }))).toBeNull()

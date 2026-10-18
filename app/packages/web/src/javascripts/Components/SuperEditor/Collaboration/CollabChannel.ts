@@ -175,7 +175,7 @@ export type CollabFrame =
   // editor lease in the room, so no peer will ever answer the state request
   // `requestId`; the requester fails over to bootstrap immediately.
   | { t: 'yjs-no-responder'; room: string; requestId: string }
-  | { t: 'awareness'; room: string; payload: string }
+  | { t: 'awareness'; room: string; payload: string; assistantPayload?: string }
   // Standard Red Notes: an E2E-encrypted note-comment event (see WebsocketsService
   // CollaborationFrame). Carries an encrypted JSON comment payload.
   | { t: 'comment'; room: string; payload: string }

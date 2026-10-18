@@ -23,6 +23,7 @@ import { EphemeralRoomPresence, type CollaborationPresenceActivity } from './Eph
 import { isCollaborationCipherError, type RoomCipher } from './RoomCrypto'
 import type { ActiveEditorCollaborationLease, RoomDenial } from './useCollaborationRoomAccess'
 import { showCollaborationThrottle } from './CollaborationThrottle'
+import { assistantAwarenessAAD, splitAssistantAwareness, mergeAssistantAwareness } from './AssistantAwarenessExtension'
 
 type Listener = (...args: never[]) => void
 const MAX_JOIN_RETRIES = 5
@@ -1538,14 +1539,28 @@ export class EncryptedYjsProvider implements Provider {
       ) {
         return
       }
-      const payload = await this.cipher.encrypt(update, encodeFrameAdditionalData(this.room, 'awareness'))
+      const { human, extension } = splitAssistantAwareness(update)
+      const payload = await this.cipher.encrypt(human, encodeFrameAdditionalData(this.room, 'awareness'))
+      let assistantPayload: string | undefined
+      if (extension) {
+        try {
+          assistantPayload = await this.cipher.encrypt(extension, assistantAwarenessAAD(this.room, payload))
+        } catch {
+          /* Optional AI decoration must not block human presence. */
+        }
+      }
       if (
         this.connected &&
         this.joined &&
         expectedGeneration === this.transportGeneration &&
         this.validateLiveAttachment()
       ) {
-        this.channel.send({ t: 'awareness', room: this.room, payload })
+        this.channel.send({
+          t: 'awareness',
+          room: this.room,
+          payload,
+          ...(assistantPayload ? { assistantPayload } : {}),
+        })
       }
     })
   }
@@ -2166,7 +2181,11 @@ export class EncryptedYjsProvider implements Provider {
         }
         this.enqueueInboundCrypto({
           kind: 'awareness',
-          ciphertextBytes: frame.payload.length,
+          ciphertextBytes:
+            frame.payload.length +
+            (typeof frame.assistantPayload === 'string' && frame.assistantPayload.length <= 8192
+              ? frame.assistantPayload.length
+              : 0),
           run: async () => {
             if (!this.validateLiveAttachment()) {
               return
@@ -2198,7 +2217,27 @@ export class EncryptedYjsProvider implements Provider {
               frameGeneration === this.transportGeneration &&
               this.validateLiveAttachment()
             ) {
-              applyAwarenessUpdate(this.yAwareness, validated.update, 'remote')
+              let decoratedUpdate = validated.update
+              if (typeof frame.assistantPayload === 'string' && frame.assistantPayload.length <= 8192) {
+                try {
+                  const extension = await this.cipher.decrypt(
+                    frame.assistantPayload,
+                    assistantAwarenessAAD(this.room, frame.payload),
+                  )
+                  decoratedUpdate = mergeAssistantAwareness(validated.update, extension)
+                } catch {
+                  /* Optional extension failure never drops a human cursor. */
+                }
+              }
+              if (
+                !this.connected ||
+                !this.joined ||
+                frameGeneration !== this.transportGeneration ||
+                !this.validateLiveAttachment()
+              ) {
+                return
+              }
+              applyAwarenessUpdate(this.yAwareness, decoratedUpdate, 'remote')
               this.ephemeralPresence?.reconcileEncryptedAwareness()
               if (this.remoteAwarenessClientIds().size > MAX_REMOTE_AWARENESS_CLIENTS) {
                 this.dropRemoteAwarenessClients(validated.liveClientIds, 'remote-awareness-capacity')

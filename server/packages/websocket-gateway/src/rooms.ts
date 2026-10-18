@@ -69,7 +69,7 @@ export type RelayFrame =
     }
   | { t: 'yjs-retry'; room: string; requestId: string; requesterClientId: number }
   | { t: 'yjs-response-claim'; room: string; stateRequestId: string; leaseRequestId: string }
-  | { t: 'awareness'; room: string; payload: string }
+  | { t: 'awareness'; room: string; payload: string; assistantPayload?: string }
   | { t: 'comment'; room: string; payload: string }
 
 const RELAY_TYPES = new Set([
@@ -440,7 +440,20 @@ export function parseRelayFrame(raw: string): RelayFrame | null {
       ...(stateRequestId ? { stateRequestId } : {}),
     }
   }
-  return { t: t as 'yjs' | 'awareness' | 'comment', room, payload }
+  // Optional encrypted AI activity is independent of the legacy awareness bytes.
+  // Ignore a malformed extension instead of dropping valid human presence.
+  if (t === 'awareness') {
+    const assistantPayload = obj.assistantPayload
+    return {
+      t,
+      room,
+      payload,
+      ...(typeof assistantPayload === 'string' && assistantPayload.length > 0 && assistantPayload.length <= 8192
+        ? { assistantPayload }
+        : {}),
+    }
+  }
+  return { t: t as 'yjs' | 'comment', room, payload }
 }
 
 /**

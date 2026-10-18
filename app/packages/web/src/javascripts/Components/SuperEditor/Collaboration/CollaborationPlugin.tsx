@@ -21,6 +21,7 @@ import type { EditorCollaborationLease } from './useCollaborationRoomAccess'
 import { createCollaborationCursorTracking } from './CollaborationCursors'
 import { installCollaborationSaver } from './CollaborationSaverElection'
 import { collaborationDeviceId } from './CollaborationDeviceIdentity'
+import { bridgeAssistantPresence, AssistantActivityAwareness } from '@/Assistant/assistantPresence'
 import {
   trackEditorResumeCollaboration,
   trackEditorResumeProvider,
@@ -299,6 +300,18 @@ const AvailableSuperCollaborationPlugin: FunctionComponent<Props> = ({
     () => (config.userUuid ? { userUuid: config.userUuid, deviceId: collaborationDeviceId() } : undefined),
     [config.userUuid],
   )
+
+  useEffect(() => {
+    const provider = providerRef.current
+    if (!provider || !config.userUuid) {
+      return
+    }
+    return bridgeAssistantPresence(
+      provider.awareness as unknown as AssistantActivityAwareness,
+      config.room,
+      config.userUuid,
+    )
+  }, [config.room, config.roomEpoch, config.userUuid])
 
   // Mirror live awareness (who else has this note open) into the registry so the
   // presence sidebar can show genuinely-online collaborators. Excludes the local

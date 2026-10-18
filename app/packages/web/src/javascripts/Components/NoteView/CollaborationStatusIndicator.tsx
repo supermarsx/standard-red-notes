@@ -1,3 +1,4 @@
+import { AssistantPresence } from '@/Assistant/assistantPresence'
 import { FunctionComponent, KeyboardEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { classNames } from '@standardnotes/utils'
 import { SNNote } from '@standardnotes/snjs'
@@ -71,6 +72,102 @@ export const POPUP_SURFACE_CLASS = 'px-3 py-2 md:!bg-default ![backdrop-filter:n
 type Props = {
   /** The note whose collaboration room and shared vault this reflects. */
   note: SNNote
+}
+
+/** AI activity is distinct from room members, human cursors, and saver ownership. */
+const AssistantPresenceIndicator: FunctionComponent<{ noteUuid: string; selfUuid?: string }> = ({
+  noteUuid,
+  selfUuid,
+}) => {
+  const read = useCallback(() => {
+    const local = AssistantPresence.getLocal(noteUuid)
+      .filter((activity) => !!selfUuid && activity.userUuid === selfUuid)
+      .map((activity) => ({ ...activity, ownerName: 'You', key: `local:${activity.runId}` }))
+    const localRuns = new Set(local.map((activity) => JSON.stringify([activity.userUuid, activity.runId])))
+    const remote = AssistantPresence.getRemote(noteUuid)
+      .filter((activity) => !localRuns.has(JSON.stringify([activity.userUuid, activity.runId])))
+      .map((activity) => ({
+        ...activity,
+        ownerName: activity.ownerName?.trim().slice(0, 120) || 'Collaborator',
+        key: `remote:${activity.clientId}:${activity.runId}`,
+      }))
+    return [...local, ...remote]
+  }, [noteUuid, selfUuid])
+  const [activities, setActivities] = useState(read)
+  const [open, setOpen] = useState(false)
+  const anchor = useRef<HTMLButtonElement>(null)
+  const id = useId()
+  useEffect(() => {
+    const refresh = () => setActivities(read())
+    refresh()
+    return AssistantPresence.subscribe(noteUuid, refresh)
+  }, [noteUuid, read])
+  useEffect(() => {
+    if (!activities.length) {
+      setOpen(false)
+    }
+  }, [activities.length])
+  if (!activities.length) {
+    return null
+  }
+  const status = activities.some((activity) => activity.status === 'editing')
+    ? 'editing'
+    : activities.some((activity) => activity.status === 'reading')
+      ? 'reading'
+      : 'working'
+  const description = activities.map((activity) => `AI Assistant ${activity.status} · ${activity.ownerName}`).join('; ')
+  return (
+    <div className="mr-2 flex-shrink-0" data-assistant-presence>
+      <button
+        ref={anchor}
+        type="button"
+        onClick={() => setOpen((previous) => !previous)}
+        aria-label={description}
+        title={description}
+        aria-expanded={open}
+        aria-controls={open ? id : undefined}
+        className="bg-contrast text-default flex h-5 w-24 items-center justify-center gap-1 rounded-full px-1 text-xs"
+      >
+        <Icon type="assistant" size="small" />
+        <span>AI {status}</span>
+      </button>
+      <Popover
+        title="AI Assistant activity"
+        open={open}
+        togglePopover={() => setOpen((previous) => !previous)}
+        anchorElement={anchor}
+        side="bottom"
+        align="center"
+        offset={6}
+        className={POPUP_SURFACE_CLASS}
+        containerClassName="!min-w-0 !w-auto max-w-[90vw]"
+        disableMobileFullscreenTakeover
+        disableApplyingMobileWidth
+      >
+        <div id={id} role="dialog" aria-label="AI Assistant activity" className="text-default text-xs">
+          <div className="mb-1 font-semibold">AI Assistant</div>
+          <ul>
+            {activities.map((activity) => (
+              <li key={activity.key} className="flex max-w-64 items-center gap-2 py-0.5">
+                <span className="truncate">{activity.ownerName}</span>
+                <span className="text-passive-0">{activity.status}</span>
+              </li>
+            ))}
+          </ul>
+          <button
+            type="button"
+            className="text-info mt-1"
+            onClick={() => {
+              setOpen(false)
+              anchor.current?.focus()
+            }}
+          >
+            Close
+          </button>
+        </div>
+      </Popover>
+    </div>
+  )
 }
 
 /**
@@ -307,8 +404,11 @@ const CollaborationStatusIndicator: FunctionComponent<Props> = ({ note }) => {
     setStoredCollapsed(!collapsed)
   }, [collapsed, setStoredCollapsed])
 
+  const assistantIndicator = (
+    <AssistantPresenceIndicator key={`${noteUuid}:${selfUuid ?? ''}`} noteUuid={noteUuid} selfUuid={selfUuid} />
+  )
   if (!isVisible) {
-    return null
+    return assistantIndicator
   }
 
   let session = describeSession(state, firstPreparationPhase)
@@ -365,65 +465,68 @@ const CollaborationStatusIndicator: FunctionComponent<Props> = ({ note }) => {
   const showCount = !showAvatars && present.length > 0
 
   return (
-    <div className="note-status-tooltip-container mr-2">
-      <button
-        aria-controls={isOpen ? dialogId : undefined}
-        aria-label={label}
-        className="peer flex h-5 flex-shrink-0 cursor-pointer items-center rounded-full"
-        data-testid={COLLABORATION_INDICATOR_TEST_ID}
-        onClick={toggle}
-        onKeyDown={onTriggerKeyDown}
-        ref={buttonRef}
-        title={label}
-        type="button"
-      >
-        <span
-          className={classNames(
-            'flex h-5 flex-shrink-0 items-center justify-center rounded-full',
-            showCount ? 'min-w-5 gap-0.5 px-1.5' : 'w-5',
-            SESSION_TONE_CLASS[session.tone],
-          )}
-          data-collaboration-status-dot={session.tone}
+    <>
+      {assistantIndicator}
+      <div className="note-status-tooltip-container mr-2">
+        <button
+          aria-controls={isOpen ? dialogId : undefined}
+          aria-label={label}
+          className="peer flex h-5 flex-shrink-0 cursor-pointer items-center rounded-full"
+          data-testid={COLLABORATION_INDICATOR_TEST_ID}
+          onClick={toggle}
+          onKeyDown={onTriggerKeyDown}
+          ref={buttonRef}
+          title={label}
+          type="button"
         >
-          <Icon className={session.animateIcon ? 'animate-spin' : ''} type={session.icon} size="small" />
-          {showCount && (
-            <span className="text-[0.65rem] leading-none font-bold" data-collaborator-count>
-              {present.length}
-            </span>
-          )}
-        </span>
-        {showAvatars && <CollaboratorAvatarStack present={present} />}
-      </button>
-      <Popover
-        title="Collaborators"
-        open={isOpen}
-        togglePopover={toggle}
-        // A solid surface, at every width. From `md` up Popover is translucent and
-        // counts on `backdrop-filter` to blur what is behind it; this popup opens
-        // over the editor ribbon, and where the blur does not paint a list of
-        // names sits on top of a row of toolbar labels. A page cannot ask whether
-        // a supported filter was actually painted, so it does not depend on it.
-        className={POPUP_SURFACE_CLASS}
-        containerClassName="!min-w-0 !w-auto max-w-[90vw]"
-        anchorElement={buttonRef}
-        side="bottom"
-        align="center"
-        offset={6}
-        disableMobileFullscreenTakeover
-        disableApplyingMobileWidth
-      >
-        <CollaboratorsPopover
-          attendance={attendance}
-          collaborators={collaborators}
-          collapsed={collapsed}
-          id={dialogId}
-          onLeave={leavePopup}
-          onToggleCollapsed={isDesktopScreen && others.length > 0 ? toggleCollapsed : undefined}
-          ref={dialogRef}
-          session={session}
-        />
-      </Popover>
-    </div>
+          <span
+            className={classNames(
+              'flex h-5 flex-shrink-0 items-center justify-center rounded-full',
+              showCount ? 'min-w-5 gap-0.5 px-1.5' : 'w-5',
+              SESSION_TONE_CLASS[session.tone],
+            )}
+            data-collaboration-status-dot={session.tone}
+          >
+            <Icon className={session.animateIcon ? 'animate-spin' : ''} type={session.icon} size="small" />
+            {showCount && (
+              <span className="text-[0.65rem] leading-none font-bold" data-collaborator-count>
+                {present.length}
+              </span>
+            )}
+          </span>
+          {showAvatars && <CollaboratorAvatarStack present={present} />}
+        </button>
+        <Popover
+          title="Collaborators"
+          open={isOpen}
+          togglePopover={toggle}
+          // A solid surface, at every width. From `md` up Popover is translucent and
+          // counts on `backdrop-filter` to blur what is behind it; this popup opens
+          // over the editor ribbon, and where the blur does not paint a list of
+          // names sits on top of a row of toolbar labels. A page cannot ask whether
+          // a supported filter was actually painted, so it does not depend on it.
+          className={POPUP_SURFACE_CLASS}
+          containerClassName="!min-w-0 !w-auto max-w-[90vw]"
+          anchorElement={buttonRef}
+          side="bottom"
+          align="center"
+          offset={6}
+          disableMobileFullscreenTakeover
+          disableApplyingMobileWidth
+        >
+          <CollaboratorsPopover
+            attendance={attendance}
+            collaborators={collaborators}
+            collapsed={collapsed}
+            id={dialogId}
+            onLeave={leavePopup}
+            onToggleCollapsed={isDesktopScreen && others.length > 0 ? toggleCollapsed : undefined}
+            ref={dialogRef}
+            session={session}
+          />
+        </Popover>
+      </div>
+    </>
   )
 }
 

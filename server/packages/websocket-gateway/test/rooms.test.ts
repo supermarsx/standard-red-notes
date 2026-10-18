@@ -409,6 +409,20 @@ describe('RoomRegistry + handleRelayFrame', () => {
     expect(b.sent).toContain(JSON.stringify({ t: 'awareness', room: 'n1', payload: 'QQ' }))
   })
 
+  it('relays encrypted assistant activity only with authorized editor awareness', async () => {
+    const rooms = new RoomRegistry()
+    const a = fakeConn('a')
+    const b = fakeConn('b')
+    const outsider = fakeConn('outsider')
+    await handleRelayFrame(rooms, a, { t: 'room-join', room: 'n1' })
+    await handleRelayFrame(rooms, b, { t: 'room-join', room: 'n1' })
+    const frame = { t: 'awareness' as const, room: 'n1', payload: 'human', assistantPayload: 'encrypted-ai' }
+    expect(await handleRelayFrame(rooms, outsider, frame)).toBe(0)
+    expect(b.sent).not.toContain(JSON.stringify(frame))
+    await handleRelayFrame(rooms, a, frame)
+    expect(b.sent).toContain(JSON.stringify(frame))
+  })
+
   it('relays encrypted comments only between current room members', async () => {
     const rooms = new RoomRegistry()
     const a = fakeConn('a')

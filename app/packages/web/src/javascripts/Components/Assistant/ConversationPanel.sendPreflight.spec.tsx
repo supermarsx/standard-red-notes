@@ -1,3 +1,4 @@
+import { AssistantPresence } from '@/Assistant/assistantPresence'
 /** @jest-environment jsdom */
 import { AssistantChatStorageError, type AssistantSharedChatBinding } from '@/Assistant/assistantSyncedChats'
 import { act, type RefObject, type ReactNode } from 'react'
@@ -21,8 +22,14 @@ jest.mock('@/Assistant/attachments', () => ({
 
 jest.mock('@/Assistant/conversationModeRunner', () => ({ runConversationMode: jest.fn() }))
 jest.mock('@/Assistant/agent', () => ({ run: jest.fn() }))
+jest.mock('@/Assistant/assistantPresence', () => ({
+  AssistantPresence: { start: jest.fn(() => ({ update: jest.fn(), dispose: jest.fn() })) },
+}))
 jest.mock('@/Assistant/tools', () => ({
-  TOOL_DEFINITIONS: [],
+  TOOL_DEFINITIONS: [
+    { name: 'notes.read', mutating: false },
+    { name: 'notes.update', mutating: true },
+  ],
   AssistantTools: jest.fn().mockImplementation(() => {
     return { tools: () => [], setAbortSignal: () => undefined }
   }),
@@ -164,6 +171,7 @@ describe('Assistant immediate send feedback and preflight fences', () => {
 
   beforeEach(() => {
     jest.clearAllMocks()
+    jest.mocked(AssistantPresence.start).mockImplementation(() => ({ update: jest.fn(), dispose: jest.fn() }))
     signedIn = false
     jest.mocked(resolveContextNoteUuids).mockReturnValue(['context-note'])
     values.clear()
@@ -221,6 +229,74 @@ describe('Assistant immediate send feedback and preflight fences', () => {
       }
     },
   )
+  it('shows scoped tool activity only after authorization and removes presence immediately on stop', async () => {
+    await act(async () => {
+      render('presence', undefined, { noteUuid: 'context-note', contextKind: 'note' })
+      await flush()
+    })
+    expect(AssistantPresence.start).toHaveBeenCalledWith(
+      expect.objectContaining({ noteUuid: 'context-note', status: 'working' }),
+    )
+    const presence = jest.mocked(AssistantPresence.start).mock.results[0].value
+    const callbacks = jest.mocked(runConversationMode).mock.calls[0][2]
+    const context = jest.mocked(AssistantTools).mock.calls.at(-1)![1]
+    await act(async () => {
+      callbacks.onToolCall?.({ id: 'read', name: 'notes.read', args: { uuid: 'context-note' } })
+      expect(presence.update).not.toHaveBeenCalled()
+      context.onAuthorization?.('read', { decision: 'allow', source: 'policy' })
+    })
+    expect(presence.update).toHaveBeenLastCalledWith('context-note', 'reading')
+    await act(async () => {
+      callbacks.onToolResult?.('read', '{}', 'succeeded')
+      callbacks.onToolCall?.({ id: 'edit', name: 'notes.update', args: { uuid: 'context-note' } })
+      context.onAuthorization?.('edit', { decision: 'allow', source: 'policy' })
+    })
+    expect(presence.update).toHaveBeenLastCalledWith('context-note', 'editing')
+    await act(async () => {
+      callbacks.onToolCall?.({ id: 'outside', name: 'notes.update', args: { uuid: 'unselected-note' } })
+      context.onAuthorization?.('outside', { decision: 'allow', source: 'policy' })
+    })
+    expect(presence.update).not.toHaveBeenCalledWith('unselected-note', expect.anything())
+    await act(async () => stop()!.click())
+    expect(presence.dispose).toHaveBeenCalledTimes(1)
+    await act(async () => context.onAuthorization?.('edit', { decision: 'allow', source: 'policy' }))
+    expect(AssistantPresence.start).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(['finish', 'error'] as const)('clears assistant presence on provider %s', async (outcome) => {
+    if (outcome === 'error') {
+      jest.mocked(runConversationMode).mockRejectedValueOnce(new Error('Provider failed'))
+    } else {
+      jest
+        .mocked(runConversationMode)
+        .mockResolvedValueOnce({ finalText: 'Done', stopReason: 'end_turn', steps: 1 } as AgentResult)
+    }
+    await act(async () => {
+      render('presence', undefined, { noteUuid: 'context-note', contextKind: 'note' })
+      await flush()
+    })
+    expect(AssistantPresence.start).toHaveBeenCalledTimes(1)
+    expect(jest.mocked(AssistantPresence.start).mock.results[0].value.dispose).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(['account', 'unmount'] as const)('removes working presence on %s boundary', async (boundary) => {
+    await act(async () => {
+      render('presence', undefined, { noteUuid: 'context-note', contextKind: 'note' })
+      await flush()
+    })
+    const presence = jest.mocked(AssistantPresence.start).mock.results[0].value
+    await act(async () => {
+      if (boundary === 'account') {
+        signedIn = true
+        await eventObserver(ApplicationEvent.SignedIn)
+      } else {
+        root.render(null)
+      }
+      await flush()
+    })
+    expect(presence.dispose).toHaveBeenCalledTimes(1)
+  })
+
   it('reports an unapplied permission write and restores the persisted policy', async () => {
     application.setPreference.mockResolvedValue(undefined)
     await act(async () => {

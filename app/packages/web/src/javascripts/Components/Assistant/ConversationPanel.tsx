@@ -1,3 +1,4 @@
+import { AssistantPresence } from '@/Assistant/assistantPresence'
 import {
   AssistantChatStorageError,
   getAssistantChatStorageFailure,
@@ -1859,6 +1860,37 @@ function ConversationPanelImpl({
         return sub.finalText || '(sub-agent finished with no summary)'
       }
 
+      let assistantPresence: ReturnType<typeof AssistantPresence.start> | undefined
+      const hasExplicitNoteContext =
+        !!request.directive?.noteUuid ||
+        activeContextSelection.scope === 'current-note' ||
+        activeContextSelection.scope === 'selection' ||
+        (activeContextSelection.scope === 'collection' && activeContextSelection.collection?.type === 'notes')
+      let presenceNoteUuid =
+        hasExplicitNoteContext && resolvedNoteUuids.size === 1 ? [...resolvedNoteUuids][0] : undefined
+      const presenceTools = new Map<string, { noteUuid: string; status: 'reading' | 'editing' }>()
+      const activateToolPresence = (callId?: string) => {
+        const activity = callId ? presenceTools.get(callId) : undefined
+        if (!activity || !isSessionCurrent() || controller.signal.aborted) {
+          return
+        }
+        presenceNoteUuid = activity.noteUuid
+        if (!assistantPresence) {
+          assistantPresence = AssistantPresence.start({
+            runId: newId(),
+            noteUuid: activity.noteUuid,
+            userUuid: runPrincipal.userUuid,
+            status: activity.status,
+          })
+        } else {
+          assistantPresence.update(activity.noteUuid, activity.status)
+        }
+      }
+      const disposeAssistantPresence = () => {
+        assistantPresence?.dispose()
+        assistantPresence = undefined
+        presenceTools.clear()
+      }
       const toolContext: AssistantToolContext = {
         allowMutatingTools: runMode !== 'plan' && runMode !== 'chat',
         selectedNoteUuids,
@@ -1867,7 +1899,13 @@ function ConversationPanelImpl({
         assistantRunId: assistantId,
         isSessionCurrent,
         confirmBeforeWrite,
-        requestConfirmation,
+        requestConfirmation: async (confirmation, signal) => {
+          const approved = await requestConfirmation(confirmation, signal)
+          if (approved && !signal?.aborted) {
+            activateToolPresence(confirmation.callId)
+          }
+          return approved
+        },
         requestUserAnswer: async (question, signal) => {
           if (!isSessionCurrent()) {
             return null
@@ -1890,7 +1928,12 @@ function ConversationPanelImpl({
           return answer
         },
         shouldRequestConfirmation,
-        onAuthorization: recordToolAuthorization,
+        onAuthorization: (callId, authorization) => {
+          recordToolAuthorization(callId, authorization)
+          if (authorization.decision === 'allow') {
+            activateToolPresence(callId)
+          }
+        },
         presentPane: (paneId: AppPaneId) => presentPane(paneId),
         runSubAgent,
         onTodosChanged: (next) => setTodos(next),
@@ -1945,6 +1988,15 @@ function ConversationPanelImpl({
         ? `${scopedPrompt}\n\n${wrapUntrustedNoteContext(builtContext.text)}`
         : scopedPrompt
 
+      if (presenceNoteUuid) {
+        assistantPresence = AssistantPresence.start({
+          runId: newId(),
+          noteUuid: presenceNoteUuid,
+          userUuid: runPrincipal.userUuid,
+          status: 'working',
+        })
+      }
+      controller.signal.addEventListener('abort', disposeAssistantPresence, { once: true })
       try {
         const result = await runConversationMode(
           runMode,
@@ -2003,6 +2055,17 @@ function ConversationPanelImpl({
               if (!isSessionCurrent()) {
                 return
               }
+              const definition = TOOL_DEFINITIONS.find((tool) => tool.name === call.name)
+              const args = call.args as Record<string, unknown> | null
+              const noteUuid = call.name.startsWith('comments.') ? args?.noteUuid : args?.uuid
+              if (
+                definition &&
+                (call.name.startsWith('notes.') || call.name.startsWith('comments.')) &&
+                typeof noteUuid === 'string' &&
+                selectedNoteUuids.has(noteUuid)
+              ) {
+                presenceTools.set(call.id, { noteUuid, status: definition.mutating ? 'editing' : 'reading' })
+              }
               hasRunTool = true
               waitingForSteeredResponse = false
               textDeltas.flush()
@@ -2017,6 +2080,10 @@ function ConversationPanelImpl({
               })
             },
             onToolResult: (callId, _toolResult, outcome) => {
+              presenceTools.delete(callId)
+              if (presenceNoteUuid && isSessionCurrent() && !controller.signal.aborted) {
+                assistantPresence?.update(presenceNoteUuid, 'working')
+              }
               if (!isSessionCurrent()) {
                 return
               }
@@ -2110,6 +2177,8 @@ function ConversationPanelImpl({
           }
         }
       } finally {
+        controller.signal.removeEventListener('abort', disposeAssistantPresence)
+        disposeAssistantPresence()
         textDeltas.dispose()
         // This run retains ownership through the durable terminal checkpoint.
         // Otherwise the UI can start another run while this finally block is

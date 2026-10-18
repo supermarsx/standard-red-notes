@@ -132,7 +132,7 @@ export type CollaborationFrame =
   // editor lease in the room, so no peer will ever answer the state request
   // `requestId`; the requester fails over to bootstrap immediately.
   | { t: 'yjs-no-responder'; room: string; requestId: string }
-  | { t: 'awareness'; room: string; payload: string }
+  | { t: 'awareness'; room: string; payload: string; assistantPayload?: string }
   // Gateway -> client: the join was refused. `reason` says why (contract C1);
   // `roomEpoch` is present iff `reason === 'epoch-mismatch'` and carries the
   // room's current epoch so the client can re-enter after a fresh discovery.

@@ -4048,6 +4048,54 @@ describe('EncryptedYjsProvider presence between people who are both here', () =>
       setLocalState(state: Record<string, unknown> | null): void
     }
 
+  it('sends AI activity separately from legacy human awareness and ignores broken optional decoration', async () => {
+    const room = 'assistant-awareness-room'
+    const sender = createPresenceProvider(room)
+    const receiver = createPresenceProvider(room)
+    const ai = [{ runId: 'run-one', status: 'editing' }]
+    try {
+      localAwareness(sender.provider).setLocalState({
+        ...PEER_STATE,
+        awarenessData: { userUuid: 'remote-user', assistantActivity: ai },
+      })
+      sender.provider.connect()
+      receiver.provider.connect()
+      await flushMicrotasksUntil(() => sender.provider.isRoomJoined() && receiver.provider.isRoomJoined())
+      await sender.provider.flush()
+      const frame = sender.sent.find(
+        (entry): entry is Extract<CollabFrame, { t: 'awareness' }> =>
+          entry.t === 'awareness' && !!entry.assistantPayload,
+      )
+      expect(frame).toBeDefined()
+      const humanBytes = new Uint8Array(Buffer.from(frame!.payload, 'base64'))
+      const decoder = decoding.createDecoder(humanBytes)
+      decoding.readVarUint(decoder)
+      decoding.readVarUint(decoder)
+      decoding.readVarUint(decoder)
+      const wireMetadata = JSON.parse(decoding.readVarString(decoder)).awarenessData
+      expect(wireMetadata).toMatchObject({ userUuid: 'remote-user' })
+      expect(wireMetadata).not.toHaveProperty('assistantActivity')
+      receiver.inbound.deliver(frame!)
+      await receiver.provider.flush()
+      expect(
+        localAwareness(receiver.provider).getStates().get(sender.provider.doc.clientID)?.awarenessData,
+      ).toMatchObject({
+        userUuid: 'remote-user',
+        assistantActivity: ai,
+      })
+      receiver.inbound.deliver({
+        ...rawAwarenessFrame(room, [{ clientId: sender.provider.doc.clientID, clock: 999, state: PEER_STATE }]),
+        assistantPayload: 'broken',
+      } as CollabFrame)
+      await receiver.provider.flush()
+      expect(localAwareness(receiver.provider).getStates().get(sender.provider.doc.clientID)?.name).toBe('Bob')
+      expect(receiver.onFatal).not.toHaveBeenCalled()
+    } finally {
+      sender.provider.destroy()
+      receiver.provider.destroy()
+    }
+  })
+
   it('accepts bounded device identities without accepting arbitrary awareness metadata', async () => {
     const room = 'device-identity-awareness-room'
     const { provider, inbound, onFatal } = createPresenceProvider(room)

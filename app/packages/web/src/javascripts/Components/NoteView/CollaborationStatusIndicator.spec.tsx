@@ -94,6 +94,7 @@ jest.mock('../SuperEditor/Collaboration/useCollaborationRoomAccess', () => ({
   },
 }))
 
+import { AssistantPresence } from '@/Assistant/assistantPresence'
 import { CollaborationStatusRegistry } from '../SuperEditor/Collaboration/CollaborationStatusRegistry'
 import { PresenceRegistry, PresentPeer } from '../SuperEditor/Collaboration/PresenceRegistry'
 import { collaboratorColor } from '../SuperEditor/Collaboration/collaboratorColor'
@@ -1314,4 +1315,97 @@ describe('bounded presentation grace for established rooms', () => {
     expect(label()).not.toContain('Restoring')
     expect(dot()?.dataset.collaborationStatusDot).not.toBe('live')
   })
+})
+
+describe('AI activity separate from human collaboration', () => {
+  it('shows local solo activity, updates without animation, and disappears on completion', async () => {
+    const activity = AssistantPresence.start({
+      runId: 'run-local',
+      noteUuid: ROOM,
+      userUuid: 'self-uuid',
+      status: 'working',
+    })
+    try {
+      await render()
+      const badge = () => container.querySelector('[data-assistant-presence] button')
+      expect(badge()?.textContent).toContain('AI working')
+      expect(chip()).toBeNull()
+      expect(container.querySelector('[data-collaborator-count]')).toBeNull()
+      await act(async () => activity.update(ROOM, 'editing'))
+      expect(badge()?.textContent).toContain('AI editing')
+      expect(badge()?.getAttribute('aria-label')).toBe('AI Assistant editing · You')
+      expect(container.querySelector('.animate-spin')).toBeNull()
+      await act(async () => activity.dispose())
+      expect(badge()).toBeNull()
+    } finally {
+      activity.dispose()
+    }
+  })
+  it('labels remote AI by initiating person without adding a human member or saver', async () => {
+    const source = Symbol()
+    AssistantPresence.setRemote(ROOM, source, [
+      { runId: 'remote-run', noteUuid: ROOM, userUuid: 'peer-1', clientId: 5, ownerName: 'Ada', status: 'reading' },
+    ])
+    try {
+      await render()
+      const badge = container.querySelector('[data-assistant-presence] button')
+      expect(badge?.getAttribute('aria-label')).toBe('AI Assistant reading · Ada')
+      expect(chip()).toBeNull()
+      await click(badge)
+      expect(container.querySelector('[aria-label="AI Assistant activity"]')?.textContent).toContain('Ada')
+      expect(container.querySelector('[data-collaborator]')).toBeNull()
+      await act(async () => AssistantPresence.clearRemote(ROOM, source))
+      expect(container.querySelector('[data-assistant-presence]')).toBeNull()
+    } finally {
+      AssistantPresence.clearRemote(ROOM, source)
+    }
+  })
+  it('does not leak local activity across notes or signed-in accounts', async () => {
+    const activity = AssistantPresence.start({
+      runId: 'run-local',
+      noteUuid: ROOM,
+      userUuid: 'self-uuid',
+      status: 'editing',
+    })
+    try {
+      await render({ uuid: 'other-note' } as never)
+      expect(container.querySelector('[data-assistant-presence]')).toBeNull()
+      mockApplication.sessions.getUser.mockReturnValue({ uuid: 'different-account' })
+      await render()
+      expect(container.querySelector('[data-assistant-presence]')).toBeNull()
+    } finally {
+      activity.dispose()
+    }
+  })
+})
+
+it('deduplicates a co-mounted editor echo by account and run, preferring local status', async () => {
+  const source = Symbol()
+  const activity = AssistantPresence.start({
+    runId: 'echo-run',
+    noteUuid: ROOM,
+    userUuid: 'self-uuid',
+    status: 'editing',
+  })
+  AssistantPresence.setRemote(ROOM, source, [
+    {
+      runId: 'echo-run',
+      noteUuid: ROOM,
+      userUuid: 'self-uuid',
+      clientId: 5,
+      ownerName: 'Self echo',
+      status: 'reading',
+    },
+    { runId: 'echo-run', noteUuid: ROOM, userUuid: 'peer-1', clientId: 6, ownerName: 'Ada', status: 'reading' },
+  ])
+  try {
+    await render()
+    const badge = container.querySelector('[data-assistant-presence] button')
+    expect(badge?.getAttribute('aria-label')).toBe('AI Assistant editing · You; AI Assistant reading · Ada')
+    await click(badge)
+    expect(container.querySelectorAll('[data-assistant-presence] li')).toHaveLength(2)
+  } finally {
+    activity.dispose()
+    AssistantPresence.clearRemote(ROOM, source)
+  }
 })

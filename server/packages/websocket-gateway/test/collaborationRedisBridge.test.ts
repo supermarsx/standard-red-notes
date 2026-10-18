@@ -217,7 +217,9 @@ class FakeRedisNetwork {
         }
         if (script.includes('SRN_VALIDATE_SAVER_EDITOR_V1')) {
           const state = this.roomStates.get(String(args[1]))?.split(':')
-          if (state?.[0] !== String(args[2])) {return 0}
+          if (state?.[0] !== String(args[2])) {
+            return 0
+          }
           const suffix = `:active:${String(args[3])}:${state[0]}:${state[1]}`
           const members = this.sets.get(String(args[0])) ?? new Set<string>()
           return [...members].some((key) => this.leases.has(key) && this.leaseValues.get(key)?.endsWith(suffix)) ? 1 : 0
@@ -276,7 +278,9 @@ class FakeRedisNetwork {
           const ttl = Number(args[3])
           this.leaseTtls.push(ttl)
           this.leases.set(leaseKey, ttl)
-          if (args[9]) {this.leaseValues.set(leaseKey, String(args[9]))}
+          if (args[9]) {
+            this.leaseValues.set(leaseKey, String(args[9]))
+          }
           return 1
         }
         if (script.includes('SRN_RESERVE_LEASE_V3')) {
@@ -675,6 +679,7 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       { ...presence, presenceId: 'remote-presence-2', action: 'left', reason: 'revoked' },
       { t: 'room-sync', room: 'remote-room' },
       { t: 'awareness', room: 'remote-room', payload: 'opaque-awareness' },
+      { t: 'awareness', room: 'remote-room', payload: 'opaque-awareness', assistantPayload: 'opaque-ai' },
       { t: 'comment', room: 'remote-room', payload: 'opaque-comment' },
     ]
     for (const frame of accepted) {
