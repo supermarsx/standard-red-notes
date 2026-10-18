@@ -11,6 +11,8 @@ import { acquireAssistantChatRun } from '@/Assistant/assistantChatRunLease'
 import { prepareAssistantAttachment } from '@/Assistant/attachments'
 import { TextEncoder } from 'util'
 import { AssistantTools } from '@/Assistant/tools'
+import { resolveContextNoteUuids } from '@/Assistant/assistantContextSource'
+import type { AssistantChatDirective } from '@/Assistant/assistantDirectives'
 
 jest.mock('@/Assistant/attachments', () => ({
   ...jest.requireActual('@/Assistant/attachments'),
@@ -42,7 +44,7 @@ jest.mock('@/Assistant/assistantContextSource', () => ({
     omittedNoteCount: 0,
     text: '',
   }),
-  resolveContextNoteUuids: () => ['context-note'],
+  resolveContextNoteUuids: jest.fn(() => ['context-note']),
 }))
 jest.mock('../Panes/ResponsivePaneProvider', () => ({ useResponsiveAppPane: () => ({ presentPane: jest.fn() }) }))
 jest.mock('./AssistantMessageActions', () => ({
@@ -120,7 +122,11 @@ describe('Assistant immediate send feedback and preflight fences', () => {
       await Promise.resolve()
     }
   }
-  const render = (id: string | false = 'first', sharedChat?: AssistantSharedChatBinding) =>
+  const render = (
+    id: string | false = 'first',
+    sharedChat?: AssistantSharedChatBinding,
+    directiveOverrides?: Partial<AssistantChatDirective>,
+  ) =>
     root.render(
       <ConversationPanel
         application={application as never}
@@ -141,6 +147,7 @@ describe('Assistant immediate send feedback and preflight fences', () => {
                 instruction: 'Visible request',
                 selectedText: '',
                 providerPrompt: 'Visible request',
+                ...directiveOverrides,
               } as never)
             : undefined
         }
@@ -158,6 +165,7 @@ describe('Assistant immediate send feedback and preflight fences', () => {
   beforeEach(() => {
     jest.clearAllMocks()
     signedIn = false
+    jest.mocked(resolveContextNoteUuids).mockReturnValue(['context-note'])
     values.clear()
     localStorage.clear()
     container = document.createElement('div')
@@ -172,6 +180,47 @@ describe('Assistant immediate send feedback and preflight fences', () => {
     container.remove()
   })
 
+  it.each(['note', 'selection'] as const)(
+    'binds a %s ribbon action to its captured source through navigation',
+    async (contextKind) => {
+      let activeNote = 'source-note'
+      jest.mocked(resolveContextNoteUuids).mockImplementation((_application, selection) => {
+        if (selection.collection?.type === 'notes') {
+          return selection.collection.uuids
+        }
+        return [activeNote]
+      })
+      const pending = deferred<void>()
+      jest.mocked(flushAssistantNoteEditors).mockReturnValueOnce(pending.promise)
+      await act(async () => {
+        render('ribbon-action', undefined, {
+          noteUuid: 'source-note',
+          contextKind,
+          selectedText: 'Captured ribbon excerpt',
+          providerPrompt: 'Improve this content: Captured ribbon excerpt',
+        })
+        await flush()
+      })
+      expect(runConversationMode).not.toHaveBeenCalled()
+      activeNote = 'newly-opened-note'
+      await act(async () => {
+        pending.resolve()
+        await flush()
+      })
+      expect(runConversationMode).toHaveBeenCalledTimes(1)
+      const options = jest.mocked(runConversationMode).mock.calls[0][2]
+      expect(options.systemPrompt).toContain('note UUID source-note')
+      expect(options.systemPrompt).not.toContain('newly-opened-note')
+      expect(options.systemPrompt).not.toContain('Captured ribbon excerpt')
+      const context = jest.mocked(AssistantTools).mock.calls.at(-1)![1]
+      expect([...(context.selectedNoteUuids ?? [])]).toEqual(contextKind === 'note' ? ['source-note'] : [])
+      if (contextKind === 'selection') {
+        expect(options.systemPrompt).toContain('does not authorize reading or changing the rest of the note')
+      } else {
+        expect(options.systemPrompt).toContain('Only this originating note is in scope')
+      }
+    },
+  )
   it('reports an unapplied permission write and restores the persisted policy', async () => {
     application.setPreference.mockResolvedValue(undefined)
     await act(async () => {
@@ -199,7 +248,9 @@ describe('Assistant immediate send feedback and preflight fences', () => {
     application.getPreference = (key, fallback) => (key === PrefKey.AssistantToolPermissionMode ? savedMode : fallback)
     application.setPreference.mockImplementation(async (key, value) => {
       await gate.promise
-      if (key === PrefKey.AssistantToolPermissionMode) savedMode = value
+      if (key === PrefKey.AssistantToolPermissionMode) {
+        savedMode = value
+      }
     })
     try {
       await act(async () => {

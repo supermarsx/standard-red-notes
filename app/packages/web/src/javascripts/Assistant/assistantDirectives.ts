@@ -22,6 +22,20 @@ export const MAX_ASSISTANT_DIRECTIVE_SELECTION_CHARS = 6_000
 export const MAX_ASSISTANT_DIRECTIVE_INSTRUCTION_CHARS = 800
 export const MAX_ASSISTANT_DIRECTIVE_PROMPT_CHARS = 8_000
 
+/** App-owned target metadata is separate from the untrusted excerpt and survives editor navigation. */
+export function assistantDirectiveTargetInstructions(directive: AssistantChatDirective): string {
+  const uuid = directive.noteUuid
+  if (!uuid || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(uuid)) {
+    return ''
+  }
+  return (
+    `This editor action originates from note UUID ${uuid}. The source note is already identified; do not ask the user for its title or UUID. ` +
+    (directive.contextKind === 'note'
+      ? 'Only this originating note is in scope for note tools, subject to normal permissions. Keep this target even if the user navigates to another note.'
+      : 'Only the supplied selected excerpt is in scope. The source UUID identifies that excerpt; it does not authorize reading or changing the rest of the note. Work with the excerpt without asking which note it belongs to. If the requested action requires broader access, explain that scope limitation rather than requesting an already-known target.')
+  )
+}
+
 let consumer: Consumer | undefined
 let pending: AssistantChatDirective[] = []
 let fallbackSequence = 0

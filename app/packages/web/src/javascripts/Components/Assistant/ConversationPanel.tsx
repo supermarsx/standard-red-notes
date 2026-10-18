@@ -102,7 +102,11 @@ import {
 } from '@/Assistant/assistantLocalSettings'
 import { createAssistantTextDeltaBatcher } from '@/Assistant/assistantTextDeltaBatcher'
 import { boundProviderHistory, DEFAULT_PROVIDER_HISTORY_CHARACTER_BUDGET } from '@/Assistant/providerHistory'
-import { AssistantChatDirective, parseAssistantDirectivePrompt } from '@/Assistant/assistantDirectives'
+import {
+  AssistantChatDirective,
+  assistantDirectiveTargetInstructions,
+  parseAssistantDirectivePrompt,
+} from '@/Assistant/assistantDirectives'
 import {
   assistantSessionPrincipalMatches,
   captureAssistantSessionPrincipal,
@@ -1512,8 +1516,9 @@ function ConversationPanelImpl({
       }
       setPreparingPrompt(pendingUserMessage)
       const expectedNoteSnapshots = new Map<string, ReturnType<typeof captureAssistantNoteSnapshot>>()
+      const excerptOnlyDirective = request.directive && request.directive.contextKind !== 'note'
       const selectedNoteUuids =
-        request.directive || activeContextSelection.scope === 'selection' ? new Set<string>() : resolvedNoteUuids
+        excerptOnlyDirective || activeContextSelection.scope === 'selection' ? new Set<string>() : resolvedNoteUuids
       let builtContext: ReturnType<typeof buildContextForSelection>
       const shared = sharedChatRef.current
       let prepared = false
@@ -1552,12 +1557,9 @@ function ConversationPanelImpl({
             expectedNoteSnapshots.set(noteUuid, captureAssistantNoteSnapshot(selected))
           }
         }
-        // Editor directives authorize disclosure of the visible selection only.
-        // The source UUID validates that attachment but does not grant a model
-        // permission to read or mutate the rest of the note through tools.
-        // A selection directive visibly attaches only the selected excerpt. Its
-        // note UUID validates the source only; it grants neither model context nor
-        // tool access to the rest of that note.
+        // Whole-note ribbon actions scope tools to their captured originating note.
+        // Selected-excerpt actions keep their narrower disclosure boundary.
+        // The captured text is already in providerPrompt; avoid attaching it twice.
         builtContext = request.directive
           ? buildContextForSelection(application, {
               scope: 'collection',
@@ -1937,9 +1939,11 @@ function ConversationPanelImpl({
       // safety/anti-injection rules baked into ASSISTANT_SYSTEM_PROMPT (enforced by
       // composeSystemPromptWithPersona).
       const basePrompt = composeSystemPromptWithPersona(ASSISTANT_SYSTEM_PROMPT, runPersona)
+      const targetPrompt = request.directive ? assistantDirectiveTargetInstructions(request.directive) : ''
+      const scopedPrompt = targetPrompt ? `${basePrompt}\n\n${targetPrompt}` : basePrompt
       const systemPrompt = builtContext.text
-        ? `${basePrompt}\n\n${wrapUntrustedNoteContext(builtContext.text)}`
-        : basePrompt
+        ? `${scopedPrompt}\n\n${wrapUntrustedNoteContext(builtContext.text)}`
+        : scopedPrompt
 
       try {
         const result = await runConversationMode(
