@@ -63,6 +63,10 @@ const ALLOWED_MARKDOWN_NODE_TYPES = new Set([
   'text',
   'link',
   'linebreak',
+  'mermaid',
+  'table',
+  'tablerow',
+  'tablecell',
 ])
 
 const MARK_FORMAT: Record<AssistantInlineMark, number> = {

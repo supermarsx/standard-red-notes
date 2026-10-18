@@ -584,6 +584,40 @@ it('reports effective legacy diagram fitting and refuses settings the legacy ver
 
 describe('precise text formatting', () => {
   beforeEach(ensureCrypto)
+  it('updates a diagram while preserving a nonportable table and its metadata exactly', async () => {
+    const table = {
+      type: 'table',
+      colWidths: [190],
+      $: { custom: 'keep' },
+      children: [
+        {
+          type: 'tablerow',
+          height: 70,
+          children: [
+            {
+              type: 'tablecell',
+              headerState: 3,
+              colSpan: 2,
+              rowSpan: 2,
+              width: 190,
+              children: [{ type: 'paragraph', children: [textNode('Cell')] }],
+            },
+          ],
+        },
+      ],
+    }
+    const diagram = { type: 'mermaid', version: 5, code: 'graph TD\nA-->B', viewMode: 'preview', width: 640 }
+    const text = JSON.stringify({ root: { type: 'root', children: [table, diagram] } })
+    const result = await applyAssistantSuperPatch(text, {
+      base: await assistantSuperRevision(text),
+      operations: [
+        { type: 'update-mermaid', target: { path: [1] }, expectedSource: diagram.code, source: 'graph TD\nA-->C' },
+      ],
+    })
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error('Expected patch')
+    expect(JSON.parse(result.text).root.children).toEqual([table, { ...diagram, code: 'graph TD\nA-->C' }])
+  })
   it('formats only the requested substring, preserving surrounding style and native node state', async () => {
     const leaf = { ...textNode('before target after', 2), style: 'color: red;', future: { preserved: true } }
     const text = JSON.stringify({ root: { type: 'root', children: [{ type: 'paragraph', children: [leaf] }] } })

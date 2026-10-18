@@ -134,7 +134,7 @@ function validatePortableProperties(node: JsonNode, path: string): SuperNoteMark
     type === 'tablecell' &&
     (node.colSpan !== 1 ||
       node.rowSpan !== 1 ||
-      ![undefined, 0].includes(node.headerState as undefined | number) ||
+      ![undefined, 0, 1].includes(node.headerState as undefined | number) ||
       ![undefined, null].includes(node.backgroundColor as undefined | null) ||
       node.width !== undefined)
   ) {
@@ -143,6 +143,14 @@ function validatePortableProperties(node: JsonNode, path: string): SuperNoteMark
       path,
       'Merged, sized, styled, or header-state table cells are not Markdown-portable.',
     )
+  }
+  // Markdown's divider reconstructs an entire header row, never individual
+  // header cells. Accept the canonical importer output, not mixed headers.
+  if (type === 'tablerow' && Array.isArray(node.children)) {
+    const cells = node.children.filter(objectNode)
+    if (cells.some((cell) => cell.headerState === 1) && cells.some((cell) => cell.headerState !== 1)) {
+      return reject('property-not-portable', path, 'Mixed table header cells cannot be preserved by Markdown.')
+    }
   }
   if (type === 'listitem' && node.checked !== undefined && node.checked !== null) {
     return reject('checklist-not-portable', `${path}.checked`, 'Checklist state cannot be preserved safely.')

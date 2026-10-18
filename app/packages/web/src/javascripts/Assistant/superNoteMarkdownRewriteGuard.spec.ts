@@ -3,6 +3,7 @@ import {
   UnsafeSuperNoteMarkdownRewriteError,
   validateSuperNoteMarkdownRewrite,
 } from './superNoteMarkdownRewriteGuard'
+import { createAssistantMarkdownFragmentNodes } from './assistantSuperNoteFragments'
 
 const elementDefaults = {
   direction: null,
@@ -31,6 +32,24 @@ const paragraph = (children: unknown[]) => ({
 })
 
 describe('Super note Markdown rewrite guard', () => {
+  it('accepts canonical plain table rows with uniform Markdown header state', () => {
+    const children = createAssistantMarkdownFragmentNodes('| Name | Value |\n| --- | --- |\n| A | B |', () => 'unused')
+    expect(validateSuperNoteMarkdownRewrite(JSON.stringify({ root: { type: 'root', version: 1, children } }))).toEqual({
+      ok: true,
+    })
+  })
+  it('still refuses mixed header cells and merged or sized canonical tables', () => {
+    const children = createAssistantMarkdownFragmentNodes('| Name | Value |\n| --- | --- |\n| A | B |', () => 'unused')
+    const original = JSON.stringify({ root: { type: 'root', version: 1, children } })
+    for (const change of [{ headerState: 0 }, { headerState: 2 }, { colSpan: 2 }, { width: 200 }]) {
+      const document = JSON.parse(original)
+      Object.assign(document.root.children[0].children[0].children[0], change)
+      expect(validateSuperNoteMarkdownRewrite(JSON.stringify(document))).toMatchObject({
+        ok: false,
+        code: 'property-not-portable',
+      })
+    }
+  })
   it('accepts the conservative portable rich-text subset', () => {
     const document = JSON.stringify({
       root: {

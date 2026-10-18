@@ -19,6 +19,12 @@ const ensureCrypto = () => {
 
 const flatten = (nodes: Node[]): Node[] => nodes.flatMap((node) => [node, ...flatten(node.children ?? [])])
 
+it('imports a native Mermaid fragment without rewriting existing note blocks', () => {
+  ensureCrypto()
+  const nodes = createAssistantMarkdownFragmentNodes('```mermaid\nflowchart TD\nA --> B\n```', () => 'unused')
+  expect(nodes).toEqual([expect.objectContaining({ type: 'mermaid', code: 'flowchart TD\nA --> B' })])
+})
+
 const documentWith = (children: Node[]) => ({
   root: {
     children,
