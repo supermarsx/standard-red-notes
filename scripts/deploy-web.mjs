@@ -441,19 +441,6 @@ export async function deployWeb(
         );
         run(binary, [...prefix, "build", "app"], { capture: false });
       }
-      if (fullUpdate) {
-        const services = backendServicesForUpdate(
-          config.services,
-          process.env.COMPOSE_PROFILES,
-        );
-        if (!services.length) throw new Error("No backend services found.");
-        console.log(
-          "Updating backend services while the current web frontend keeps serving.",
-        );
-        run(binary, [...prefix, "up", "-d", "--build", ...services], {
-          capture: false,
-        });
-      }
       candidate = `${project.slice(0, 32)}-web-${now().toString(36)}-${randomBytes(3).toString("hex")}`;
       // Compose run inherits runtime settings/networks but publishes no host port.
       cc(
@@ -526,6 +513,20 @@ export async function deployWeb(
     await waitFor("Replacement frontend reachability", (timeoutMs) =>
       reachable(`http://${active}:8080/health`, timeoutMs),
     );
+    // Validate the replacement before disrupting any currently serving backend.
+    if (fullUpdate && !rollback) {
+      const services = backendServicesForUpdate(
+        config.services,
+        process.env.COMPOSE_PROFILES,
+      );
+      if (!services.length) throw new Error("No backend services found.");
+      console.log(
+        "Updating backend services while the current web frontend keeps serving.",
+      );
+      run(binary, [...prefix, "up", "-d", "--build", ...services], {
+        capture: false,
+      });
+    }
     console.log(
       "Waiting for backend readiness through the existing public frontend before handover.",
     );

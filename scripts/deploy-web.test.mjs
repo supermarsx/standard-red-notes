@@ -244,7 +244,11 @@ test("unexpected nginx layouts and unsafe container names fail before installati
   assert.throws(() => locationBlocks("  location / {\n"), /Unbalanced/);
 });
 
-function rolloutFixture({ backendReadyAt = 330000, publicDelay = 12000 } = {}) {
+function rolloutFixture({
+  backendReadyAt = 330000,
+  publicDelay = 12000,
+  frontendReadyAt = 160000,
+} = {}) {
   const stateRoot = mkdtempSync(path.join(tmpdir(), "srn-web-phase-"));
   writeFileSync(
     path.join(stateRoot, "fixture.json"),
@@ -288,7 +292,7 @@ function rolloutFixture({ backendReadyAt = 330000, publicDelay = 12000 } = {}) {
         if (format.includes(".Health.Status"))
           return time < 2000
             ? { ok: false, stdout: "" }
-            : ok(time >= 160000 ? "healthy" : "starting");
+            : ok(time >= frontendReadyAt ? "healthy" : "starting");
         if (format.includes(".State.Status"))
           return time < 2000 ? { ok: false, stdout: "" } : ok("running");
         if (format.includes(".Config.Env")) return ok("[]");
@@ -363,6 +367,63 @@ test("handover waits through slow frontend and backend startup with independent 
         ({ args }) => args[0] === "stop" && args.at(-1) === "front",
       ),
     );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("unhealthy replacement never restarts the serving backend", async () => {
+  const fixture = rolloutFixture({ frontendReadyAt: Infinity });
+  try {
+    await assert.rejects(
+      deployWeb(
+        {
+          compose: ["compose"],
+          stateRoot: fixture.stateRoot,
+          timeout: 200,
+          skipBuild: true,
+          fullUpdate: true,
+        },
+        fixture.runtime,
+      ),
+      /Replacement frontend health timed out/,
+    );
+    assert.equal(fixture.switchedAt(), undefined);
+    assert.equal(
+      fixture.calls.some(
+        ({ binary, args }) => binary === "compose" && args[0] === "up",
+      ),
+      false,
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("backend update starts only after replacement health and private reachability pass", async () => {
+  const fixture = rolloutFixture();
+  try {
+    await deployWeb(
+      {
+        compose: ["compose"],
+        stateRoot: fixture.stateRoot,
+        timeout: 200,
+        skipBuild: true,
+        fullUpdate: true,
+      },
+      fixture.runtime,
+    );
+    const update = fixture.calls.findIndex(
+      ({ binary, args }) => binary === "compose" && args[0] === "up",
+    );
+    const probe = fixture.calls.findIndex(
+      ({ binary, args }) =>
+        binary === "docker" &&
+        args.at(-1)?.startsWith("http://fixture-web-") &&
+        args.at(-1).endsWith("/health"),
+    );
+    assert.ok(probe >= 0 && update > probe);
+    assert.ok(fixture.calls[update].time >= 160000);
   } finally {
     fixture.cleanup();
   }

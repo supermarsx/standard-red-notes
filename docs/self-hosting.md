@@ -1286,8 +1286,10 @@ with the replacement before success is reported. A failed handover restores
 the previous routing. Existing API, file-transfer and WebSocket routes are
 preserved; Nginx Proxy Manager needs no upstream change.
 
-`--rolling-web` still backs up and updates the backend, database and other
-enabled services. **API calls, sync and collaboration can be interrupted while
+`--rolling-web` validates replacement frontend health and private reachability
+before updating the backend, database and other enabled services. A failed
+frontend candidate therefore leaves the running backend untouched. It still
+backs up before deployment. **API calls, sync and collaboration can be interrupted while
 those services restart.** The availability guarantee here concerns the web
 frontend. `--web-only` leaves those services running and skips the database
 backup. Git pull and build stamping otherwise follow the normal deploy flags.
