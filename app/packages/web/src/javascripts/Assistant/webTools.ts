@@ -27,6 +27,67 @@ export const WEB_SEARCH_ROUTE = '/v1/web/search'
 /** The route the assistant POSTs to for fetching a single URL. */
 export const WEB_FETCH_ROUTE = '/v1/web/fetch'
 
+/** Only explicit link fields from a successful search, never arbitrary body text. */
+export function nativeResearchSourceUrls(result: unknown): string[] {
+  const urls: string[] = []
+  const visit = (value: unknown, depth: number) => {
+    if (!value || typeof value !== 'object' || depth > 6 || urls.length >= 600) {
+      return
+    }
+    for (const [key, child] of Object.entries(value)) {
+      if (urls.length >= 600) {
+        break
+      }
+      if (
+        ['url', 'URL', 'html_url', 'web_url', 'browser_download_url'].includes(key) &&
+        typeof child === 'string' &&
+        /^https?:\/\//i.test(child)
+      ) {
+        urls.push(child)
+      } else if (typeof child === 'object') {
+        visit(child, depth + 1)
+      }
+    }
+  }
+  if (result && typeof result === 'object' && !('error' in result)) {
+    visit(result, 0)
+  }
+  return urls
+}
+
+/** Structured public research stays on the authenticated socket-compatible proxy. */
+export async function webResearchRequest(
+  application: WebApplication,
+  capability: 'repository' | 'academic' | 'pdf',
+  input: Record<string, unknown>,
+  signal?: AbortSignal,
+): Promise<Record<string, unknown> | WebToolError> {
+  if (!assistantInternetAccessEnabled(application)) {
+    return { error: 'Internet access is disabled in Assistant settings.', cancelled: true }
+  }
+  try {
+    const route = capability === 'pdf' ? '/v1/web/pdf' : '/v1/web/research'
+    const { ok, status, data } = await application.serverJsonRequest<Record<string, unknown>>(
+      route,
+      { ...input, capability },
+      signal,
+    )
+    if (!ok) {
+      return {
+        error: describeHttpError(status, data ?? {}),
+        ...(status === 429 ? { rateLimited: true as const } : {}),
+        ...(status === 401 || status === 403 ? { cancelled: true as const } : {}),
+      }
+    }
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+      return { error: 'Research returned an invalid response.' }
+    }
+    return data
+  } catch {
+    return { error: 'The research service could not be reached.' }
+  }
+}
+
 export interface WebSearchResult {
   title: string
   url: string

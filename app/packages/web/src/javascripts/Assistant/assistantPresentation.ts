@@ -199,6 +199,16 @@ export function describeAssistantTool(name: string, rawArgs: unknown): Assistant
         label: 'Searching the web',
         detail: typeof args.query === 'string' ? `Looking for: ${presentValue('query', args.query)}` : undefined,
       }
+    case 'telegram.inbox':
+      return { label: 'Reading your Telegram inbox' }
+    case 'telegram.reply':
+      return { label: 'Replying to your Telegram chat' }
+    case 'web.repository':
+      return { label: 'Reading a repository' }
+    case 'web.academic':
+      return { label: 'Searching academic publications' }
+    case 'web.pdf':
+      return { label: 'Extracting PDF pages' }
     case 'web.fetch':
       return { label: 'Reading a web page' }
     case 'delegate':
@@ -218,7 +228,17 @@ export function describeAssistantToolConfirmation({
 }: AssistantToolConfirmation): AssistantConfirmationPresentation {
   const presentation = describeAssistantTool(name, args)
   const destructive = isIrreversibleAssistantTool({ name, args })
-  const { fields, reviewIncomplete } = confirmationFields(args)
+  const summary = confirmationFields(args)
+  const fields =
+    name === 'telegram.reply' && typeof args.text === 'string'
+      ? [
+          { label: 'Destination', value: 'Your paired private Telegram chat' },
+          { label: 'Reply to update', value: String(args.updateId) },
+          { label: 'Message', value: args.text.slice(0, 4096) },
+        ]
+      : summary.fields
+  const reviewIncomplete =
+    name === 'telegram.reply' && typeof args.text === 'string' ? args.text.length > 4096 : summary.reviewIncomplete
   return {
     title: destructive ? 'Confirm assistant action' : 'Allow assistant action',
     confirmButtonText: destructive ? 'Allow change' : 'Allow',

@@ -288,7 +288,7 @@ export async function run(messages: ChatMessage[], opts: AgentOptions): Promise<
       // Refresh the advertised tools after each turn so changed account permissions
       // are reflected in the model request as well as checked during execution.
       const tools = describeTools(session.tools())
-      const webTools = tools.filter((tool) => tool.name === 'web.search' || tool.name === 'web.fetch')
+      const webTools = tools.filter((tool) => tool.name.startsWith('web.'))
       const webCapability = webTools.length
         ? `This turn offers these server-mediated internet tools: ${webTools.map((tool) => tool.name).join(', ')}. When the user's request calls for online information, use the applicable available tool, subject to approval. Do not claim that internet access is unavailable without attempting the tool. An offered tool does not prove its server backend is configured: if it returns an availability or configuration error, explain that specific failure honestly and do not fabricate results. Private context must not be disclosed without the user's explicit authorization.`
         : 'No internet tools are offered for this turn. Do not claim to have searched or read the web; do not invent the reason these tools are unavailable.'

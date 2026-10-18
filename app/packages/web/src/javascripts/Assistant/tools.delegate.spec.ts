@@ -915,6 +915,68 @@ describe('AssistantTools trusted confirmation identity', () => {
 })
 
 describe('Assistant web access modes', () => {
+  it('Safe grants explicit PDF links returned by academic search but not unrelated URLs', async () => {
+    const serverJsonRequest = jest
+      .fn()
+      .mockResolvedValue({
+        ok: true,
+        status: 200,
+        data: { data: [{ link: [{ URL: 'https://example.test/paper.pdf' }] }] },
+      })
+    const requestWebConfirmation = jest.fn(async () => true)
+    const app = {
+      serverJsonRequest,
+      getPreference: (key: string, fallback: unknown) => (key === 'assistantWebAccessMode' ? 'safe' : fallback),
+    } as unknown as WebApplication
+    const tools = new AssistantTools(app, { ...makeContext(), requestWebConfirmation })
+    await tools.call('web.academic', { provider: 'crossref', action: 'search', query: 'topic' })
+    await tools.call('web.pdf', { url: 'https://example.test/paper.pdf' })
+    expect(requestWebConfirmation).toHaveBeenCalledTimes(1)
+    await tools.call('web.pdf', { url: 'https://example.test/other.pdf' })
+    expect(requestWebConfirmation).toHaveBeenCalledTimes(2)
+  })
+  it('requires explicit Telegram reply confirmation even with general confirmation disabled', async () => {
+    const serverJsonRequest = jest.fn().mockResolvedValue({ ok: true, data: { ok: true } })
+    const requestConfirmation = jest.fn(async () => false)
+    const tools = new AssistantTools({ serverJsonRequest } as unknown as WebApplication, {
+      ...makeContext(),
+      shouldRequestConfirmation: () => false,
+      requestConfirmation,
+    })
+    await expect(tools.call('telegram.reply', { updateId: 3, text: 'hello' })).resolves.toMatchObject({
+      cancelled: true,
+    })
+    expect(requestConfirmation).toHaveBeenCalledTimes(1)
+    expect(serverJsonRequest).not.toHaveBeenCalled()
+  })
+  it.each(['repository', 'academic', 'pdf'] as const)(
+    'routes web.%s through Strict approval and server proxy',
+    async (capability) => {
+      const serverJsonRequest = jest.fn().mockResolvedValue({ ok: true, status: 200, data: { data: [] } })
+      const requestWebConfirmation = jest.fn(async () => true)
+      const app = {
+        serverJsonRequest,
+        getPreference: (key: string, fallback: unknown) => (key === 'assistantWebAccessMode' ? 'strict' : fallback),
+      } as unknown as WebApplication
+      const tools = new AssistantTools(app, { ...makeContext(), requestWebConfirmation })
+      const args =
+        capability === 'pdf'
+          ? { url: 'https://example.test/paper.pdf' }
+          : { provider: capability === 'academic' ? 'crossref' : 'github', action: 'search', query: 'topic' }
+      await tools.call(`web.${capability}`, args)
+      expect(requestWebConfirmation).toHaveBeenCalledTimes(1)
+      expect(serverJsonRequest).toHaveBeenCalledWith(
+        capability === 'pdf' ? '/v1/web/pdf' : '/v1/web/research',
+        { ...args, capability },
+        undefined,
+      )
+      requestWebConfirmation.mockResolvedValue(false)
+      await expect(tools.call(`web.${capability}`, args)).rejects.toMatchObject({
+        code: 'ASSISTANT_ACTION_NOT_ALLOWED',
+      })
+      expect(serverJsonRequest).toHaveBeenCalledTimes(1)
+    },
+  )
   it('dispatches repository search and focused page reads through the existing web policy', async () => {
     const serverJsonRequest = jest.fn(async (route: string) => ({
       ok: true,

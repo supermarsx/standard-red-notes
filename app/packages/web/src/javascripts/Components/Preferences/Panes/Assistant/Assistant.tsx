@@ -1,3 +1,4 @@
+import TelegramBridgeSetting from './TelegramBridgeSetting'
 import AssistantWebAccessSetting from './AssistantWebAccessSetting'
 import DeepResearchLimitsSetting from '@/Components/Assistant/DeepResearchLimitsSetting'
 import {
@@ -1262,6 +1263,7 @@ const Assistant = ({ application }: { application: WebApplication }) => {
               </p>
             )}
             <DeepResearchLimitsSetting />
+            <TelegramBridgeSetting application={application} />
             <Text className="text-passive-1 mt-2">
               Turning this off removes web tools from current and new chats. Note search remains available; queries and
               page URLs are sent to the server only while internet access is enabled.

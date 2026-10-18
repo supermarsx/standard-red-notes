@@ -24,7 +24,7 @@ export function classifyAssistantToolRisk(request: AssistantToolConfirmation): A
   if (request.name === 'reminders.set' && request.args.email === true) {
     return 'external'
   }
-  if (request.name === 'web.search' || request.name === 'web.fetch') {
+  if (request.name.startsWith('web.') || request.name.startsWith('telegram.')) {
     return 'external'
   }
   if (

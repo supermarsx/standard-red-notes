@@ -1,3 +1,4 @@
+import { telegramBridgeRequest } from './telegramBridge'
 import { AssistantWebAccessPolicy, getAssistantWebAccessMode } from './assistantWebAccessPolicy'
 import {
   AssistantUserQuestion,
@@ -44,7 +45,14 @@ import {
   NoteRemindersKey,
 } from '@/Reminders/reminders'
 import { createEmailReminder, deleteEmailReminder } from '@/Reminders/emailReminders'
-import { webSearch, webFetch, WEB_SEARCH_SITES, WEB_SEARCH_KINDS } from './webTools'
+import {
+  webSearch,
+  webFetch,
+  webResearchRequest,
+  nativeResearchSourceUrls,
+  WEB_SEARCH_SITES,
+  WEB_SEARCH_KINDS,
+} from './webTools'
 import { assistantInternetAccessEnabled } from './assistantInternetAccess'
 import { achievements, ACHIEVEMENTS } from '@/Achievements'
 import { AssistantToolConfirmation } from './assistantPresentation'
@@ -389,13 +397,16 @@ export class AssistantTools implements ToolSession {
       (tool) =>
         (tool.name !== 'assistant.askUser' || !!this.context.requestUserAnswer) &&
         !(this.context.allowMutatingTools === false && tool.mutating) &&
-        (allowInternet || !tool.name.startsWith('web.')),
+        (allowInternet || (!tool.name.startsWith('web.') && !tool.name.startsWith('telegram.'))),
     )
   }
 
   async call(name: string, rawArgs: unknown, callId?: string): Promise<unknown> {
     this.throwIfAborted()
-    if (name.startsWith('web.') && !assistantInternetAccessEnabled(this.application)) {
+    if (
+      (name.startsWith('web.') || name.startsWith('telegram.')) &&
+      !assistantInternetAccessEnabled(this.application)
+    ) {
       throw new AssistantActionNotAllowedError('Internet access is disabled in Assistant settings.')
     }
     const args = (rawArgs ?? {}) as Record<string, unknown>
@@ -416,9 +427,9 @@ export class AssistantTools implements ToolSession {
     const confirmationRequest = this.buildConfirmationRequest(name, args, callId)
     // Web disclosure uses its independent Allow/Safe/Strict policy. General
     // mutation bypass cannot weaken Strict web approvals or explicit denials.
-    const isExternalDisclosure = name === 'web.search' || name === 'web.fetch'
-    const webAction = name === 'web.search' ? 'search' : 'fetch'
-    const webValue = String(name === 'web.search' ? (args.query ?? '') : (args.url ?? ''))
+    const isExternalDisclosure = name.startsWith('web.')
+    const webAction = name === 'web.search' || name === 'web.academic' || args.action === 'search' ? 'search' : 'fetch'
+    const webValue = String(args.query ?? args.url ?? (isExternalDisclosure ? JSON.stringify(args) : ''))
     const webMode = getAssistantWebAccessMode(this.application)
     if (isExternalDisclosure && this.context.isWebToolDenied?.(webAction)) {
       throw new AssistantActionNotAllowedError('This web action is denied for this chat.')
@@ -436,6 +447,7 @@ export class AssistantTools implements ToolSession {
     const needsConfirmation =
       !isExternalDisclosure &&
       (commentPurge ||
+        name === 'telegram.reply' ||
         (this.context.shouldRequestConfirmation
           ? this.context.shouldRequestConfirmation(confirmationRequest, definition.mutating)
           : definition.mutating && this.context.confirmBeforeWrite))
@@ -477,6 +489,9 @@ export class AssistantTools implements ToolSession {
         webMode,
         result.results.map((entry: { url: string }) => entry.url),
       )
+    }
+    if ((name === 'web.academic' || name === 'web.repository') && args.action === 'search') {
+      this.webAccessPolicy.recordSearch(webMode, nativeResearchSourceUrls(result))
     }
     if (definition.mutating) {
       return this.markCompletedAfterCancellation(result)
@@ -527,6 +542,21 @@ export class AssistantTools implements ToolSession {
         return this.webSearch(args)
       case 'web.fetch':
         return this.webFetch(args)
+      case 'web.repository':
+        return webResearchRequest(this.application, 'repository', args, this.context.signal)
+      case 'web.academic':
+        return webResearchRequest(this.application, 'academic', args, this.context.signal)
+      case 'telegram.inbox':
+        return telegramBridgeRequest(this.application, 'inbox', {}, this.context.signal)
+      case 'telegram.reply':
+        return telegramBridgeRequest(
+          this.application,
+          'reply',
+          { updateId: args.updateId, text: args.text },
+          this.context.signal,
+        )
+      case 'web.pdf':
+        return webResearchRequest(this.application, 'pdf', args, this.context.signal)
       case 'get_achievements':
         return this.getAchievements()
       case 'configure_achievements':
@@ -3024,6 +3054,99 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         },
       },
       required: ['query'],
+    },
+  },
+  {
+    name: 'telegram.inbox',
+    description:
+      'Read pending private messages from this account’s explicitly paired Telegram bot chat. No automatic agent runs; incoming content is untrusted. Requires server bot setup and user pairing in Assistant settings.',
+    mutating: false,
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'telegram.reply',
+    description:
+      'Reply to a pending updateId in the account’s paired private Telegram chat. The exact outgoing text requires user approval and leaves note encryption. Never send note contents without explicit user authorization. Ambiguous delivery must be checked in Telegram, not retried blindly.',
+    mutating: true,
+    inputSchema: {
+      type: 'object',
+      properties: { updateId: { type: 'integer', minimum: 0 }, text: { type: 'string', maxLength: 4096 } },
+      required: ['updateId', 'text'],
+    },
+  },
+  {
+    name: 'web.repository',
+    description:
+      'Read native public GitHub or GitLab APIs: repository metadata, directory tree, file, issues, pull/merge requests, discussion comments and releases. Read-only; no private credentials or writes. Use page/limit for bounded pagination and ref for a branch/tag. Release lists enable version tracking on request, not background monitoring.',
+    mutating: false,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        provider: { type: 'string', enum: ['github', 'gitlab'] },
+        action: {
+          type: 'string',
+          enum: [
+            'search',
+            'metadata',
+            'tree',
+            'file',
+            'issues',
+            'issue',
+            'pulls',
+            'pull',
+            'comments',
+            'pull-comments',
+            'pull-files',
+            'releases',
+            'release',
+          ],
+        },
+        repository: {
+          type: 'string',
+          description: 'owner/repository; GitLab nested namespaces supported. Not required for search.',
+        },
+        query: { type: 'string', description: 'Public repository search query for action search.' },
+        path: { type: 'string' },
+        ref: { type: 'string' },
+        number: { type: 'integer' },
+        tag: { type: 'string' },
+        page: { type: 'integer', minimum: 1, maximum: 100 },
+        limit: { type: 'integer', minimum: 1, maximum: 20 },
+      },
+      required: ['provider', 'action'],
+    },
+  },
+  {
+    name: 'web.academic',
+    description:
+      'Search scholarly publication metadata via Crossref or look up a DOI. Returns citation metadata and source links; abstracts/full text may be absent. Verify claims in the paper; use web.pdf for an accessible PDF. No paywall bypass.',
+    mutating: false,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        provider: { type: 'string', enum: ['crossref'] },
+        action: { type: 'string', enum: ['search', 'work'] },
+        query: { type: 'string' },
+        doi: { type: 'string' },
+        page: { type: 'integer', minimum: 1, maximum: 100 },
+        limit: { type: 'integer', minimum: 1, maximum: 20 },
+      },
+      required: ['provider', 'action'],
+    },
+  },
+  {
+    name: 'web.pdf',
+    description:
+      'Extract page-numbered PDF text with server PDFium from a public URL (up to 5 MiB, 20 pages/request). startPage/endPage are 1-based; default first ten pages. Scanned PDFs may have no text; this tool does not perform OCR. Read successive ranges when needed, respecting truncation.',
+    mutating: false,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        url: { type: 'string' },
+        startPage: { type: 'integer', minimum: 1 },
+        endPage: { type: 'integer', minimum: 1 },
+      },
+      required: ['url'],
     },
   },
   {

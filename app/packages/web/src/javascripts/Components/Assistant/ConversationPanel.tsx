@@ -1042,7 +1042,7 @@ function ConversationPanelImpl({
       // removes a stale approval card.
       const runSignal = toolSignal ?? abortRef.current?.signal
       const permissionMode = toolPermissionModeRef.current
-      if (permissionMode === 'bypass') {
+      if (permissionMode === 'bypass' && request.name !== 'telegram.reply') {
         if (!mountedRef.current || runSignal?.aborted) {
           return Promise.resolve(false)
         }
@@ -1093,6 +1093,10 @@ function ConversationPanelImpl({
             handleAbort()
           }
         })
+      }
+
+      if (request.name === 'telegram.reply') {
+        return ask('Sending a message to Telegram always requires your approval.')
       }
 
       if (permissionMode === 'allow-all' && canPreflightAutoAllow(request) && preflightProviderRef.current) {

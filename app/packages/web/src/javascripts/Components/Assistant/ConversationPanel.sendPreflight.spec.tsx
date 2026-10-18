@@ -297,6 +297,37 @@ describe('Assistant immediate send feedback and preflight fences', () => {
     expect(presence.dispose).toHaveBeenCalledTimes(1)
   })
 
+  it('always shows outgoing Telegram text for approval even in bypass mode', async () => {
+    const original = application.getPreference
+    application.getPreference = (key, fallback) => (key === PrefKey.AssistantToolPermissionMode ? 'bypass' : fallback)
+    try {
+      await act(async () => {
+        render('telegram')
+        await flush()
+      })
+      const context = jest.mocked(AssistantTools).mock.calls.at(-1)![1]
+      let settled = false
+      let pending!: Promise<boolean>
+      await act(async () => {
+        pending = context.requestConfirmation({
+          name: 'telegram.reply',
+          args: { updateId: 2, text: 'Exact approved message' },
+        } as never)
+        void pending.then(() => {
+          settled = true
+        })
+        await flush()
+      })
+      expect(settled).toBe(false)
+      expect(container.textContent).toContain('Exact approved message')
+      expect(container.textContent).toContain('Sending a message to Telegram always requires your approval.')
+      await act(async () => stop()!.click())
+      expect(await pending).toBe(false)
+    } finally {
+      application.getPreference = original
+    }
+  })
+
   it('reports an unapplied permission write and restores the persisted policy', async () => {
     application.setPreference.mockResolvedValue(undefined)
     await act(async () => {
