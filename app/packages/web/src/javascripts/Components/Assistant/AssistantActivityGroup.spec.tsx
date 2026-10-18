@@ -6,6 +6,26 @@ import AssistantActivityGroup from './AssistantActivityGroup'
 jest.mock('@/Components/Icon/Icon', () => ({ __esModule: true, default: () => null }))
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
+it('includes compact persisted counts when earlier tool cards were omitted', () => {
+  const container = document.createElement('div')
+  const root = createRoot(container)
+  try {
+    act(() =>
+      root.render(
+        <AssistantActivityGroup
+          tools={[{ label: 'Fetch', outcome: 'succeeded' }]}
+          omittedCounts={{ succeeded: 599, failed: 2 }}
+        >
+          Details
+        </AssistantActivityGroup>,
+      ),
+    )
+    expect(container.querySelector('summary')?.textContent).toBe('600 completed· 2 failed')
+  } finally {
+    act(() => root.unmount())
+  }
+})
+
 it('keeps a working indicator while the answer is generating after completed tools', () => {
   const container = document.createElement('div')
   const root = createRoot(container)
@@ -49,7 +69,11 @@ it('starts collapsed with the latest real pending activity and retains detailed 
     expect(summary.textContent).toContain('Read selected note')
     expect(summary.textContent).toContain('Working…')
     expect(summary.textContent).not.toContain('Search notes')
-    act(() => summary.click())
+    expect(container.querySelector('button')).toBeNull()
+    act(() => {
+      summary.click()
+      details.dispatchEvent(new Event('toggle'))
+    })
     expect(details.open).toBe(true)
     act(() => container.querySelector('button')!.click())
     expect(undo).toHaveBeenCalledTimes(1)

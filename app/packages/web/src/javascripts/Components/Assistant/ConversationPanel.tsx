@@ -29,6 +29,8 @@ import AssistantToolPermissionSelector from './AssistantToolPermissionSelector'
 import { useAssistantComposerSync } from './useAssistantComposerSync'
 import type { AssistantChatComposerPatch } from '@/Assistant/assistantChatComposerState'
 import AssistantTranscriptCopyButton from './AssistantTranscriptCopyButton'
+import SaveResearchReport from './SaveResearchReport'
+import type { DeepResearchProgress } from '@/Assistant/deepResearch'
 import type { AssistantConversationMode } from '@/Assistant/conversationModes'
 import { runConversationMode } from '@/Assistant/conversationModeRunner'
 import { ReactNode, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -72,6 +74,7 @@ import {
 import {
   AssistantChatHistoryCheckpoint,
   PersistedAssistantMessage,
+  type AssistantActivityOmittedCounts,
   createAssistantChatHistoryCheckpoint,
   persistAssistantChatHistoryStrict,
   sanitizeAssistantChatMessages,
@@ -153,6 +156,7 @@ type UIMessage =
       id: string
       text: string
       tools: ToolEntry[]
+      activityOmittedCounts?: AssistantActivityOmittedCounts
       streaming?: boolean
       progressTextLength?: number
     }
@@ -166,6 +170,7 @@ const hydrateAssistantHistory = (history: PersistedAssistantMessage[]): UIMessag
         id: message.id,
         text: message.text,
         progressTextLength: message.progressTextLength,
+        activityOmittedCounts: message.activityOmittedCounts,
         tools: (message.activities ?? []).map((activity) => {
           const persistedChange = activity.noteChange
           return {
@@ -350,6 +355,10 @@ function ConversationPanelImpl({
     })
   }, [])
   const [isRunning, setIsRunning] = useState(false)
+  const [researchProgress, setResearchProgress] = useState<DeepResearchProgress | null>(null)
+  const [researchReports, setResearchReports] = useState<{ id: string; text: string; scope: string | undefined }[]>([])
+  const researchReportsRef = useRef<typeof researchReports>([])
+  const [researchRetentionWarnings, setResearchRetentionWarnings] = useState<string[]>([])
   const [isStopping, setIsStopping] = useState(false)
   // Local presentation only: unleased prompts must never enter synced history.
   const [preparingPrompt, setPreparingPrompt] = useState<Extract<UIMessage, { kind: 'user' }> | null>(null)
@@ -733,6 +742,7 @@ function ConversationPanelImpl({
           id: message.id,
           text: message.text,
           progressTextLength: message.progressTextLength,
+          activityOmittedCounts: message.activityOmittedCounts,
           activities: message.tools.map((tool) => ({
             id: tool.id,
             name: tool.name,
@@ -754,6 +764,21 @@ function ConversationPanelImpl({
       return message
     })
     const normalizedMessages = sanitizeAssistantChatMessages(latestMessages)
+    const shortenedReports: string[] = []
+    for (const reportToRetain of researchReportsRef.current.filter(
+      (report) => report.scope === accountScope && latestMessages.some((message) => message.id === report.id),
+    )) {
+      const fullMessage = latestMessages.find((message) => message.id === reportToRetain.id)
+      const savedMessage = normalizedMessages.find((message) => message.id === reportToRetain.id)
+      const shortened = fullMessage?.text !== savedMessage?.text
+      if (shortened) {
+        shortenedReports.push(reportToRetain.id)
+      }
+    }
+    setResearchRetentionWarnings(shortenedReports)
+    if (shortenedReports.length) {
+      throw new AssistantChatStorageError('RECORD_SIZE_LIMIT', 'validate')
+    }
     for (const message of latestMessages) {
       if (
         message.attachments?.length &&
@@ -822,7 +847,7 @@ function ConversationPanelImpl({
         setHistoryFailure((previous) => (previous === 'write' ? null : previous))
       }
     }
-  }, [application, historyDiagnosticSource])
+  }, [application, historyDiagnosticSource, accountScope])
   historyWriterRef.current = async () => {
     const scope = getAssistantAccountScope(application)
     try {
@@ -1927,6 +1952,19 @@ function ConversationPanelImpl({
           beginSteeredResponse()
           return answer
         },
+        isWebToolDenied: (action) =>
+          sessionToolDecisionsRef.current.get(`web.${action}`) === false || !isSessionCurrent(),
+        requestWebConfirmation: async (action, value) => {
+          if (sessionToolDecisionsRef.current.get(`web.${action}`) === false || !isSessionCurrent()) {
+            return false
+          }
+          const approved = await confirmDialog({
+            title: action === 'search' ? 'Search the web?' : 'Read this web page?',
+            text: `${action === 'search' ? 'Search query' : 'Page URL'}: ${value}\n\nThis is sent to your server and its configured web service. Retrieved text is sent to your AI provider.`,
+            confirmButtonText: action === 'search' ? 'Search' : 'Read page',
+          })
+          return approved && isSessionCurrent() && !controller.signal.aborted
+        },
         shouldRequestConfirmation,
         onAuthorization: (callId, authorization) => {
           recordToolAuthorization(callId, authorization)
@@ -1983,7 +2021,13 @@ function ConversationPanelImpl({
       // composeSystemPromptWithPersona).
       const basePrompt = composeSystemPromptWithPersona(ASSISTANT_SYSTEM_PROMPT, runPersona)
       const targetPrompt = request.directive ? assistantDirectiveTargetInstructions(request.directive) : ''
-      const scopedPrompt = targetPrompt ? `${basePrompt}\n\n${targetPrompt}` : basePrompt
+      const destinationPrompt =
+        activeContextSelection.scope === 'new-note'
+          ? 'The user selected New note as the destination. No existing notes are in scope. When the user requests writing a note, create a new note rather than asking for an existing UUID. Selecting this context alone does not request a write. Research findings still require a confirmed save.'
+          : activeContextSelection.scope === 'no-note'
+            ? 'The user selected No note. No existing notes are in scope. Answer in the chat; do not create a note unless the user explicitly asks for one.'
+            : ''
+      const scopedPrompt = [basePrompt, targetPrompt, destinationPrompt].filter(Boolean).join('\n\n')
       const systemPrompt = builtContext.text
         ? `${scopedPrompt}\n\n${wrapUntrustedNoteContext(builtContext.text)}`
         : scopedPrompt
@@ -2114,6 +2158,12 @@ function ConversationPanelImpl({
             ),
             images: attachmentImages(request.attachments),
             isCurrent: isSessionCurrent,
+            onResearchProgress: (progress) => {
+              if (isSessionCurrent() && !controller.signal.aborted) {
+                setResearchProgress(progress)
+              }
+            },
+            isWebToolDenied: (action) => sessionToolDecisionsRef.current.get(`web.${action}`) === false,
             requestWebConfirmation: async (action, value) => {
               const name = action === 'search' ? 'web.search' : 'web.fetch'
               if (sessionToolDecisionsRef.current.get(name) === false || !isSessionCurrent()) {
@@ -2137,6 +2187,18 @@ function ConversationPanelImpl({
 
         textDeltas.flush()
         actionDenied = result.errorCode === 'ACTION_NOT_ALLOWED'
+        if (
+          (runMode === 'research' || runMode === 'deep-research') &&
+          result.stopReason === 'end_turn' &&
+          result.finalText.trim()
+        ) {
+          const report = { id: assistantId, text: result.finalText, scope: accountScope }
+          researchReportsRef.current = [
+            ...researchReportsRef.current.filter((entry) => entry.id !== report.id && entry.scope === accountScope),
+            report,
+          ]
+          setResearchReports(researchReportsRef.current)
+        }
         updateAssistant((message) => {
           message.streaming = false
           // An abort just after steering can return the previous response's
@@ -2177,6 +2239,7 @@ function ConversationPanelImpl({
           }
         }
       } finally {
+        setResearchProgress(null)
         controller.signal.removeEventListener('abort', disposeAssistantPresence)
         disposeAssistantPresence()
         textDeltas.dispose()
@@ -2214,6 +2277,7 @@ function ConversationPanelImpl({
       application,
       tabId,
       flushChatHistory,
+      accountScope,
       presentPane,
       refreshUsage,
       proxyImagesAllowed,
@@ -2482,6 +2546,33 @@ function ConversationPanelImpl({
               onRemoveMessage={removeMessage}
             />
           ))}
+          {isRunning && researchProgress && (
+            <div role="status" className="text-passive-1 text-xs">
+              {researchProgress.kind === 'researching-web'
+                ? `${researchProgress.phase === 'searching' ? 'Searching and reading' : researchProgress.phase === 'summarizing' ? 'Summarizing evidence' : 'Planning the next search'} · ${researchProgress.sourceCount}/${researchProgress.maxSources} sources · ${Math.floor(researchProgress.elapsedMs / 60_000)} min`
+                : researchProgress.kind === 'synthesizing'
+                  ? 'Writing the research report…'
+                  : 'Researching…'}
+            </div>
+          )}
+          {!isRunning &&
+            researchReports
+              .filter((report) => report.scope === accountScope && messages.some((message) => message.id === report.id))
+              .map((researchReport) => (
+                <div key={`${accountScope}:${researchReport.id}`}>
+                  {researchRetentionWarnings.includes(researchReport.id) && (
+                    <p role="alert" className="text-warning text-xs">
+                      Full findings remain in this tab because they exceed chat storage limits. Save them to a note
+                      before closing this tab.
+                    </p>
+                  )}
+                  <SaveResearchReport
+                    application={application}
+                    report={researchReport.text}
+                    reportId={researchReport.id}
+                  />
+                </div>
+              ))}
           {preparingPrompt && (
             <div className="max-w-[85%] min-w-0 self-end" aria-label="Preparing assistant message">
               <div className="bg-info text-info-contrast rounded-lg px-2.5 py-1.5 text-sm leading-5">
@@ -2598,8 +2689,9 @@ function ConversationPanelImpl({
         {!noticeDismissed && (
           <div className="text-warning mb-2 flex items-start gap-2 text-xs">
             <div className="min-w-0 flex-1">
-              Messages and note content the assistant reads are sent to your configured AI provider. Web access always
-              asks before contacting your server&rsquo;s configured search service. {contextSummary}
+              Messages and note content the assistant reads are sent to your configured AI provider. Web requests use
+              your server&rsquo;s configured service and follow your Allow, Safe or Strict web access setting.{' '}
+              {contextSummary}
             </div>
             <button
               type="button"
@@ -2737,8 +2829,10 @@ export const MessageBubble = memo(function MessageBubble({
     <AssistantMessageActions message={message} onRemoveMessage={onRemoveMessage}>
       {(messageTextRef) => (
         <div className="min-w-0">
-          {message.tools.length > 0 && (
+          {(message.tools.length > 0 ||
+            Object.values(message.activityOmittedCounts ?? {}).some((count) => count > 0)) && (
             <AssistantActivityGroup
+              omittedCounts={message.activityOmittedCounts}
               streaming={message.streaming}
               tools={message.tools.map((tool) => ({
                 label: tool.persistedLabel ?? describeAssistantTool(tool.name, tool.args).label,

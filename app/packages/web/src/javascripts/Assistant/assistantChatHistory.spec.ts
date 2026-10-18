@@ -1,6 +1,7 @@
 /** @jest-environment jsdom */
 import {
   AssistantChatHistoryStorage,
+  assistantChatRetainsFullText,
   ASSISTANT_CHAT_HISTORY_CHECKPOINT_DELAY_MS,
   ASSISTANT_CHAT_HISTORY_LEGACY_KEY_PREFIX,
   ASSISTANT_CHAT_HISTORY_STORAGE_KEY_PREFIX,
@@ -100,10 +101,10 @@ describe('assistant chat history', () => {
   it('bounds retained text and deletes only the requested transcript', async () => {
     const { storage } = createStorage()
     await persistAssistantChatHistory(storage, 'account', 'one', [
-      { kind: 'assistant', id: '1', text: 'x'.repeat(10_000) },
+      { kind: 'assistant', id: '1', text: 'x'.repeat(250_000) },
     ])
     await persistAssistantChatHistory(storage, 'account', 'two', [{ kind: 'error', id: '2', text: 'Keep this' }])
-    expect(readAssistantChatHistory(storage, 'account', 'one')[0].text).toHaveLength(8_000)
+    expect(readAssistantChatHistory(storage, 'account', 'one')[0].text).toHaveLength(240_000)
     await deleteAssistantChatHistory(storage, 'account', 'one')
     expect(readAssistantChatHistory(storage, 'account', 'one')).toEqual([])
     expect(readAssistantChatHistory(storage, 'account', 'two')).toEqual([{ kind: 'error', id: '2', text: 'Keep this' }])
@@ -644,4 +645,63 @@ describe('assistant chat history', () => {
     expect(await deleteAssistantChatHistory(storage, 'account', 'strict')).toBe(false)
     expect(values.get(keyFor('account', 'strict'))).toEqual({ version: 3, messages: [], deleted: true })
   })
+})
+
+describe('long research transcript retention', () => {
+  it('round-trips a complete report with 600 ordinary source links', async () => {
+    const { storage } = createStorage()
+    const text =
+      '# Findings\n' +
+      'Detailed research. '.repeat(3000) +
+      '\n## Sources\n' +
+      Array.from({ length: 600 }, (_, index) => `- [Source ${index}](https://example.com/source/${index})`).join('\n')
+    const messages = [{ kind: 'assistant' as const, id: 'report', text }]
+    expect(text.length).toBeGreaterThan(80_000)
+    expect(assistantChatRetainsFullText(messages, 'report', text)).toBe(true)
+    await persistAssistantChatHistory(storage, 'research-account', 'research-chat', messages)
+    expect(readAssistantChatHistory(storage, 'research-account', 'research-chat')[0].text).toBe(text)
+  })
+  it('detects per-message truncation and total-text eviction explicitly', () => {
+    const oversized = 'x'.repeat(240_001)
+    expect(
+      assistantChatRetainsFullText([{ kind: 'assistant', id: 'report', text: oversized }], 'report', oversized),
+    ).toBe(false)
+    const messages = ['old', 'middle', 'latest'].map((id) => ({ kind: 'assistant', id, text: 'x'.repeat(240_000) }))
+    expect(assistantChatRetainsFullText(messages, 'old', messages[0].text)).toBe(false)
+    expect(assistantChatRetainsFullText(messages, 'latest', messages[2].text)).toBe(true)
+    expect(
+      sanitizeAssistantChatMessages(messages).reduce((sum, message) => sum + message.text.length, 0),
+    ).toBeLessThanOrEqual(512_000)
+  })
+  it('detects byte-budget loss even below character limits', () => {
+    const text = '漢'.repeat(240_000)
+    const messages = [
+      { kind: 'assistant', id: 'first', text },
+      { kind: 'assistant', id: 'report', text },
+    ]
+    expect(assistantChatRetainsFullText(messages, 'report', text)).toBe(false)
+    expect(JSON.stringify(sanitizeAssistantChatMessages(messages)).length).toBeLessThan(768 * 1024)
+  })
+})
+
+
+it('retains aggregate outcomes for all 660 calls without retaining 660 detail cards or counting twice', () => {
+  const activities = Array.from({ length: 660 }, (_, index) => ({ id: `call-${index}`, name: 'web.fetch', label: 'Read page', outcome: index % 2 ? 'failed' : 'succeeded' }))
+  const first = sanitizeAssistantChatMessages([{ kind: 'assistant', id: 'research', text: 'Report', activities }])
+  expect(first[0].activities).toHaveLength(8)
+  expect(first[0].activityOmittedCounts).toEqual({ succeeded: 326, failed: 326 })
+  expect(sanitizeAssistantChatMessages(first)).toEqual(first)
+  const continued = sanitizeAssistantChatMessages([{ ...first[0], activities: [...first[0].activities!, { id: 'extra', name: 'web.fetch', label: 'Read page', outcome: 'denied' }] }])
+  const total = Object.values(continued[0].activityOmittedCounts ?? {}).reduce((sum, count) => sum + count, 0) + (continued[0].activities?.length ?? 0)
+  expect(total).toBe(661)
+})
+it('validates omitted counters and never persists arbitrary metadata or nonassistant counters', () => {
+  const input = { succeeded: 100001, failed: -1, denied: 1.5, interrupted: 2, token: 'secret' }
+  const messages = sanitizeAssistantChatMessages([
+    { kind: 'assistant', id: 'a', text: '', activityOmittedCounts: input },
+    { kind: 'user', id: 'b', text: '', activityOmittedCounts: { succeeded: 1 } },
+  ])
+  expect(messages[0].activityOmittedCounts).toEqual({ interrupted: 2 })
+  expect(messages[1].activityOmittedCounts).toBeUndefined()
+  expect(JSON.stringify(messages)).not.toContain('secret')
 })

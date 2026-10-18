@@ -50,6 +50,13 @@ it('keeps historical messages and unchanged tool cards out of repeated stream re
     )
   try {
     act(render)
+    expect(AssistantChangeDiff).not.toHaveBeenCalled()
+    act(() => {
+      for (const details of container.querySelectorAll<HTMLDetailsElement>('details.group\\/activity')) {
+        details.open = true
+        details.dispatchEvent(new Event('toggle'))
+      }
+    })
     expect(AssistantChangeDiff).toHaveBeenCalledTimes(2)
     for (let i = 0; i < 30; i++) {
       active = { ...active, text: active.text + ' next', tools: [...active.tools] }

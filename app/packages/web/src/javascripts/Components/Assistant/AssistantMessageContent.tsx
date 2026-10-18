@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import { sanitizeHtmlString } from '@standardnotes/utils'
 import { markdownToHtml } from '@/Utils/markdownToHtml'
+import { splitAssistantSources } from '@/Assistant/assistantSources'
 
 export const ASSISTANT_STREAM_MARKDOWN_INTERVAL_MS = 200
 
@@ -46,6 +47,7 @@ export default function AssistantMessageContent({
   messageTextRef: RefObject<HTMLDivElement | null>
 }) {
   const [format, setFormat] = useState<'markdown' | 'plain'>('markdown')
+  const [sourcesExpanded, setSourcesExpanded] = useState(false)
   const [formattedText, setFormattedText] = useState(text)
   const latestText = useRef(text)
   latestText.current = text
@@ -77,7 +79,18 @@ export default function AssistantMessageContent({
   // update. A replaced response never exposes an old account/message's snapshot.
   const markdownText = !streaming ? text : text.startsWith(formattedText) ? formattedText : ''
   const pendingText = streaming ? text.slice(markdownText.length) : ''
-  const html = useMemo(() => (format === 'markdown' ? assistantMarkdownHtml(markdownText) : ''), [markdownText, format])
+  const sections = useMemo(
+    () => (streaming ? { body: markdownText, sources: '', count: 0 } : splitAssistantSources(markdownText)),
+    [markdownText, streaming],
+  )
+  const html = useMemo(
+    () => (format === 'markdown' ? assistantMarkdownHtml(sections.body) : ''),
+    [sections.body, format],
+  )
+  const sourcesHtml = useMemo(
+    () => (format === 'markdown' && sourcesExpanded && sections.sources ? assistantMarkdownHtml(sections.sources) : ''),
+    [format, sourcesExpanded, sections.sources],
+  )
   return (
     <div className="text-text min-w-0 py-1 text-sm leading-5">
       <div
@@ -111,6 +124,20 @@ export default function AssistantMessageContent({
               dangerouslySetInnerHTML={{ __html: html }}
             />
             {pendingText && <span className="break-words whitespace-pre-wrap">{pendingText}</span>}
+            {sections.sources && (
+              <details
+                className="border-border mt-2 rounded border px-2 py-1 text-xs"
+                onToggle={(event) => setSourcesExpanded(event.currentTarget.open)}
+              >
+                <summary className="text-passive-1 cursor-pointer">Sources · {sections.count}</summary>
+                {sourcesExpanded && (
+                  <div
+                    className="[&_a]:text-info max-h-80 overflow-auto break-words [&_a]:underline [&_h2]:mt-2 [&_h2]:font-semibold [&_h3]:mt-2 [&_h3]:font-semibold [&_li]:my-1 [&_ul]:pl-3"
+                    dangerouslySetInnerHTML={{ __html: sourcesHtml }}
+                  />
+                )}
+              </details>
+            )}
           </div>
         )}
       </div>

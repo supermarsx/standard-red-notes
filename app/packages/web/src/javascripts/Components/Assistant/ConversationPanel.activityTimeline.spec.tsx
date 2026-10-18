@@ -158,6 +158,11 @@ describe('Assistant conversation activity timeline', () => {
     })
     const group = container.querySelector('details')!
     expect(group.open).toBe(false)
+    expect(group.querySelector('[aria-label="Activity updates"]')).toBeNull()
+    act(() => {
+      group.open = true
+      group.dispatchEvent(new Event('toggle'))
+    })
     expect(group.querySelector('summary')?.textContent).toContain('Working')
     expect(container.querySelectorAll('[aria-label="Message display format"]')).toHaveLength(0)
     expect(group.querySelector('[aria-label="Activity updates"]')?.textContent).toBe('I will check the note first.')
@@ -195,6 +200,11 @@ describe('Assistant conversation activity timeline', () => {
     await act(async () => {
       render(false)
       await flush()
+    })
+    act(() => {
+      const details = container.querySelector<HTMLDetailsElement>('details.group\\/activity')!
+      details.open = true
+      details.dispatchEvent(new Event('toggle'))
     })
     const restored = container.textContent!
     expect(container.querySelectorAll('details.group\\/activity')).toHaveLength(1)

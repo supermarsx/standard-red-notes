@@ -57,6 +57,31 @@ export type PersistedAssistantToolActivity = {
   noteChange?: PersistedAssistantNoteChange
 }
 
+export type AssistantActivityOmittedCounts = Partial<Record<PersistedAssistantToolActivityOutcome, number>>
+const MAX_ACTIVITY_SUMMARY_COUNT = 100_000
+const ACTIVITY_SUMMARY_OUTCOMES = ['succeeded', 'failed', 'denied', 'interrupted'] as const
+
+function sanitizeActivityOmittedCounts(value: unknown): AssistantActivityOmittedCounts | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined
+  }
+  const result: AssistantActivityOmittedCounts = {}
+  for (const outcome of ACTIVITY_SUMMARY_OUTCOMES) {
+    const count = (value as Record<string, unknown>)[outcome]
+    if (typeof count === 'number' && Number.isSafeInteger(count) && count > 0 && count <= MAX_ACTIVITY_SUMMARY_COUNT) {
+      result[outcome] = count
+    }
+  }
+  return Object.keys(result).length ? result : undefined
+}
+function countOmittedActivity(
+  message: PersistedAssistantMessage,
+  outcome: PersistedAssistantToolActivityOutcome,
+): void {
+  const counts = (message.activityOmittedCounts ??= {})
+  counts[outcome] = Math.min(MAX_ACTIVITY_SUMMARY_COUNT, (counts[outcome] ?? 0) + 1)
+}
+
 export type PersistedAssistantMessage = {
   kind: 'user' | 'assistant' | 'error'
   id: string
@@ -64,6 +89,8 @@ export type PersistedAssistantMessage = {
   steered?: boolean
   attachments?: AssistantAttachment[]
   activities?: PersistedAssistantToolActivity[]
+  /** Aggregate terminal outcomes for detail cards omitted by bounded history storage. */
+  activityOmittedCounts?: AssistantActivityOmittedCounts
   /** Visible narration prefix folded into the activity group, not private reasoning. */
   progressTextLength?: number
 }
@@ -146,8 +173,8 @@ const AUDIT_VERSION = 2
 const LEGACY_VERSION = 1
 const MAX_MESSAGES = 80
 const MAX_MESSAGE_ID_CHARS = 128
-const MAX_MESSAGE_CHARS = 8_000
-const MAX_TOTAL_CHARS = 80_000
+const MAX_MESSAGE_CHARS = 240_000
+const MAX_TOTAL_CHARS = 512_000
 const MAX_ACTIVITIES_PER_MESSAGE = 8
 const MAX_ACTIVITIES_PER_TRANSCRIPT = 64
 const MAX_AUDIT_BYTES = 16 * 1_024
@@ -440,21 +467,40 @@ const sanitizeMessage = (
         .filter((activity) => activity !== undefined)
     : []
 
-  return {
+  const omitted =
+    message.kind === 'assistant' && includeActivities
+      ? sanitizeActivityOmittedCounts(message.activityOmittedCounts)
+      : undefined
+  const sanitizedMessage: PersistedAssistantMessage = {
     kind: message.kind,
     id,
     text: message.text.slice(0, MAX_MESSAGE_CHARS),
     ...(attachments?.length ? { attachments } : {}),
     ...(typeof message.steered === 'boolean' ? { steered: message.steered } : {}),
     ...(activities.length > 0 ? { activities } : {}),
+    ...(omitted ? { activityOmittedCounts: omitted } : {}),
     ...(message.kind === 'assistant' &&
-    activities.length > 0 &&
+    (activities.length > 0 || omitted !== undefined) &&
     Number.isSafeInteger(message.progressTextLength) &&
     (message.progressTextLength as number) > 0 &&
     (message.progressTextLength as number) <= message.text.length
       ? { progressTextLength: Math.min(message.progressTextLength as number, MAX_MESSAGE_CHARS) }
       : {}),
   }
+  if (includeActivities && message.kind === 'assistant' && boundUntrustedInput && Array.isArray(message.activities)) {
+    // Count dropped detail cards without admitting their payloads into history.
+    const omittedEnd = Math.min(
+      MAX_ACTIVITY_SUMMARY_COUNT,
+      Math.max(0, message.activities.length - MAX_UNTRUSTED_INPUT_ACTIVITIES),
+    )
+    for (let index = 0; index < omittedEnd; index++) {
+      const activity = sanitizeActivity(message.activities[index], false)
+      if (activity) {
+        countOmittedActivity(sanitizedMessage, activity.outcome)
+      }
+    }
+  }
+  return sanitizedMessage
 }
 
 const cap = (
@@ -538,6 +584,9 @@ const cap = (
         activityCount >= MAX_ACTIVITIES_PER_TRANSCRIPT ||
         auditBytes + activityBytes > MAX_AUDIT_BYTES
       ) {
+        if (bounded[messageIndex].kind === 'assistant') {
+          countOmittedActivity(bounded[messageIndex], activity.outcome)
+        }
         continue
       }
       retained.unshift(auditActivity)
@@ -624,6 +673,13 @@ const parseStoredHistory = (value: unknown): ParsedHistory | undefined => {
 /** Shared encrypted-item storage uses the same bounded transcript sanitizer as local history. */
 export function sanitizeAssistantChatMessages(messages: unknown[]): PersistedAssistantMessage[] {
   return cap(messages, true, true, true)
+}
+
+/** Terminal-report check only: never run the transcript sanitizer for each streamed token. */
+export function assistantChatRetainsFullText(messages: unknown[], messageId: string, text: string): boolean {
+  return sanitizeAssistantChatMessages(messages).some(
+    (message) => message.kind === 'assistant' && message.id === messageId && message.text === text,
+  )
 }
 
 export type AssistantChatHistoryReadResult =

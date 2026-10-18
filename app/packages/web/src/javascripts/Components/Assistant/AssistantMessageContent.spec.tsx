@@ -7,6 +7,29 @@ import * as markdown from '@/Utils/markdownToHtml'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
+it('keeps sources collapsed and renders the breakdown only when expanded', () => {
+  const container = document.createElement('div')
+  const root = createRoot(container)
+  const ref = createRef<HTMLDivElement>()
+  const text =
+    'Answer\n\n## Retrieved web sources\n- [W1] [Evidence](https://example.test)\n\n### Research breakdown\n- Search rounds: 1'
+  try {
+    act(() => root.render(createElement(AssistantMessageContent, { text, messageTextRef: ref })))
+    const details = container.querySelector('details')!
+    expect(details.open).toBe(false)
+    expect(details.querySelector('summary')?.textContent).toBe('Sources · 1')
+    expect(container.querySelector('a')).toBeNull()
+    act(() => {
+      details.open = true
+      details.dispatchEvent(new Event('toggle'))
+    })
+    expect(details.textContent).toContain('Search rounds: 1')
+    expect(details.querySelector('a')?.getAttribute('href')).toBe('https://example.test')
+  } finally {
+    act(() => root.unmount())
+  }
+})
+
 it('renders the note-preview markdown pipeline without active HTML or automatic image requests', () => {
   const output = document.createElement('div')
   output.innerHTML = assistantMarkdownHtml(
