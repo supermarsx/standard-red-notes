@@ -42,6 +42,16 @@ export interface AgentResult {
 }
 
 const RUN_CANCELLED = Symbol('assistant-run-cancelled')
+const RAW_TOOL_MARKER = '<|tool_call:start|>'
+const RAW_TOOL_MESSAGE =
+  'The model returned tool-call markup as ordinary text instead of a supported tool call. No tools from that response were executed. Check the model/provider tool-calling configuration and retry.'
+function toolMarkupPrefix(text: string): 'pending' | 'invalid' | 'text' {
+  const prefix = text.trimStart()
+  if (prefix.startsWith(RAW_TOOL_MARKER)) {
+    return 'invalid'
+  }
+  return text.length < 64 && RAW_TOOL_MARKER.startsWith(prefix) ? 'pending' : 'text'
+}
 
 function isDeniedToolResult(result: unknown): boolean {
   return (
@@ -213,6 +223,23 @@ export async function run(messages: ChatMessage[], opts: AgentOptions): Promise<
   let finalText = ''
   let activeAssistantText = ''
   let currentStep = 0
+  const failedMutationsByTool = new Map<string, number>()
+  let failedMutations = 0
+  const mutationFailureLimitReached = (name: string, mutating: boolean): boolean => {
+    if (!mutating) {
+      return false
+    }
+    failedMutations++
+    const failures = (failedMutationsByTool.get(name) ?? 0) + 1
+    failedMutationsByTool.set(name, failures)
+    return failures >= 2 || failedMutations >= 3
+  }
+  const repeatedFailure = (): AgentResult => ({
+    finalText:
+      'The assistant stopped after repeated failed changes. Check the failed activity, re-read the current note, and retry with a corrected request. No further tools were run; earlier successful changes may still be present.',
+    steps: currentStep,
+    stopReason: 'error',
+  })
 
   const drainSteers = (): string[] => {
     const steers = opts.control?.drainSteers() ?? []
@@ -251,6 +278,7 @@ export async function run(messages: ChatMessage[], opts: AgentOptions): Promise<
       checkBoundary()
 
       let assistantText = ''
+      let deliveredTextLength = 0
       activeAssistantText = ''
       const toolCalls: AssistantToolCall[] = []
       let stopReason: ProviderStopReason | undefined
@@ -276,8 +304,15 @@ export async function run(messages: ChatMessage[], opts: AgentOptions): Promise<
         checkBoundary()
         if (event.kind === 'text-delta') {
           assistantText += event.delta
+          const markup = toolMarkupPrefix(assistantText)
+          if (markup === 'invalid') {
+            return { finalText: RAW_TOOL_MESSAGE, steps: step, stopReason: 'error' }
+          }
           activeAssistantText = assistantText
-          opts.onTextDelta?.(event.delta)
+          if (markup !== 'pending') {
+            opts.onTextDelta?.(assistantText.slice(deliveredTextLength))
+            deliveredTextLength = assistantText.length
+          }
         } else if (event.kind === 'tool-call') {
           toolCalls.push({ id: event.id, name: event.name, args: event.args })
         } else if (event.kind === 'finish') {
@@ -286,6 +321,9 @@ export async function run(messages: ChatMessage[], opts: AgentOptions): Promise<
         } else if (event.kind === 'error') {
           return { finalText: event.message, steps: step, stopReason: 'error' }
         }
+      }
+      if (deliveredTextLength < assistantText.length) {
+        opts.onTextDelta?.(assistantText.slice(deliveredTextLength))
       }
 
       if (!stopReason) {
@@ -371,6 +409,7 @@ export async function run(messages: ChatMessage[], opts: AgentOptions): Promise<
         checkBoundary()
         opts.onToolCall?.(toolCall)
         checkBoundary()
+        const mutating = session.tools().find((tool) => tool.name === toolCall.name)?.mutating === true
         try {
           checkBoundary()
           // ToolSession operations can include non-cancellable local mutations.
@@ -395,6 +434,10 @@ export async function run(messages: ChatMessage[], opts: AgentOptions): Promise<
               stopReason: 'error',
             }
           }
+          if (isFailedToolResult(result) && mutationFailureLimitReached(toolCall.name, mutating)) {
+            checkBoundary()
+            return repeatedFailure()
+          }
           // A non-cancellable local mutation may have committed while Stop was
           // requested. Report that settled result truthfully before stopping;
           // the boundary still prevents every later tool/provider action.
@@ -411,6 +454,10 @@ export async function run(messages: ChatMessage[], opts: AgentOptions): Promise<
           const message = `error: ${error instanceof Error ? error.message : String(error)}`
           history.push({ role: 'tool', content: message, toolCallId: toolCall.id, name: toolCall.name })
           opts.onToolResult?.(toolCall.id, message, 'failed')
+          if (mutationFailureLimitReached(toolCall.name, mutating)) {
+            checkBoundary()
+            return repeatedFailure()
+          }
         }
         checkBoundary()
         const betweenToolSteers = drainSteers()
@@ -446,6 +493,7 @@ export async function run(messages: ChatMessage[], opts: AgentOptions): Promise<
     injectSteers()
     checkBoundary()
     activeAssistantText = ''
+    let deliveredSummaryLength = 0
     const summaryStream = provider.send({
       system: systemPrompt + '\n\nYou have reached the step cap. Answer with what you have.',
       messages: history,
@@ -457,8 +505,18 @@ export async function run(messages: ChatMessage[], opts: AgentOptions): Promise<
       checkBoundary()
       if (event.kind === 'text-delta') {
         activeAssistantText += event.delta
-        opts.onTextDelta?.(event.delta)
+        const markup = toolMarkupPrefix(activeAssistantText)
+        if (markup === 'invalid') {
+          return { finalText: RAW_TOOL_MESSAGE, steps: currentStep, stopReason: 'error' }
+        }
+        if (markup !== 'pending') {
+          opts.onTextDelta?.(activeAssistantText.slice(deliveredSummaryLength))
+          deliveredSummaryLength = activeAssistantText.length
+        }
       }
+    }
+    if (deliveredSummaryLength < activeAssistantText.length) {
+      opts.onTextDelta?.(activeAssistantText.slice(deliveredSummaryLength))
     }
     finalText = activeAssistantText || finalText
     if (activeAssistantText) {

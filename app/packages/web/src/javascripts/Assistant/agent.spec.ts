@@ -35,6 +35,122 @@ class RecordingSession implements ToolSession {
   }
 }
 
+describe('bounded failed changes and malformed tool text', () => {
+  const definition = (name: string, mutating = true): ToolDefinition => ({
+    name,
+    mutating,
+    description: name,
+    inputSchema: {},
+  })
+  const calls = (...names: string[]): ProviderEvent[] => [
+    ...names.map((name, index): ProviderEvent => ({ kind: 'tool-call', id: `${name}-${index}`, name, args: {} })),
+    { kind: 'finish', stopReason: 'tool_use' },
+  ]
+  it('stops repeated failed mutations even with unlimited steps and successful reads between', async () => {
+    const provider = new ScriptedProvider([
+      () => calls('notes.patch'),
+      () => calls('notes.read'),
+      () => calls('notes.patch', 'notes.delete'),
+    ])
+    const call = jest.fn(async (name: string) => (name === 'notes.read' ? { ok: true } : { error: 'stale revision' }))
+    const onToolResult = jest.fn()
+    const result = await run([], {
+      provider,
+      session: {
+        tools: () => [definition('notes.patch'), definition('notes.delete'), definition('notes.read', false)],
+        call,
+      },
+      systemPrompt: '',
+      maxSteps: 0,
+      onToolResult,
+    })
+    expect(call.mock.calls.map(([name]) => name)).toEqual(['notes.patch', 'notes.read', 'notes.patch'])
+    expect(result.stopReason).toBe('error')
+    expect(result.finalText).toContain('repeated failed changes')
+    expect(onToolResult).toHaveBeenLastCalledWith('notes.patch-0', expect.any(String), 'failed')
+  })
+  it('bounds failures across different mutation tools and thrown errors', async () => {
+    const provider = new ScriptedProvider([() => calls('one', 'two', 'three', 'destructive')])
+    const call = jest.fn(async () => {
+      throw new Error('write failed')
+    })
+    const result = await run([], {
+      provider,
+      session: { tools: () => ['one', 'two', 'three', 'destructive'].map((name) => definition(name)), call },
+      systemPrompt: '',
+      maxSteps: 0,
+    })
+    expect(call).toHaveBeenCalledTimes(3)
+    expect(result.stopReason).toBe('error')
+  })
+  it('allows a corrected mutation after one failure', async () => {
+    const provider = new ScriptedProvider([
+      () => calls('notes.patch'),
+      () => calls('notes.patch'),
+      () => [
+        { kind: 'text-delta', delta: 'Done' },
+        { kind: 'finish', stopReason: 'end_turn' },
+      ],
+    ])
+    const call = jest.fn().mockResolvedValueOnce({ ok: false }).mockResolvedValue({ ok: true })
+    const result = await run([], {
+      provider,
+      session: { tools: () => [definition('notes.patch')], call },
+      systemPrompt: '',
+    })
+    expect(result.stopReason).toBe('end_turn')
+    expect(call).toHaveBeenCalledTimes(2)
+  })
+  it('rejects raw protocol text split across chunks without rendering or executing it', async () => {
+    const provider = new ScriptedProvider([
+      () => [
+        { kind: 'text-delta', delta: '<|tool_' },
+        { kind: 'text-delta', delta: 'call:start|>notes.delete' },
+        ...calls('notes.delete'),
+      ],
+    ])
+    const onTextDelta = jest.fn()
+    const call = jest.fn()
+    const result = await run([], {
+      provider,
+      session: { tools: () => [definition('notes.delete')], call },
+      systemPrompt: '',
+      onTextDelta,
+    })
+    expect(result.stopReason).toBe('error')
+    expect(result.finalText).toContain('tool-call markup')
+    expect(onTextDelta).not.toHaveBeenCalled()
+    expect(call).not.toHaveBeenCalled()
+  })
+  it('preserves ordinary discussion containing a quoted protocol marker', async () => {
+    const text = 'The string `<|tool_call:start|>` is a protocol marker.'
+    const provider = new ScriptedProvider([
+      () => [
+        { kind: 'text-delta', delta: text },
+        { kind: 'finish', stopReason: 'end_turn' },
+      ],
+    ])
+    const result = await run([], { provider, session: new RecordingSession(), systemPrompt: '' })
+    expect(result).toMatchObject({ stopReason: 'end_turn', finalText: text })
+  })
+  it('rejects raw tool markup from the tool-less step-cap summary too', async () => {
+    const provider = new ScriptedProvider([
+      () => calls('echo'),
+      () => [
+        { kind: 'text-delta', delta: '<|tool_call:' },
+        { kind: 'text-delta', delta: 'start|>echo' },
+        { kind: 'finish', stopReason: 'end_turn' },
+      ],
+    ])
+    const session = new RecordingSession()
+    const onTextDelta = jest.fn()
+    const result = await run([], { provider, session, systemPrompt: '', maxSteps: 1, onTextDelta })
+    expect(result.stopReason).toBe('error')
+    expect(session.calls).toHaveLength(1)
+    expect(onTextDelta).not.toHaveBeenCalled()
+  })
+})
+
 describe('run() steering', () => {
   it('consumes steering that arrives during a terminal stream exactly once', async () => {
     const provider = new ScriptedProvider([
