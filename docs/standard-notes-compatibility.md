@@ -63,6 +63,17 @@ client payload-validation tests cover the new type without accepting unknown
 strings or deleted records carrying content. This narrow review updates the
 fork content-type pin, not the upstream parity pins.
 
+On 2026-10-19, the same narrow review admitted `SN|PrivateComment` for
+account-private comment operations. The allowlist diff adds one literal and
+preserves every existing type. Client payload validation accepts its encrypted
+backup records; server save validation rejects vault/key-system association.
+Existing encryption, protocol and backup envelopes are unchanged. Original
+clients do not display these threads and original servers may reject their type.
+Deploy the matching fork app and server together. The previous UserPrefs copy is
+retained for recovery; migration does not repair data already lost to older
+singleton conflicts. The fork-source hash is updated for this additive extension;
+upstream parity pins are unchanged.
+
 {% include mermaid.html %}
 
 ```mermaid

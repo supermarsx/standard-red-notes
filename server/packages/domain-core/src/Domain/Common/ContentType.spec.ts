@@ -10,6 +10,7 @@ describe('ContentType', () => {
 
   it('accepts private encrypted Assistant chat sync records', () => {
     expect(ContentType.create('SN|AssistantChat').isFailed()).toBe(false)
+    expect(ContentType.create('SN|PrivateComment').isFailed()).toBe(false)
   })
 
   it('should not create an invalid value object', () => {

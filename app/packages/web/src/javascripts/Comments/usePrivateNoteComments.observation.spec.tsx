@@ -2,6 +2,7 @@
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { ApplicationEvent, ContentType } from '@standardnotes/snjs'
+import { PRIVATE_COMMENT_CONTENT_TYPE } from './PrivateCommentOperations'
 import { usePrivateNoteComments } from './usePrivateNoteComments'
 
 const mockRead = jest.fn(() => [])
@@ -73,6 +74,39 @@ it('does not reread the private store for unrelated note traffic and handles eve
     expect(mockRead).toHaveBeenCalledTimes(8)
     await act(async () => mockPreferencesChanged())
     expect(mockRead).toHaveBeenCalledTimes(9)
+    mockRead.mockClear()
+    await act(async () =>
+      mockItemsChanged({
+        changed: [
+          {
+            uuid: 'unrelated-private',
+            content_type: PRIVATE_COMMENT_CONTENT_TYPE,
+            content: { changes: [{ noteUuid: 'other' }] },
+          } as never,
+        ],
+        inserted: [],
+        removed: [],
+        unerrored: [],
+      }),
+    )
+    expect(mockRead).not.toHaveBeenCalled()
+    await act(async () =>
+      mockItemsChanged({
+        changed: [],
+        inserted: [
+          {
+            uuid: 'current-private',
+            content_type: PRIVATE_COMMENT_CONTENT_TYPE,
+            content: { changes: [{ noteUuid: 'current' }] },
+          } as never,
+        ],
+        removed: [],
+        unerrored: [],
+      }),
+    )
+    expect(mockRead).toHaveBeenCalledTimes(1)
+    await act(async () => emit('removed', 'missing-private', PRIVATE_COMMENT_CONTENT_TYPE))
+    expect(mockRead).toHaveBeenCalledTimes(2)
     expect(mockApplication.addEventObserver).toHaveBeenCalledWith(
       expect.any(Function),
       ApplicationEvent.PreferencesChanged,

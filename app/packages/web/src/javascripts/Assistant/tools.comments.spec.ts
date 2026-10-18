@@ -1,13 +1,18 @@
 import { ContentType } from '@standardnotes/snjs'
 import type { WebApplication } from '@/Application/WebApplication'
 import { AssistantTools, AssistantToolContext } from './tools'
-import { readPrivateNoteComments, mutatePrivateNoteComments } from '@/Comments/PrivateNoteComments'
+import {
+  readPrivateNoteComments,
+  mutatePrivateNoteComments,
+  privateCommentsReadError,
+} from '@/Comments/PrivateNoteComments'
 import { readDisplayNoteComments } from '@/Comments/CommentAuthorship'
 import { captureAssistantCommentTarget } from '@/Comments/CommentTargets'
 import type { NoteComment } from '@/Comments/comments'
 
 jest.mock('@/Comments/PrivateNoteComments', () => ({
   readPrivateNoteComments: jest.fn(),
+  privateCommentsReadError: jest.fn(),
   mutatePrivateNoteComments: jest.fn(),
 }))
 jest.mock('@/Comments/CommentAuthorship', () => ({
@@ -108,7 +113,7 @@ const comment = (id = 'comment', authorUuid = 'self'): NoteComment => ({
 const add = { noteUuid: 'note', visibility: 'private', action: 'add', target: 'note', text: 'Remember @self' }
 beforeEach(() => jest.clearAllMocks())
 
-it('keeps private additions encrypted in personal preferences and resolves @self without notifying others', async () => {
+it('keeps private additions encrypted in personal storage and resolves @self without notifying others', async () => {
   const h = harness()
   await expect(h.tools.call('comments.manage', add)).resolves.toMatchObject({ ok: true, visibility: 'private' })
   expect(h.private()[0].text).toContain('(self)')
@@ -252,4 +257,12 @@ it('withholds comment mutations from read-only agents and prevents nonowners pur
     nonowner.tools.call('comments.manage', { noteUuid: 'note', visibility: 'collaborative', action: 'purge-all' }),
   ).rejects.toThrow('note or shared-vault owner')
   expect(nonowner.controller.purgeNoteComments).not.toHaveBeenCalled()
+})
+
+it('surfaces private history failures rather than reporting an empty comment list', async () => {
+  const h = harness()
+  jest.mocked(privateCommentsReadError).mockReturnValueOnce('Private history could not be read safely.')
+  await expect(h.tools.call('comments.list', { noteUuid: 'note', visibility: 'private' })).rejects.toThrow(
+    'could not be read safely',
+  )
 })

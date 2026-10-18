@@ -180,3 +180,28 @@ it('uses a readable theme token for the empty state and permanently acknowledges
     mockPrivateHintDismissed = true
   }
 })
+
+it('shows private read failures instead of presenting missing history as an empty conversation', async () => {
+  jest
+    .mocked(useApplication)
+    .mockReturnValue({
+      sessions: { getUser: () => ({ uuid: 'user-a' }), isCurrentSessionReadOnly: () => false },
+      isAuthorizedToRenderItem: () => true,
+    } as never)
+  jest.mocked(usePrivateNoteComments).mockReturnValue({
+    comments: [],
+    quarantinedCount: 0,
+    selfUuid: 'user-a',
+    readError: 'Private history is unavailable.',
+  } as never)
+  const container = document.createElement('div')
+  const root = createRoot(container)
+  try {
+    await act(async () => root.render(<CommentsPanel note={{ uuid: 'note-b' } as never} />))
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('Private history is unavailable.')
+    expect(container.textContent).not.toContain('No comments yet.')
+  } finally {
+    await act(async () => root.unmount())
+    container.remove()
+  }
+})

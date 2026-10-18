@@ -71,7 +71,11 @@ import { extractPlaintextFromNoteText } from '@/Utils/NoteStats'
 import { projectNoteChecklist, checklistForNote, checklistForPassage } from './noteChecklistContext'
 import { assertSuperNoteMarkdownRewriteSafe } from './superNoteMarkdownRewriteGuard'
 import { sanitizeAssistantNoteChange } from './assistantChatHistory'
-import { readPrivateNoteComments, mutatePrivateNoteComments } from '@/Comments/PrivateNoteComments'
+import {
+  readPrivateNoteComments,
+  mutatePrivateNoteComments,
+  privateCommentsReadError,
+} from '@/Comments/PrivateNoteComments'
 import { readDisplayNoteComments } from '@/Comments/CommentAuthorship'
 import { canPurgeAllNoteComments, noteCommentOwner } from '@/Comments/CommentPermissions'
 import {
@@ -1631,12 +1635,15 @@ export class AssistantTools implements ToolSession {
   }
 
   private readAssistantComments(note: SNNote, visibility: 'private' | 'collaborative') {
-    return visibility === 'private'
-      ? readPrivateNoteComments(this.application, note.uuid).map((comment) => ({
-          ...comment,
-          verifiedAuthorUuid: comment.authorUuid,
-        }))
-      : readDisplayNoteComments(this.application, note).comments
+    if (visibility === 'private') {
+      const comments = readPrivateNoteComments(this.application, note.uuid)
+      const error = privateCommentsReadError(this.application)
+      if (error) {
+        throw new Error(error)
+      }
+      return comments.map((comment) => ({ ...comment, verifiedAuthorUuid: comment.authorUuid }))
+    }
+    return readDisplayNoteComments(this.application, note).comments
   }
 
   private commentsList(args: Record<string, unknown>) {

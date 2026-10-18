@@ -3,6 +3,7 @@ import { $getSelection, $isRangeSelection, COMMAND_PRIORITY_EDITOR, createComman
 import { useEffect } from 'react'
 import { ApplicationEvent, ContentType, SNNote } from '@standardnotes/snjs'
 import { useApplicationOrNull } from '@/Components/ApplicationProvider'
+import { PRIVATE_COMMENT_CONTENT_TYPE, privateCommentItemTouchesNote } from '@/Comments/PrivateCommentOperations'
 import { readPrivateNoteComments } from '@/Comments/PrivateNoteComments'
 import { readDisplayNoteComments } from '@/Comments/CommentAuthorship'
 import { COMMENT_INDICATORS_PREF_KEY, showCommentIndicators } from '@/Comments/CommentPreferences'
@@ -98,12 +99,20 @@ export function CommentsPlugin({ note }: { note?: SNNote }): null {
     // The initial read above already covers this note. Avoid streaming every
     // note at registration, and ignore changes to unrelated note payloads.
     const stopItems = application.items.addObserver(
-      [ContentType.TYPES.Note, ContentType.TYPES.UserPrefs, ContentType.TYPES.TrustedContact],
-      ({ changed, inserted, removed }) => {
+      [
+        ContentType.TYPES.Note,
+        ContentType.TYPES.UserPrefs,
+        ContentType.TYPES.TrustedContact,
+        PRIVATE_COMMENT_CONTENT_TYPE,
+      ],
+      ({ changed, inserted, removed, unerrored = [] }) => {
         if (
-          [...changed, ...inserted, ...removed].some(
-            (item) => item.uuid === noteUuid || item.content_type !== ContentType.TYPES.Note,
-          )
+          [...changed, ...inserted, ...removed, ...unerrored].some((item) => {
+            if (item.content_type === PRIVATE_COMMENT_CONTENT_TYPE) {
+              return privateCommentItemTouchesNote(item, noteUuid)
+            }
+            return item.uuid === noteUuid || item.content_type !== ContentType.TYPES.Note
+          })
         ) {
           readComments()
         }

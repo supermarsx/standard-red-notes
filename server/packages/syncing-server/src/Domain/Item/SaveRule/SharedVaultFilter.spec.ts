@@ -16,6 +16,7 @@ import { ItemHash } from '../ItemHash'
 import { Item } from '../Item'
 import { SharedVaultOperationOnItem } from '../../SharedVault/SharedVaultOperationOnItem'
 import { SharedVaultAssociation } from '../../SharedVault/SharedVaultAssociation'
+import { KeySystemAssociation } from '../../KeySystem/KeySystemAssociation'
 
 describe('SharedVaultFilter', () => {
   let determineSharedVaultOperationOnItem: DetermineSharedVaultOperationOnItem
@@ -77,6 +78,68 @@ describe('SharedVaultFilter', () => {
       .fn()
       .mockResolvedValueOnce(sharedVaultUser)
       .mockResolvedValueOnce(null)
+  })
+
+  it.each([
+    { shared_vault_uuid: '00000000-0000-0000-0000-000000000000', key_system_identifier: 'key-system' },
+    { shared_vault_uuid: null, key_system_identifier: 'key-system' },
+    { shared_vault_uuid: '00000000-0000-0000-0000-000000000000', key_system_identifier: null },
+  ])('refuses a private comment association before checking vault membership: %j', async (association) => {
+    itemHash = ItemHash.create({ ...itemHash.props, content_type: 'SN|PrivateComment', ...association }).getValue()
+    const result = await createFilter().check({
+      apiVersion: '001',
+      itemHash,
+      userUuid: '00000000-0000-0000-0000-000000000000',
+      snjsVersion: '2.200.0',
+    })
+    expect(result.passed).toBe(false)
+    expect(result.conflict?.type).toBe(ConflictType.SharedVaultInvalidState)
+    expect(determineSharedVaultOperationOnItem.execute).not.toHaveBeenCalled()
+  })
+
+  it.each(['SN|PrivateComment', ContentType.TYPES.Note])(
+    'refuses an existing private comment key association even when the incoming type is %s',
+    async (contentType) => {
+      existingItem = Item.create({
+        ...existingItem.props,
+        contentType: ContentType.create('SN|PrivateComment').getValue(),
+        sharedVaultAssociation: undefined,
+        keySystemAssociation: KeySystemAssociation.create('key-system').getValue(),
+      }).getValue()
+      itemHash = ItemHash.create({
+        ...itemHash.props,
+        content_type: contentType,
+        shared_vault_uuid: null,
+        key_system_identifier: null,
+      }).getValue()
+      const result = await createFilter().check({
+        apiVersion: '001',
+        itemHash,
+        existingItem,
+        userUuid: '00000000-0000-0000-0000-000000000000',
+        snjsVersion: '2.200.0',
+      })
+      expect(result.passed).toBe(false)
+      expect(result.conflict?.type).toBe(ConflictType.SharedVaultInvalidState)
+      expect(determineSharedVaultOperationOnItem.execute).not.toHaveBeenCalled()
+    },
+  )
+
+  it('admits personal private comment operations without entering shared-vault authorization', async () => {
+    itemHash = ItemHash.create({
+      ...itemHash.props,
+      content_type: 'SN|PrivateComment',
+      shared_vault_uuid: null,
+      key_system_identifier: null,
+    }).getValue()
+    const result = await createFilter().check({
+      apiVersion: '001',
+      itemHash,
+      userUuid: '00000000-0000-0000-0000-000000000000',
+      snjsVersion: '2.200.0',
+    })
+    expect(result.passed).toBe(true)
+    expect(determineSharedVaultOperationOnItem.execute).not.toHaveBeenCalled()
   })
 
   it('should return as passed if the item hash does not represent a shared vault item and existing item is not a shared vault item', async () => {

@@ -336,12 +336,25 @@ state. A local persistence failure still stops the switch. Server save fences an
 authorization checks remain in force; a retained editor is not a claim that its
 changes have already synced.
 
-Private comments sync with your account preferences and appear in encrypted
-account backups. They have a combined 256 KiB limit, with at most 256 notes,
-256 comments per note and 64 replies per thread. A full or unreadable preference
-produces an error instead of discarding existing comments. Concurrent edits from
-different devices use ordinary preference synchronization, rather than the live
-collaborative comment stream.
+Private comments sync as separate account-encrypted records and appear in encrypted
+account backups. They never enter a shared vault. Updates from different devices
+merge by comment identity; deletion wins over stale offline edits. Purging removes
+comments observed by that device, preserving new comments it has not received yet.
+
+The limits remain 256 notes, 256 comments per note and 64 replies per thread.
+Operation history has a 32 MiB content budget and a separate deletion reserve.
+Compaction checkpoints the surviving comments and deletion markers, then removes
+unchanged old records only after the replacement is acknowledged by the server.
+Failed cleanup preserves originals. Deletion markers remain to prevent offline
+copies from resurrecting removed comments. Full or unreadable storage produces an
+error instead of overwriting history.
+
+Existing version-1 preference comments are imported on mutation; the old preference
+is retained as a recovery backup. Consequently, purging is not secure erasure of
+that legacy backup. Already lost preference changes cannot be reconstructed.
+Deploy the matching app and server together for this new content type.
+Older app versions must refresh to display and edit the new records. Private
+comments use ordinary encrypted account sync, not the shared comment stream.
 
 A saver claim includes the server's committed note revision, read under the
 same SQL lock that protects writes. If the local note is clean and matches that

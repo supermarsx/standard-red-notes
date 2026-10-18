@@ -15,6 +15,19 @@ export class SharedVaultFilter implements ItemSaveRuleInterface {
   ) {}
 
   async check(dto: ItemSaveValidationDTO): Promise<ItemSaveRuleResult> {
+    // Private comment operation history must remain encrypted with personal account keys.
+    // Check before the no-vault fast path as a key-system association alone is also unsafe.
+    if (
+      (dto.itemHash.props.content_type === 'SN|PrivateComment' ||
+        dto.existingItem?.props.contentType.value === 'SN|PrivateComment') &&
+      (dto.itemHash.representsASharedVaultItem() ||
+        dto.itemHash.hasDedicatedKeySystemAssociation() ||
+        dto.existingItem?.isAssociatedWithASharedVault() ||
+        dto.existingItem?.props.keySystemAssociation)
+    ) {
+      return { passed: false, conflict: { unsavedItem: dto.itemHash, type: ConflictType.SharedVaultInvalidState } }
+    }
+
     if (!dto.itemHash.representsASharedVaultItem() && !dto.existingItem?.isAssociatedWithASharedVault()) {
       return {
         passed: true,

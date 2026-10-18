@@ -18,6 +18,7 @@ export class ContentType extends ValueObject<ContentTypeProps> {
     Tag: 'Tag',
     Folder: 'Folder',
     AssistantChat: 'SN|AssistantChat',
+    PrivateComment: 'SN|PrivateComment',
     SmartView: 'SN|SmartTag',
     Component: 'SN|Component',
     Editor: 'SN|Editor',

@@ -28,7 +28,7 @@
     "app/packages/services/src/Domain/Encryption/EncryptionService.ts": "91a402348b386403aafb871a133322ed9df4788b30d98697237e2ba8019ea6e5",
     "app/packages/encryption/src/Domain/Operator/OperatorWrapper.ts": "2d7a73fdde2a0db6c4b79be36e2ff56a86c2c897b1725c08f4f5dcde02017521",
     "app/packages/models/src/Domain/Syncable/Folder/FolderContentType.ts": "8a7cf65bb8488b48156721a60717737ebdd521f2f30be08eff9b5fe2f19b9911",
-    "server/packages/domain-core/src/Domain/Common/ContentType.ts": "0d63dfcd2e8062f06796394f99ba16d72748f34bf728550a434907244260e290",
+    "server/packages/domain-core/src/Domain/Common/ContentType.ts": "316b4625a4bc5679a071a682a0f599a6469c95304a9190c810b672738ce1cbbd",
     "app/packages/snjs/lib/Domain/UseCase/AccountRecovery/AccountRecoveryEscrowTypes.ts": "add31da11b55e06a101a0cf3e0ea0452f93ca06c6a165c8e7f007c83218cd9d3",
     "server/packages/auth/src/Domain/UseCase/GetAccountRecoveryEscrow/GetAccountRecoveryEscrow.ts": "d9c82a110055544ba15e8502b060388d0bab900eabaf4e07326bc8fa489259d7"
   },
@@ -37,6 +37,6 @@
     "latestProtocolVersion": "004",
     "apiVersions": ["20161215", "20190520", "20200115", "20240226"],
     "modernResponseFactory": "20200115",
-    "forkOnlyContentTypes": ["Folder", "SN|AssistantChat"]
+    "forkOnlyContentTypes": ["Folder", "SN|AssistantChat", "SN|PrivateComment"]
   }
 }

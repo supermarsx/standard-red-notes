@@ -1,4 +1,4 @@
-// Diagnostic for a KNOWN UNFIXED bug: success confirms the failure exists.
+// Historical singleton failure controls plus current immutable-operation regression probe.
 // Not a production command or a passing-health CI gate. Uses synthetic data only.
 // Read-only source probe; run from repository root:
 // node scripts/audit-private-comment-concurrency.cjs
@@ -88,18 +88,26 @@ const original = record("old-comment", "old text");
 const additions = resolve({ "note-a": [a] }, { "note-b": [b] });
 assert.equal(additions["note-b"], undefined);
 console.log(
-  "CONFIRMED: concurrent additions to different notes lose the remote comment; no duplicate is retained.",
+  "LEGACY CONTROL: concurrent additions to different notes lose the remote comment; no duplicate is retained.",
 );
 const deletedElsewhere = resolve({ "note-a": [original, a] }, {});
 assert.equal(deletedElsewhere["note-a"][0].id, original.id);
 console.log(
-  "CONFIRMED: a stale local addition can restore a comment purged on another device.",
+  "LEGACY CONTROL: a stale local addition can restore a comment purged on another device.",
 );
 const localPurge = resolve({}, { "note-b": [b] });
 assert.deepEqual(localPurge, {});
 console.log(
-  "CONFIRMED: a local purge snapshot can discard a concurrent remote addition.",
+  "LEGACY CONTROL: a local purge snapshot can discard a concurrent remote addition.",
 );
 console.log(
   "Read-only source probe passed all 3 scenarios. No server or user data was accessed.",
 );
+
+const { projectPrivateComments } = require(path.join(repo, 'app/packages/web/src/javascripts/Comments/PrivateCommentOperations.ts'));
+const operation = (operationId, changes) => ({version: 2, ownerUuid: 'user', operationId, changes});
+const records = [operation('a', [{noteUuid:'note-a',id:a.id,clock:1,comment:a}]), operation('b', [{noteUuid:'note-b',id:b.id,clock:1,comment:b}]), operation('delete', [{noteUuid:'note-a',id:original.id,clock:2,deleted:true}])];
+const current = projectPrivateComments({'note-a':[original]}, records);
+assert.deepEqual([...current.notes.values()].flat().map(value => value.id).sort(), [a.id,b.id].sort());
+assert.deepEqual(projectPrivateComments({'note-a':[original]}, records.slice().reverse()).notes, current.notes);
+console.log('CURRENT: immutable operations preserve both additions and deletion fences in either delivery order.');

@@ -268,13 +268,20 @@ const CommentsPanelContent: FunctionComponent<
       )}
 
       <div className="mb-2.5 max-h-80 space-y-3 overflow-y-auto overscroll-contain">
+        {privateApi.readError && (
+          <p role="alert" className="text-passive-0 text-xs">
+            {privateApi.readError}
+          </p>
+        )}
         {quarantinedCount > 0 && (
           <div className="border-warning bg-warning-faded text-warning rounded border px-2 py-1.5 text-xs">
             Some comments were hidden because their author proof or stored data could not be verified.
           </div>
         )}
         {visibleThreads.length === 0 ? (
-          <div className="text-passive-0 py-2 text-center text-xs">No comments yet. Start the conversation.</div>
+          <div className="text-passive-0 py-2 text-center text-xs">
+            {privateApi.readError ? 'Private comments are unavailable.' : 'No comments yet. Start the conversation.'}
+          </div>
         ) : (
           visibleThreads.map(({ comment, replies, visibility }) => (
             <div key={`${visibility}:${comment.id}`} className="space-y-2">

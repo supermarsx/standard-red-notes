@@ -4,6 +4,7 @@ import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext
 import { $getRoot, $getNodeByKey, $isElementNode, LexicalNode } from 'lexical'
 import { ApplicationEvent, ContentType, SNNote } from '@standardnotes/snjs'
 import { useApplication } from '@/Components/ApplicationProvider'
+import { PRIVATE_COMMENT_CONTENT_TYPE } from '@/Comments/PrivateCommentOperations'
 import { readPrivateNoteComments } from '@/Comments/PrivateNoteComments'
 import { readDisplayNoteComments } from '@/Comments/CommentAuthorship'
 import { canUseCommentRange, isBoundCommentRange } from '@/Comments/CommentRangeAnchor'
@@ -66,7 +67,12 @@ export function CommentsSidebar({ note }: { note: SNNote }) {
     }
     reveal()
     const stopItems = application.items.addObserver(
-      [ContentType.TYPES.Note, ContentType.TYPES.UserPrefs, ContentType.TYPES.TrustedContact],
+      [
+        ContentType.TYPES.Note,
+        ContentType.TYPES.UserPrefs,
+        ContentType.TYPES.TrustedContact,
+        PRIVATE_COMMENT_CONTENT_TYPE,
+      ],
       ({ changed, inserted, removed, unerrored }) => {
         if (
           [...changed, ...inserted, ...removed, ...unerrored].some(

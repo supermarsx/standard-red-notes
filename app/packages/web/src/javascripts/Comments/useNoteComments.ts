@@ -66,6 +66,7 @@ function authorizedCommentDisplayNote(
 }
 
 export type CommentsApi = {
+  readError?: string
   comments: DisplayNoteComment[]
   quarantinedCount: number
   /** Add a new top-level comment or reply. Returns the created comment. */

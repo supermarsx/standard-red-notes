@@ -104,6 +104,18 @@ it('hides indicators live without hiding comment content, then restores private 
     emit({ uuid: 'preferences', content_type: ContentType.TYPES.UserPrefs })
     emit({ uuid: 'contact', content_type: ContentType.TYPES.TrustedContact }, 'removed')
     expect(mockReadCount).toBe(4)
+    emit({
+      uuid: 'private-other',
+      content_type: 'SN|PrivateComment',
+      content: { changes: [{ noteUuid: 'other' }] },
+    } as never)
+    expect(mockReadCount).toBe(4)
+    emit({
+      uuid: 'private-note',
+      content_type: 'SN|PrivateComment',
+      content: { changes: [{ noteUuid: 'note' }] },
+    } as never)
+    expect(mockReadCount).toBe(5)
     mockEditor.update(
       () => {
         const block = $getRoot().getFirstChild()

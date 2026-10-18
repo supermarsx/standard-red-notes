@@ -3,7 +3,8 @@ import { ApplicationEvent, ContentType, SNNote } from '@standardnotes/snjs'
 import { useApplication } from '@/Components/ApplicationProvider'
 import { CommentsApi } from './useNoteComments'
 import { generateCommentId, removeComment, setCommentResolved, upsertComment, normalizeComment } from './comments'
-import { mutatePrivateNoteComments, readPrivateNoteComments } from './PrivateNoteComments'
+import { mutatePrivateNoteComments, readPrivateNoteComments, privateCommentsReadError } from './PrivateNoteComments'
+import { PRIVATE_COMMENT_CONTENT_TYPE, privateCommentItemTouchesNote } from './PrivateCommentOperations'
 
 export function usePrivateNoteComments(note: SNNote): CommentsApi {
   const application = useApplication()
@@ -14,11 +15,14 @@ export function usePrivateNoteComments(note: SNNote): CommentsApi {
     // Read the current state during render. An initial stream push would repeat
     // that work, and unrelated note saves cannot change this private thread.
     const stop = application.items.addObserver(
-      [ContentType.TYPES.UserPrefs, ContentType.TYPES.Note],
+      [ContentType.TYPES.UserPrefs, ContentType.TYPES.Note, PRIVATE_COMMENT_CONTENT_TYPE],
       ({ changed: updated, inserted, removed, unerrored }) => {
         if (
           [...updated, ...inserted, ...removed, ...unerrored].some(
-            (item) => item.uuid === note.uuid || item.content_type === ContentType.TYPES.UserPrefs,
+            (item) =>
+              item.uuid === note.uuid ||
+              item.content_type === ContentType.TYPES.UserPrefs ||
+              (item.content_type === PRIVATE_COMMENT_CONTENT_TYPE && privateCommentItemTouchesNote(item, note.uuid)),
           )
         ) {
           changed()
@@ -32,10 +36,12 @@ export function usePrivateNoteComments(note: SNNote): CommentsApi {
     }
   }, [application, note.uuid, user])
   const current = () => application.sessions.getUser() === user
+  const comments = readPrivateNoteComments(application, note.uuid)
   return {
+    readError: privateCommentsReadError?.(application),
     selfUuid: user?.uuid,
     quarantinedCount: 0,
-    comments: readPrivateNoteComments(application, note.uuid).map((comment) => ({
+    comments: comments.map((comment) => ({
       ...comment,
       authorshipStatus: 'verified',
       verifiedAuthorUuid: comment.authorUuid,
