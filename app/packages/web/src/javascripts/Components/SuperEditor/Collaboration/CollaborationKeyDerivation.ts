@@ -329,9 +329,11 @@ export async function prepareCollaborationAccess(
         ? 'Live collaboration is temporarily throttled. It will retry automatically.'
         : code === 'COLLABORATION_NOT_AUTHORIZED'
           ? 'The server did not authorize live editing for this note. Edit permission is required.'
-          : code === 'COLLABORATION_PROTOCOL_INVALID'
-            ? 'The collaboration gateway did not provide a valid encrypted room authorization.'
-            : 'Live collaboration could not establish a secure room.',
+          : code === 'COLLABORATION_AUTHORIZATION_UNAVAILABLE'
+            ? 'Live collaboration authorization is temporarily unavailable. It will retry automatically.'
+            : code === 'COLLABORATION_PROTOCOL_INVALID'
+              ? 'The collaboration gateway did not provide a valid encrypted room authorization.'
+              : 'Live collaboration could not establish a secure room.',
       sourceId: before.sourceId,
       recovery: terminal ? 'terminal' : 'transient',
       ...(rateLimited

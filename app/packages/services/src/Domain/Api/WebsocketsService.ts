@@ -191,7 +191,11 @@ export type CollaborationRoomAuthorization = {
 
 class CollaborationAuthorizationError extends Error {
   constructor(
-    readonly code: 'COLLABORATION_NOT_AUTHORIZED' | 'COLLABORATION_PROTOCOL_INVALID' | 'COLLABORATION_RATE_LIMITED',
+    readonly code:
+      | 'COLLABORATION_NOT_AUTHORIZED'
+      | 'COLLABORATION_PROTOCOL_INVALID'
+      | 'COLLABORATION_RATE_LIMITED'
+      | 'COLLABORATION_AUTHORIZATION_UNAVAILABLE',
     readonly retryAfterMs?: number,
   ) {
     super('Collaboration authorization failed')
@@ -208,6 +212,7 @@ function isTypedCollaborationAuthorizationError(error: unknown): boolean {
       'COLLABORATION_PROTOCOL_INVALID',
       'COLLABORATION_EPOCH_CHANGED',
       'COLLABORATION_RATE_LIMITED',
+      'COLLABORATION_AUTHORIZATION_UNAVAILABLE',
     ].includes(String(error.code))
   )
 }
@@ -335,6 +340,7 @@ export class WebSocketsService extends AbstractService<
   private collaborationFrameHandlers = new Set<(frame: CollaborationFrame) => void>()
   private syncSessionRevocationHandlers = new Set<() => void | Promise<void>>()
   private collaborationAuthorizationTransport?: CollaborationRoomAuthorizationTransport
+  private collaborationAuthorizationGeneration = 0
   private collaborationAuthorizationRequests = new Map<string, Promise<CollaborationRoomAuthorization | undefined>>()
   private collaborationAuthorizationCache = new Map<
     string,
@@ -401,15 +407,24 @@ export class WebSocketsService extends AbstractService<
   public setCollaborationAuthorizationTransport(
     transport: CollaborationRoomAuthorizationTransport | undefined,
   ): () => void {
+    if (this.collaborationAuthorizationTransport !== transport) {
+      this.collaborationAuthorizationGeneration++
+      this.collaborationAuthorizationCache.clear()
+      this.collaborationAuthorizationRequests.clear()
+    }
     this.collaborationAuthorizationTransport = transport
     return () => {
       if (this.collaborationAuthorizationTransport === transport) {
+        this.collaborationAuthorizationGeneration++
+        this.collaborationAuthorizationCache.clear()
+        this.collaborationAuthorizationRequests.clear()
         this.collaborationAuthorizationTransport = undefined
       }
     }
   }
 
   public async revokeSyncTransportSession(): Promise<void> {
+    this.collaborationAuthorizationGeneration++
     this.collaborationAuthorizationCache.clear()
     this.collaborationAuthorizationRequests.clear()
     const results = await Promise.allSettled([...this.syncSessionRevocationHandlers].map((handler) => handler()))
@@ -803,6 +818,12 @@ export class WebSocketsService extends AbstractService<
       expectedRoomEpoch ?? null,
       reportTypedFailure,
     ])
+    const generation = this.collaborationAuthorizationGeneration
+    for (const [cachedKey, value] of this.collaborationAuthorizationCache) {
+      if (value.expiresAt <= Date.now() + 5_000) {
+        this.collaborationAuthorizationCache.delete(cachedKey)
+      }
+    }
     const cached = this.collaborationAuthorizationCache.get(key)
     if (cached && cached.expiresAt > Date.now() + 5_000) {
       return cached.authorization
@@ -820,22 +841,36 @@ export class WebSocketsService extends AbstractService<
       expectedRoomEpoch,
     )
       .then((result) => {
-        if (!result) {
+        if (!result || generation !== this.collaborationAuthorizationGeneration) {
           return undefined
         }
-        this.collaborationAuthorizationCache.set(key, {
-          authorization: result.authorization,
-          expiresAt: Date.now() + result.expiresIn * 1_000,
-        })
+        // Challenge-bound grants are one-use; only coalesce their in-flight request.
+        if (!leaseRequestId && !bootstrapChallenge) {
+          while (this.collaborationAuthorizationCache.size >= 128) {
+            this.collaborationAuthorizationCache.delete(this.collaborationAuthorizationCache.keys().next().value!)
+          }
+          this.collaborationAuthorizationCache.set(key, {
+            authorization: result.authorization,
+            expiresAt: Date.now() + result.expiresIn * 1_000,
+          })
+        }
         return result.authorization
       })
       .catch((error: unknown) => {
-        if (reportTypedFailure && isTypedCollaborationAuthorizationError(error)) {
+        if (
+          generation === this.collaborationAuthorizationGeneration &&
+          reportTypedFailure &&
+          isTypedCollaborationAuthorizationError(error)
+        ) {
           throw error
         }
         return undefined
       })
-      .finally(() => this.collaborationAuthorizationRequests.delete(key))
+      .finally(() => {
+        if (this.collaborationAuthorizationRequests.get(key) === request) {
+          this.collaborationAuthorizationRequests.delete(key)
+        }
+      })
     this.collaborationAuthorizationRequests.set(key, request)
     return request
   }
@@ -879,7 +914,7 @@ export class WebSocketsService extends AbstractService<
         if (discoveryResponse.status === 403) {
           throw new CollaborationAuthorizationError('COLLABORATION_NOT_AUTHORIZED')
         }
-        return undefined
+        throw new CollaborationAuthorizationError('COLLABORATION_AUTHORIZATION_UNAVAILABLE', 2_000)
       }
       const discovery = normalizeCollaborationEpochDiscovery(discoveryResponse.data, noteUuid)
       if (!discovery) {
@@ -901,7 +936,7 @@ export class WebSocketsService extends AbstractService<
       if (response.status === 403) {
         throw new CollaborationAuthorizationError('COLLABORATION_NOT_AUTHORIZED')
       }
-      return undefined
+      throw new CollaborationAuthorizationError('COLLABORATION_AUTHORIZATION_UNAVAILABLE', 2_000)
     }
     const authorization = normalizeCollaborationAuthorization(
       response.data,
@@ -1093,6 +1128,7 @@ export class WebSocketsService extends AbstractService<
     ;(this.storageService as unknown) = undefined
     ;(this.webSocketApiService as unknown) = undefined
     this.syncSessionRevocationHandlers.clear()
+    this.collaborationAuthorizationGeneration++
     this.collaborationAuthorizationCache.clear()
     this.collaborationAuthorizationRequests.clear()
     this.collaborationAuthorizationTransport = undefined

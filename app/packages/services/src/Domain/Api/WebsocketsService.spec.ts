@@ -105,7 +105,7 @@ describe('webSocketsService', () => {
           message: 'Collaboration authorization failed',
         })
       } else {
-        await expect(result).resolves.toBeUndefined()
+        await expect(result).rejects.toMatchObject({ code: 'COLLABORATION_AUTHORIZATION_UNAVAILABLE' })
       }
     })
 
@@ -129,6 +129,57 @@ describe('webSocketsService', () => {
         createService().authorizeCollaborationRoom('note-1', undefined, undefined, roomEpoch, true),
       ).rejects.toMatchObject({ code: 'COLLABORATION_PROTOCOL_INVALID', message: 'Collaboration authorization failed' })
     })
+
+    it('does not retain one-use grants and bounds reusable grants across many rooms', async () => {
+      const service = createService()
+      const transport = jest.fn(async (noteUuid, leaseRequestId) => ({ ...validGrant, room: noteUuid, leaseRequestId }))
+      service.setCollaborationAuthorizationTransport(transport)
+      for (let index = 0; index < 200; index++) {
+        await service.authorizeCollaborationRoom('note-1', `lease-${index}`, undefined, roomEpoch)
+      }
+      expect((service as any).collaborationAuthorizationCache.size).toBe(0)
+      for (let index = 0; index < 200; index++) {
+        await service.authorizeCollaborationRoom(`note-${index}`, undefined, undefined, roomEpoch)
+      }
+      expect((service as any).collaborationAuthorizationCache.size).toBe(128)
+      const clock = jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 301_000)
+      try {
+        await service.authorizeCollaborationRoom('new-note', undefined, undefined, roomEpoch)
+        expect((service as any).collaborationAuthorizationCache.size).toBe(1)
+      } finally {
+        clock.mockRestore()
+      }
+    })
+
+    it('old promise cleanup cannot remove a replacement request after revocation', async () => {
+      const service = createService()
+      let finishOld!: (value: typeof validGrant) => void
+      let finishNew!: (value: typeof validGrant) => void
+      service.setCollaborationAuthorizationTransport(
+        () =>
+          new Promise((resolve) => {
+            finishOld = resolve
+          }),
+      )
+      const old = service.authorizeCollaborationRoom('note-1', undefined, undefined, roomEpoch)
+      await service.revokeSyncTransportSession()
+      const replacement = jest.fn(
+        () =>
+          new Promise<typeof validGrant>((resolve) => {
+            finishNew = resolve
+          }),
+      )
+      service.setCollaborationAuthorizationTransport(replacement)
+      const current = service.authorizeCollaborationRoom('note-1', undefined, undefined, roomEpoch)
+      finishOld(validGrant)
+      expect(await old).toBeUndefined()
+      const concurrent = service.authorizeCollaborationRoom('note-1', undefined, undefined, roomEpoch)
+      expect(replacement).toHaveBeenCalledTimes(1)
+      finishNew(validGrant)
+      await expect(current).resolves.toMatchObject({ capability: validGrant.capability })
+      await expect(concurrent).resolves.toMatchObject({ capability: validGrant.capability })
+    })
+
     it('returns only a capability bound to the requested room and canonical server revision', async () => {
       webSocketApiService.authorizeCollaboration = jest.fn().mockResolvedValue({
         status: 200,

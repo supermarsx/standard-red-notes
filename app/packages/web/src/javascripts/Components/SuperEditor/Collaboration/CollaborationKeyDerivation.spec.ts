@@ -91,6 +91,7 @@ maybe('collaboration room-key derivation', () => {
     'COLLABORATION_PROTOCOL_INVALID',
     'COLLABORATION_EPOCH_CHANGED',
     'COLLABORATION_RATE_LIMITED',
+    'COLLABORATION_AUTHORIZATION_UNAVAILABLE',
     'NETWORK_TIMEOUT',
   ])('carries structured recovery semantics for %s without relying on private error text', async (code) => {
     const sessionUser = { uuid: 'user-a', email: 'alice@example.com' }
