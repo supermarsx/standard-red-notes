@@ -413,6 +413,8 @@ jobs:
             echo "::add-mask::${value}"
             echo "${name}=${value}" >> "$GITHUB_ENV"
           done
+      - name: Build PDFium companion
+        run: docker compose build assistant-pdf
       - name: Start disposable stack
         run: docker compose up -d --no-build --wait --wait-timeout 900
       - name: Verify durable encrypted email queue against Compose Redis
@@ -944,6 +946,8 @@ jobs:
             echo "::add-mask::${value}"
             echo "${name}=${value}" >> "$GITHUB_ENV"
           done
+      - name: Build PDFium companion
+        run: docker compose build assistant-pdf
       - name: Start disposable stack
         run: docker compose up -d --no-build --wait --wait-timeout 900
       - name: Run heavy browser and Redis load
@@ -1073,6 +1077,8 @@ jobs:
             echo "::add-mask::${value}"
             echo "${name}=${value}" >> "$GITHUB_ENV"
           done
+      - name: Build PDFium companion
+        run: docker compose build assistant-pdf
       - name: Start disposable stack
         run: docker compose up -d --no-build --wait --wait-timeout 900
       - name: Run full browser matrix without duplicate load drill

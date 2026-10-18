@@ -301,6 +301,9 @@ x-server-env: &server-env
   ASSISTANT_DEFAULT_PROVIDER: ${ASSISTANT_DEFAULT_PROVIDER:-}
   ASSISTANT_DEFAULT_MODEL: ${ASSISTANT_DEFAULT_MODEL:-}
   # Server-side Assistant search (keys never reach the browser).
+  TELEGRAM_ASSISTANT_BOT_TOKEN: ${TELEGRAM_ASSISTANT_BOT_TOKEN:-}
+  TELEGRAM_ASSISTANT_WEBHOOK_SECRET: ${TELEGRAM_ASSISTANT_WEBHOOK_SECRET:-}
+  PDF_EXTRACTOR_URL: ${PDF_EXTRACTOR_URL:-http://assistant-pdf:8091}
   SEARCH_PROVIDER: ${SEARCH_PROVIDER:-searxng}
   SEARCH_SEARXNG_URL: ${SEARCH_SEARXNG_URL:-http://assistant-search:8080/search}
   SEARCH_API_URL: ${SEARCH_API_URL:-}
@@ -650,12 +653,29 @@ services:
     networks:
       - standard-red-notes
       - assistant-search
+      - assistant-pdf
       # - proxy
     # NOTE: an external reverse proxy (Traefik/nginx/Caddy) does NOT need to
     # route to this container at all. The app front door above already proxies
     # every backend path (/v1, /v2, /auth, /subscription, /healthcheck,
     # /files/, /sockets) same-origin, so a single router to the
     # `app` service covers the whole stack (see the labels example on `app`).
+
+  # Isolated PDFium parser; no host port or main-app readiness dependency.
+  assistant-pdf:
+    build:
+      context: ./server/pdf-extractor
+    image: standard-red-notes/pdf-extractor:local
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 1200m
+    pids_limit: 32
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m,mode=1777
+    networks:
+      - assistant-pdf
 
   # Private server-side search. No host port and no main-app readiness dependency.
   assistant-search:
@@ -1065,6 +1085,8 @@ services:
       - standard-red-notes
 
 networks:
+  assistant-pdf:
+    internal: true
   assistant-search:
     driver: bridge
   standard-red-notes:

@@ -230,6 +230,9 @@ services:
       ASSISTANT_OLLAMA_URL: ${ASSISTANT_OLLAMA_URL:-}
       ASSISTANT_DEFAULT_PROVIDER: ${ASSISTANT_DEFAULT_PROVIDER:-}
       ASSISTANT_DEFAULT_MODEL: ${ASSISTANT_DEFAULT_MODEL:-}
+      TELEGRAM_ASSISTANT_BOT_TOKEN: ${TELEGRAM_ASSISTANT_BOT_TOKEN:-}
+      TELEGRAM_ASSISTANT_WEBHOOK_SECRET: ${TELEGRAM_ASSISTANT_WEBHOOK_SECRET:-}
+      PDF_EXTRACTOR_URL: ${PDF_EXTRACTOR_URL:-http://assistant-pdf:8091}
       SEARCH_PROVIDER: ${SEARCH_PROVIDER:-searxng}
       SEARCH_SEARXNG_URL: ${SEARCH_SEARXNG_URL:-http://assistant-search:8080/search}
       SEARCH_API_URL: ${SEARCH_API_URL:-}
@@ -275,6 +278,23 @@ services:
     networks:
       - default
       - assistant-search
+      - assistant-pdf
+
+  # Isolated PDFium parser; no host port or main-app readiness dependency.
+  assistant-pdf:
+    build:
+      context: ./server/pdf-extractor
+    image: standard-red-notes/pdf-extractor:local
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 1200m
+    pids_limit: 32
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m,mode=1777
+    networks:
+      - assistant-pdf
 
   # Private server-side search. No host port and no main-app readiness dependency.
   assistant-search:
@@ -300,6 +320,8 @@ services:
       - assistant-search
 
 networks:
+  assistant-pdf:
+    internal: true
   assistant-search:
     driver: bridge
 
