@@ -134,6 +134,83 @@ it('preserves selected context in the Chat model request while exposing only rea
   expect(harness.seen[0].system).toContain('do not make changes')
 })
 
+it.each(['chat', 'agent'] as const)(
+  '%s advertises and executes web search and page reads through the tool session',
+  async (mode) => {
+    const harness = setup((_request, index) =>
+      index === 0
+        ? [
+            { kind: 'tool-call', id: 'search', name: 'web.search', args: { query: 'public topic' } },
+            { kind: 'finish', stopReason: 'tool_use' },
+          ]
+        : index === 1
+          ? [
+              { kind: 'tool-call', id: 'fetch', name: 'web.fetch', args: { url: 'https://example.test/source' } },
+              { kind: 'finish', stopReason: 'tool_use' },
+            ]
+          : [
+              { kind: 'text-delta', delta: 'Answer from returned evidence' },
+              { kind: 'finish', stopReason: 'end_turn' },
+            ],
+    )
+    await runConversationMode(
+      mode,
+      [{ role: 'user', content: 'Look up public topic' }],
+      harness.options,
+      harness.extras,
+    )
+    expect(harness.seen[0].tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(['web.search', 'web.fetch']))
+    expect(harness.seen[0].system).toContain(
+      'Do not claim that internet access is unavailable without attempting the tool',
+    )
+    expect(harness.seen[0].system).toContain('does not prove its server backend is configured')
+    expect(harness.session.call).toHaveBeenCalledWith('web.search', { query: 'public topic' }, 'search')
+    expect(harness.session.call).toHaveBeenCalledWith('web.fetch', { url: 'https://example.test/source' }, 'fetch')
+  },
+)
+
+it('refreshes advertised web availability after a tool turn when access is disabled', async () => {
+  const harness = setup((_request, index) =>
+    index === 0
+      ? [
+          { kind: 'tool-call', id: 'read', name: 'notes.read', args: {} },
+          { kind: 'finish', stopReason: 'tool_use' },
+        ]
+      : [{ kind: 'finish', stopReason: 'end_turn' }],
+  )
+  harness.session.call.mockImplementation(async () => {
+    harness.session.tools.mockReturnValue(definitions.filter((tool) => !tool.name.startsWith('web.')))
+    return { ok: true }
+  })
+  await runConversationMode('chat', [], harness.options, harness.extras)
+  expect(harness.seen[1].tools.some((tool) => tool.name.startsWith('web.'))).toBe(false)
+  expect(harness.seen[1].system).toContain('No internet tools are offered for this turn')
+})
+
+it('reports an unconfigured web backend as a failed activity and passes the actual error to the model', async () => {
+  const harness = setup((_request, index) =>
+    index === 0
+      ? [
+          { kind: 'tool-call', id: 'search', name: 'web.search', args: { query: 'public topic' } },
+          { kind: 'finish', stopReason: 'tool_use' },
+        ]
+      : [
+          { kind: 'text-delta', delta: 'The server search backend is not configured.' },
+          { kind: 'finish', stopReason: 'end_turn' },
+        ],
+  )
+  harness.session.call.mockResolvedValue({ error: 'web search not configured', results: [] } as never)
+  const onToolResult = jest.fn()
+  const result = await runConversationMode('chat', [], { ...harness.options, onToolResult }, harness.extras)
+  expect(onToolResult).toHaveBeenCalledWith('search', expect.stringContaining('web search not configured'), 'failed')
+  expect(harness.seen[1].messages).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ role: 'tool', content: expect.stringContaining('web search not configured') }),
+    ]),
+  )
+  expect(result.errorCode).not.toBe('ACTION_NOT_ALLOWED')
+})
+
 it.each(['chat', 'plan'] as const)('%s checks the current tool scope again before executing a read', async (mode) => {
   let current = true
   const harness = setup(() => {

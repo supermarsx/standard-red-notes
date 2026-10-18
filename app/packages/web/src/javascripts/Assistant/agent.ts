@@ -53,7 +53,11 @@ function isDeniedToolResult(result: unknown): boolean {
 }
 
 function isFailedToolResult(result: unknown): boolean {
-  return typeof result === 'object' && result !== null && 'ok' in result && (result as { ok?: unknown }).ok === false
+  if (typeof result !== 'object' || result === null) {
+    return false
+  }
+  const response = result as { ok?: unknown; error?: unknown }
+  return response.ok === false || (typeof response.error === 'string' && response.error.trim().length > 0)
 }
 
 function actionNotAllowedMessage(detail: unknown): string {
@@ -235,8 +239,6 @@ export async function run(messages: ChatMessage[], opts: AgentOptions): Promise<
     const abortAwareSession = session as ToolSession & { setAbortSignal?: (signal: AbortSignal) => void }
     abortAwareSession.setAbortSignal?.(cancellation.signal)
     checkBoundary()
-    const tools = describeTools(session.tools())
-    checkBoundary()
 
     for (let step = 1; ; step++) {
       checkBoundary()
@@ -255,7 +257,20 @@ export async function run(messages: ChatMessage[], opts: AgentOptions): Promise<
       let providerReplay: ProviderReplayState | undefined
 
       checkBoundary()
-      const stream = provider.send({ system: systemPrompt, messages: history, tools, signal: cancellation.signal })
+      // Refresh the advertised tools after each turn so changed account permissions
+      // are reflected in the model request as well as checked during execution.
+      const tools = describeTools(session.tools())
+      const webTools = tools.filter((tool) => tool.name === 'web.search' || tool.name === 'web.fetch')
+      const webCapability = webTools.length
+        ? `This turn offers these server-mediated internet tools: ${webTools.map((tool) => tool.name).join(', ')}. When the user's request calls for online information, use the applicable available tool, subject to approval. Do not claim that internet access is unavailable without attempting the tool. An offered tool does not prove its server backend is configured: if it returns an availability or configuration error, explain that specific failure honestly and do not fabricate results. Private context must not be disclosed without the user's explicit authorization.`
+        : 'No internet tools are offered for this turn. Do not claim to have searched or read the web; do not invent the reason these tools are unavailable.'
+      checkBoundary()
+      const stream = provider.send({
+        system: `${systemPrompt}\n\nCurrent tool availability: ${webCapability}`,
+        messages: history,
+        tools,
+        signal: cancellation.signal,
+      })
       checkBoundary()
       for await (const event of providerEventsWithCancellation(stream, cancellation.signal, checkBoundary)) {
         checkBoundary()
