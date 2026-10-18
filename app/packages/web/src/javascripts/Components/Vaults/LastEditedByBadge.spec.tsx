@@ -32,5 +32,32 @@ it('retains the attribution slot when empty and exposes full names despite visua
     expect(badge.classList.contains('w-24')).toBe(false)
   } finally {
     act(() => root.unmount())
+    measure.mockRestore()
+  }
+})
+
+it('only measures attribution when its displayed content changes, not on contact model refreshes', () => {
+  const container = document.createElement('div')
+  const root = createRoot(container)
+  const measure = jest.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ width: 43 } as DOMRect)
+  const renderContact = (name: string) =>
+    act(() =>
+      root.render(createElement(LastEditedByBadge, { contact: { name, uuid: 'alice' } as TrustedContactInterface })),
+    )
+  try {
+    renderContact('Alice')
+    for (let refresh = 0; refresh < 100; refresh++) {
+      renderContact('Alice')
+    }
+    expect(measure).toHaveBeenCalledTimes(1)
+    renderContact('Alice Updated')
+    expect(measure).toHaveBeenCalledTimes(2)
+    act(() => root.render(createElement(LastEditedByBadge)))
+    expect(measure).toHaveBeenCalledTimes(2)
+    renderContact('Alice Updated')
+    expect(measure).toHaveBeenCalledTimes(3)
+  } finally {
+    act(() => root.unmount())
+    measure.mockRestore()
   }
 })

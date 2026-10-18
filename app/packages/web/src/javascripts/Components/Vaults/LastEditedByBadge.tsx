@@ -7,14 +7,16 @@ const LastEditedByBadge = ({ contact }: { contact?: TrustedContactInterface }) =
   const { t } = useTranslation('sharing')
   const badgeRef = useRef<HTMLDivElement>(null)
   const lastWidth = useRef<number | undefined>(undefined)
+  const hasContact = contact !== undefined
+  const contactName = contact?.name
   useLayoutEffect(() => {
-    if (contact && badgeRef.current) {
+    if (hasContact && badgeRef.current) {
       const width = badgeRef.current.getBoundingClientRect().width
       if (width > 0) {
         lastWidth.current = width
       }
     }
-  }, [contact])
+  }, [hasContact, contactName])
   return (
     <div
       title={contact ? `${t('lastEditedBy')}: ${contact.name}` : undefined}
