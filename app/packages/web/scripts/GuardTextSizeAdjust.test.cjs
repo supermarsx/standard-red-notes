@@ -72,7 +72,7 @@ test('retains the cascade order of repeated sizing declarations', async () => {
   assertGuarded(result.root)
 })
 
-test('shared SCSS normalize emits only supported text sizing and retains browser resets', () => {
+test('shared SCSS normalize guards text sizing application and retains browser resets', () => {
   const sass = require('sass')
   const entry = path.resolve(__dirname, '../../styles/src/Styles/_normalize.scss')
   const result = postcss.parse(sass.compile(entry).css)

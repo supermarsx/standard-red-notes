@@ -1,5 +1,6 @@
-// Preserve mobile text sizing without asking unsupported browsers to parse its
-// declaration. Runs after Tailwind/preflight and autoprefixer, including their
+// Preserve mobile text sizing and conditionally apply supported declarations.
+// Browsers still parse @supports contents and may report unsupported declarations.
+// Runs after Tailwind/preflight and autoprefixer, including their
 // generated vendor declarations; dependencies remain untouched.
 module.exports = () => ({
   postcssPlugin: 'guard-text-size-adjust',
