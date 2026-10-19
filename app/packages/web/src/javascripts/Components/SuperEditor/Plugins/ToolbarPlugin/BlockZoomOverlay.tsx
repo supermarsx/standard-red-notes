@@ -16,11 +16,11 @@
  *    for complex decorator blocks (kanban, timeline, excalidraw, …). A static,
  *    enlarged snapshot is the safe, predictable focus view; the user zooms out
  *    to edit. This is intentional and called out in the report.
- *  - The clone is kept in sync: while open we re-clone on each editor update so
+ *  - The clone is kept in sync: while open we observe asynchronous decorator DOM rendering as well as editor updates so
  *    edits made before zooming (or via undo/redo keyboard) stay reflected.
  */
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import Icon from '@/Components/Icon/Icon'
 import StyledTooltip from '@/Components/StyledTooltip/StyledTooltip'
@@ -45,37 +45,67 @@ export default function BlockZoomOverlay({ blockKey, label, onClose, portalEleme
   const [zoomIndex, setZoomIndex] = useState(2)
   const [missing, setMissing] = useState(false)
 
-  const syncClone = useCallback(() => {
-    const host = cloneHostRef.current
-    if (!host || !blockKey) {
-      return
-    }
-    const liveElement = editor.getElementByKey(blockKey)
-    host.replaceChildren()
-    if (!liveElement) {
-      setMissing(true)
-      return
-    }
-    setMissing(false)
-    const clone = liveElement.cloneNode(true) as HTMLElement
-    // Neutralize editability on the static snapshot so it reads as view-only.
-    clone.removeAttribute('contenteditable')
-    clone.querySelectorAll('[contenteditable]').forEach((el) => el.removeAttribute('contenteditable'))
-    clone.style.margin = '0'
-    host.appendChild(clone)
-  }, [editor, blockKey])
-
-  // Re-clone when opening and on every editor update while open, so the snapshot
-  // stays current with the underlying block.
   useEffect(() => {
     if (!blockKey) {
       return
     }
-    editor.getEditorState().read(syncClone)
-    return editor.registerUpdateListener(() => {
-      editor.getEditorState().read(syncClone)
-    })
-  }, [editor, blockKey, syncClone])
+    let frame: number | undefined
+    let observed: HTMLElement | null = null
+    let disposed = false
+    const schedule = () => {
+      if (!disposed && frame === undefined) {
+        frame = requestAnimationFrame(refresh)
+      }
+    }
+    const mutations = new MutationObserver(schedule)
+    const resize = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(schedule)
+    const refresh = () => {
+      frame = undefined
+      if (disposed) {
+        return
+      }
+      const host = cloneHostRef.current
+      if (!host) {
+        return
+      }
+      const live = editor.getElementByKey(blockKey)
+      if (live !== observed) {
+        mutations.disconnect()
+        resize?.disconnect()
+        observed = live
+        if (live) {
+          mutations.observe(live, { subtree: true, childList: true, characterData: true, attributes: true })
+          resize?.observe(live)
+        }
+      }
+      host.replaceChildren()
+      setMissing(!live)
+      if (!live) {
+        return
+      }
+      // Absolute-positioned diagram canvases have no intrinsic width. Give the
+      // snapshot the live block's layout width instead of shrinking it to zero.
+      const width = live.offsetWidth || live.getBoundingClientRect().width
+      host.style.width = width > 0 ? `${width}px` : '100%'
+      const clone = live.cloneNode(true) as HTMLElement
+      clone.removeAttribute('contenteditable')
+      clone.querySelectorAll('[contenteditable]').forEach((element) => element.removeAttribute('contenteditable'))
+      clone.style.margin = '0'
+      clone.style.width = '100%'
+      host.appendChild(clone)
+    }
+    refresh()
+    const unregister = editor.registerUpdateListener(schedule)
+    return () => {
+      disposed = true
+      unregister()
+      mutations.disconnect()
+      resize?.disconnect()
+      if (frame !== undefined) {
+        cancelAnimationFrame(frame)
+      }
+    }
+  }, [editor, blockKey])
 
   // Escape closes; +/- adjust zoom.
   useEffect(() => {
@@ -153,15 +183,14 @@ export default function BlockZoomOverlay({ blockKey, label, onClose, portalEleme
           <div className="text-passive-0 flex h-full items-center justify-center">
             This block is no longer available.
           </div>
-        ) : (
-          <div className="flex min-h-full items-start justify-center">
-            <div
-              ref={cloneHostRef}
-              className={classNames('origin-top', 'super-block-zoom-clone')}
-              style={{ transform: `scale(${zoom})` }}
-            />
-          </div>
-        )}
+        ) : null}
+        <div className={classNames('min-h-full items-start justify-center', missing ? 'hidden' : 'flex')}>
+          <div
+            ref={cloneHostRef}
+            className={classNames('shrink-0 origin-top', 'super-block-zoom-clone')}
+            style={{ transform: `scale(${zoom})` }}
+          />
+        </div>
       </div>
     </div>,
     portalElement,
