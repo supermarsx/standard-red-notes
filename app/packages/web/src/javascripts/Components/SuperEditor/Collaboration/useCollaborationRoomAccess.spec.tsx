@@ -4,7 +4,7 @@
 import { webcrypto } from 'node:crypto'
 import { act, createElement, startTransition, StrictMode, Suspense } from 'react'
 import { createRoot, Root } from 'react-dom/client'
-import { ApplicationEvent, WebSocketsServiceEvent } from '@standardnotes/snjs'
+import { ApplicationEvent, WebSocketsServiceEvent, VaultUserServiceEvent } from '@standardnotes/snjs'
 import { prepareCollaborationAccess, resolveCollaborationKeySource } from './CollaborationKeyDerivation'
 import { createGatewayCollabChannel } from './GatewayCollabChannel'
 import type { CollabFrame } from './CollabChannel'
@@ -1945,6 +1945,111 @@ describe('useCollaborationRoomAccess security transitions', () => {
     )
     expect(sent.filter((frame) => frame.t === 'room-join')).toHaveLength(joinsAfterAttach)
     expect(sent.filter((frame) => frame.t === 'room-leave')).toHaveLength(0)
+  })
+
+  it('retains the attached lease across equivalent vault metadata and same-note sync acknowledgements', async () => {
+    let membershipChanged: ((event: VaultUserServiceEvent) => Promise<void>) | undefined
+    const observers: Array<() => void> = []
+    const sent: CollabFrame[] = []
+    const activeSourceId = 'vault-1:note-1:root-version-1'
+    mockedCreateChannel.mockImplementation(() => createAutoLeaseChannel(sent).channel)
+    mockedResolve.mockImplementation(() => {
+      return {
+        available: true,
+        noteUuid: 'note-1',
+        sourceId: activeSourceId,
+        userUuid: 'user-1',
+        sessionUser,
+      } as never
+    })
+    mockedPrepare.mockImplementation(async () => {
+      return {
+        available: true,
+        noteUuid: 'note-1',
+        sourceId: activeSourceId,
+        roomKey: {} as CryptoKey,
+        capability: `capability:${activeSourceId}`,
+        roomEpoch,
+        serverUpdatedAtTimestamp: 100,
+        userUuid: 'user-1',
+        sessionUser,
+        username: 'Alice',
+      }
+    })
+    const note = { uuid: 'note-1', dirty: false, serverUpdatedAtTimestamp: 100, text: 'persisted' } as never
+    const application = {
+      items: {
+        streamItems: (_types: unknown, observer: () => void) => {
+          observers.push(observer)
+          return jest.fn()
+        },
+        findItem: () => note,
+      },
+      vaultUsers: {
+        addEventObserver: (observer: typeof membershipChanged) => {
+          membershipChanged = observer
+          return jest.fn()
+        },
+      },
+      sync: { sync: jest.fn().mockResolvedValue(undefined) },
+      vaultLocks: { addEventObserver: () => jest.fn() },
+      sockets: { addEventObserver: () => jest.fn() },
+      addEventObserver: () => jest.fn(),
+    } as never
+    const renders: Array<{ status: string; capability?: string }> = []
+    const View = () => {
+      latestAccess = useCollaborationRoomAccess(application, note, true)
+      renders.push({
+        status: latestAccess.status,
+        ...(latestAccess.status === 'ready' ? { capability: latestAccess.capability } : {}),
+      })
+      return createElement('div', null, latestAccess.status)
+    }
+
+    await act(async () => {
+      root.render(createElement(View))
+      await flushMicrotasks()
+    })
+    const firstJoin = sent.find((frame): frame is Extract<CollabFrame, { t: 'room-join' }> => frame.t === 'room-join')
+    expect(firstJoin).toBeDefined()
+    expect(latestAccess).toMatchObject({
+      status: 'ready',
+      capability: 'capability:vault-1:note-1:root-version-1',
+    })
+
+    if (latestAccess?.status !== 'ready') throw new Error('Lease did not prepare')
+    const lease = latestAccess.editorLease!
+    expect(lease.validateAttachment()).toBe(true)
+    await act(async () => {
+      lease.setProviderCanonicalOwnership?.(true)
+      await flushMicrotasks()
+    })
+    const prepares = mockedPrepare.mock.calls.length
+    const firstAcknowledgementRender = renders.length
+    await act(async () => {
+      for (const observer of observers) observer()
+      await flushMicrotasks()
+    })
+    expect(latestAccess?.status).toBe('ready')
+    expect(renders.slice(firstAcknowledgementRender).every((render) => render.status === 'ready')).toBe(true)
+    if (latestAccess?.status === 'ready') expect(latestAccess.editorLease).toBe(lease)
+    expect(lease.isAttached()).toBe(true)
+    expect(mockedPrepare).toHaveBeenCalledTimes(prepares)
+    expect(sent.filter((frame) => frame.t === 'room-leave')).toHaveLength(0)
+    // An explicit permission/membership event must still revoke the old lease.
+    await act(async () => {
+      await membershipChanged?.(VaultUserServiceEvent.UsersChanged)
+      await flushMicrotasks()
+    })
+    expect(sent).toContainEqual({ t: 'room-leave', room: 'note-1', requestId: lease.requestId })
+    expect(lease.isAttached()).toBe(false)
+    // Losing key/access while the source is being checked also fails closed.
+    mockedResolve.mockReturnValue({ available: false, reason: 'Key unavailable' } as never)
+    await act(async () => {
+      for (const observer of observers) observer()
+      await flushMicrotasks()
+    })
+    expect(latestAccess).toMatchObject({ status: 'disabled', reason: 'Key unavailable' })
   })
 
   it('invalidates synchronously and releases the old lease when the vault or root-key identity changes', async () => {

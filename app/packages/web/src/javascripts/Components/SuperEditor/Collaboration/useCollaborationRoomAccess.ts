@@ -905,7 +905,26 @@ export function useCollaborationRoomAccess(
     const disposeItems = application.items.streamItems(
       [ContentType.TYPES.KeySystemRootKey, ContentType.TYPES.VaultListing],
       () => {
-        invalidateActiveLease()
+        const snapshot = canonicalEditorSnapshot.current
+        if (snapshot) {
+          let unchanged = false
+          try {
+            const current = application.items.findItem<SNNote>(snapshot.noteUuid)
+            const source = current && resolveCollaborationKeySource(application, current)
+            unchanged = Boolean(
+              source?.available &&
+              source.noteUuid === snapshot.noteUuid &&
+              source.sourceId === snapshot.sourceId &&
+              source.userUuid === snapshot.userUuid &&
+              source.sessionUser === snapshot.sessionUser,
+            )
+          } catch {
+            // Missing/locked keys and failed authorization checks revoke this lease.
+          }
+          if (!unchanged) {
+            invalidateActiveLease()
+          }
+        }
         refresh()
       },
     )
@@ -928,7 +947,8 @@ export function useCollaborationRoomAccess(
     const disposeVaultUsers = application.vaultUsers?.addEventObserver?.((event) => {
       // UsersChanged follows an explicit membership/permission operation, not
       // the repeated cache invalidation caused by ordinary sync.
-      if (event === VaultUserServiceEvent.UsersChanged && !hasReadyAccess.current) {
+      if (event === VaultUserServiceEvent.UsersChanged) {
+        invalidateActiveLease()
         retryAfterAccessChange()
       }
       return Promise.resolve()

@@ -21,6 +21,15 @@ The historical reproduction patches below target the audited revision, not the r
 
 Repair validation: 227 worker/recovery tests, 314 transport/diagnostics tests, 184 collaboration/shared-worker/file-transfer tests, 87 services tests, 210 API authorization tests, and 163 gateway tests passed. Web, services, and API TypeScript checks passed, with the gateway built to verify its exported contract. Scoped lint reported no errors.
 
+Follow-up on 19 October: a regression reproduced an attached room releasing and
+replacing its lease after an equivalent vault/key metadata notification. An items
+sync response can carry these notifications even when the current note's encryption
+identity is unchanged. Room access now rechecks the current note, key source and
+session before invalidating; unchanged metadata retains the attached lease. Actual
+key/access loss and explicit membership changes still invalidate it. Ordinary
+same-note acknowledgements already preserve editor identity. This reproduces a
+mechanism for save-associated reloads, not a capture of the reported browser event.
+
 ## Incident and scope
 
 Reported sequence: `DEGRADED / server-policy`, successful socket negotiation, “Durable sync recovery must complete before a new command can execute”, then repeated `encrypted-yjs-lease-reactivation-failed attempt=0`.
