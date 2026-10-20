@@ -21,7 +21,12 @@ export class RedisPKCERepository implements PKCERepositoryInterface {
     return this.scope.key('', user, flow)
   }
 
-  async storeCodeChallenge(codeChallenge: string, user: User, flow: LoginGrantFlow, verifiedScope: string): Promise<void> {
+  async storeCodeChallenge(
+    codeChallenge: string,
+    user: User,
+    flow: LoginGrantFlow,
+    verifiedScope: string,
+  ): Promise<void> {
     if (!verifiedScope || verifiedScope !== (await this.captureGrantScope(user, flow))) {
       throw new Error('Login factor policy changed during verification')
     }

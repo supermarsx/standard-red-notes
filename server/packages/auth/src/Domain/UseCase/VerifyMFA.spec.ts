@@ -93,7 +93,10 @@ describe('VerifyMFA', () => {
     it('checks the server-resolved workspace account instead of another account sharing its email', async () => {
       userRepository.findOneByUuid = jest.fn().mockResolvedValue(user)
       const result = await createVerifyMFA().execute({
-        email: 'test@test.te', resolvedUserUuid: user.uuid, requestParams: {}, preventOTPFromFurtherUsage: true,
+        email: 'test@test.te',
+        resolvedUserUuid: user.uuid,
+        requestParams: {},
+        preventOTPFromFurtherUsage: true,
       })
       expect(result.success).toBe(false)
       expect(result.errorTag).toBe('mfa-required')
@@ -103,7 +106,10 @@ describe('VerifyMFA', () => {
 
     it('does not fall back to a default workspace when the selected workspace does not exist', async () => {
       await createVerifyMFA().execute({
-        email: 'test@test.te', resolvedUserUuid: null, requestParams: {}, preventOTPFromFurtherUsage: true,
+        email: 'test@test.te',
+        resolvedUserUuid: null,
+        requestParams: {},
+        preventOTPFromFurtherUsage: true,
       })
       expect(userRepository.findOneByUsernameOrEmail).not.toHaveBeenCalled()
       expect(getSetting.execute).not.toHaveBeenCalled()

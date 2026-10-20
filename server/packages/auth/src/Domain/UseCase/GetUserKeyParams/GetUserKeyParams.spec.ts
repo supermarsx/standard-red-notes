@@ -92,7 +92,7 @@ describe('GetUserKeyParams', () => {
         userUuid: '00000000-0000-0000-0000-000000000000',
         authenticated: false,
         codeChallenge: 'test',
-      verifiedGrantScope: 'verified-policy',
+        verifiedGrantScope: 'verified-policy',
       }),
     ).toEqual({
       keyParams: {
@@ -104,15 +104,21 @@ describe('GetUserKeyParams', () => {
   })
 
   it('does not issue an unauthenticated challenge without the server-verified factor snapshot', async () => {
-    await expect(createUseCase().execute({
-      userUuid: '00000000-0000-0000-0000-000000000000', authenticated: false, codeChallenge: 'test',
-    })).rejects.toThrow('A verified login factor policy is required')
+    await expect(
+      createUseCase().execute({
+        userUuid: '00000000-0000-0000-0000-000000000000',
+        authenticated: false,
+        codeChallenge: 'test',
+      }),
+    ).rejects.toThrow('A verified login factor policy is required')
     expect(pkceRepository.storeCodeChallenge).not.toHaveBeenCalled()
   })
 
   it('allows an already authenticated own-account request to capture its current grant policy', async () => {
     await createUseCase().execute({
-      userUuid: '00000000-0000-0000-0000-000000000000', authenticated: true, codeChallenge: 'own-session',
+      userUuid: '00000000-0000-0000-0000-000000000000',
+      authenticated: true,
+      codeChallenge: 'own-session',
     })
     expect(pkceRepository.captureGrantScope).toHaveBeenCalledWith(user, 'login')
     expect(pkceRepository.storeCodeChallenge).toHaveBeenCalledWith('own-session', user, 'login', 'verified-policy')

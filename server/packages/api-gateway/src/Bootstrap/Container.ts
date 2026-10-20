@@ -767,20 +767,18 @@ export class ContainerConfigLoader {
       ),
     )
 
-    container
-      .bind<TelegramBridgeService>(TELEGRAM_BRIDGE_SERVICE)
-      .toConstantValue(
-        new TelegramBridgeService(
-          new TelegramBridgeStore(
-            env.get('TELEGRAM_ASSISTANT_STORE_PATH', true) ||
-              '/opt/server/packages/api-gateway/data/telegram-assistant.json',
-          ),
-          {
-            botToken: env.get('TELEGRAM_ASSISTANT_BOT_TOKEN', true) || undefined,
-            webhookSecret: env.get('TELEGRAM_ASSISTANT_WEBHOOK_SECRET', true) || undefined,
-          },
+    container.bind<TelegramBridgeService>(TELEGRAM_BRIDGE_SERVICE).toConstantValue(
+      new TelegramBridgeService(
+        new TelegramBridgeStore(
+          env.get('TELEGRAM_ASSISTANT_STORE_PATH', true) ||
+            '/opt/server/packages/api-gateway/data/telegram-assistant.json',
         ),
-      )
+        {
+          botToken: env.get('TELEGRAM_ASSISTANT_BOT_TOKEN', true) || undefined,
+          webhookSecret: env.get('TELEGRAM_ASSISTANT_WEBHOOK_SECRET', true) || undefined,
+        },
+      ),
+    )
     const researchWeb = container.get<WebService>(TYPES.ApiGateway_WebService)
     container
       .bind<InternetResearchService>(TYPES.ApiGateway_InternetResearchService)

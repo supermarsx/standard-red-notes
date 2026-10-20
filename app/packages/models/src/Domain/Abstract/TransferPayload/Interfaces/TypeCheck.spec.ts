@@ -68,11 +68,14 @@ describe('type check', () => {
       ).toBe(true)
     })
 
-    it.each(['SN|AssistantChat', 'SN|PrivateComment'])('accepts encrypted %s records while preserving deletion checks', (content_type) => {
-      const item = { uuid: 'record', content_type, content: 'encrypted', ...PayloadTimestampDefaults() }
-      expect(isCorruptTransferPayload(item)).toBe(false)
-      expect(isCorruptTransferPayload({ ...item, deleted: true })).toBe(true)
-    })
+    it.each(['SN|AssistantChat', 'SN|PrivateComment'])(
+      'accepts encrypted %s records while preserving deletion checks',
+      (content_type) => {
+        const item = { uuid: 'record', content_type, content: 'encrypted', ...PayloadTimestampDefaults() }
+        expect(isCorruptTransferPayload(item)).toBe(false)
+        expect(isCorruptTransferPayload({ ...item, deleted: true })).toBe(true)
+      },
+    )
 
     it('should return true if content type is unknown', () => {
       expect(

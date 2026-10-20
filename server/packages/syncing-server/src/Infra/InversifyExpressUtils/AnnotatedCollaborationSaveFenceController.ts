@@ -23,11 +23,9 @@ export class AnnotatedCollaborationSaveFenceController {
         res.status(error.httpStatus).json({ error: { code: error.code, message: error.message } })
         return
       }
-      res
-        .status(503)
-        .json({
-          error: { code: 'collaboration_save_fence_unavailable', message: 'The collaboration saver is unavailable.' },
-        })
+      res.status(503).json({
+        error: { code: 'collaboration_save_fence_unavailable', message: 'The collaboration saver is unavailable.' },
+      })
     }
   }
 }

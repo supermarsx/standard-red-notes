@@ -1,12 +1,13 @@
 import 'reflect-metadata'
-import type { Request, Response } from 'express'
+import express, { type Request, type Response } from 'express'
 import { WebDeploymentController } from './WebDeploymentController'
-import type { WebDeploymentMarkerReader } from '../../Service/Readiness/WebDeploymentMarker'
-import { WebDeploymentMarkerReader as MarkerReader } from '../../Service/Readiness/WebDeploymentMarker'
+import {
+  type WebDeploymentMarkerReader,
+  WebDeploymentMarkerReader as MarkerReader,
+} from '../../Service/Readiness/WebDeploymentMarker'
 import { LoopbackSyncApiRpcAdapter } from '../../Service/Sync/LoopbackSyncApiRpcAdapter'
 import { createServer, Server } from 'http'
 import type { AddressInfo } from 'net'
-import express from 'express'
 
 it('returns only the authoritative web marker with no-store and a closed unavailable response', async () => {
   const marker = { revision: 'a'.repeat(40), version: 'src-aaaaaaaaaaaa' }

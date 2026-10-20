@@ -33,7 +33,9 @@ type Queue<Key> = {
 
 async function runQueue<T, Key>(queues: Queue<Key>, key: Key, work: () => Promise<T>): Promise<T> {
   const previous = queues.get(key) ?? Promise.resolve()
-  if (!queues.get(key)) {activeQueueKeyCount++}
+  if (!queues.get(key)) {
+    activeQueueKeyCount++
+  }
   let release!: () => void
   const current = new Promise<void>((done) => {
     release = done

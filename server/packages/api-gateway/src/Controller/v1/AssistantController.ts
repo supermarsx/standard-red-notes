@@ -356,11 +356,9 @@ export class AssistantController extends BaseHttpController {
     try {
       internetAccessEnabled = (await this.serverSettingsResolver?.resolveAssistantInternetAccessEnabled?.()) ?? true
     } catch {
-      response
-        .status(503)
-        .json({
-          error: { tag: 'internet-access-policy-unavailable', message: 'The internet access policy is unavailable.' },
-        })
+      response.status(503).json({
+        error: { tag: 'internet-access-policy-unavailable', message: 'The internet access policy is unavailable.' },
+      })
       return
     }
     const providers = configuredProviders(await this.effectiveProviderConfig())

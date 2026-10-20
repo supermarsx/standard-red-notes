@@ -48,9 +48,7 @@ describe('fresh-profile synced vault key arrival', () => {
       }),
     }
     const lookup = {
-      executeMany: jest.fn(async () => [
-        { uuid: 'system-items-key', content: { references: [] } },
-      ]),
+      executeMany: jest.fn(async () => [{ uuid: 'system-items-key', content: { references: [] } }]),
     }
     const itemEncryption = {
       decryptErroredItemPayloads: jest.fn(async () => {
@@ -79,7 +77,16 @@ describe('fresh-profile synced vault key arrival', () => {
       unused,
       { addEventHandler: jest.fn() } as never,
     )
-    return { service, items, lookup, itemEncryption, payloads, order, removeObserver, arrive: () => observer({ changed: [], inserted: [{}] }) }
+    return {
+      service,
+      items,
+      lookup,
+      itemEncryption,
+      payloads,
+      order,
+      removeObserver,
+      arrive: () => observer({ changed: [], inserted: [{}] }),
+    }
   }
 
   it('automatically decrypts an earlier system items key and then its note when the root key arrives', async () => {
@@ -103,12 +110,17 @@ describe('fresh-profile synced vault key arrival', () => {
     const fixture = setup()
     let finish!: (values: { uuid: string; content: { references: never[] } }[]) => void
     fixture.lookup.executeMany.mockImplementationOnce(
-      () => new Promise((resolve) => { finish = resolve }),
+      () =>
+        new Promise((resolve) => {
+          finish = resolve
+        }),
     )
     fixture.arrive()
     fixture.arrive()
     let teardownReady = false
-    const blocked = fixture.service.blockDeinit().then(() => { teardownReady = true })
+    const blocked = fixture.service.blockDeinit().then(() => {
+      teardownReady = true
+    })
     await Promise.resolve()
     expect(teardownReady).toBe(false)
     expect(fixture.lookup.executeMany).toHaveBeenCalledTimes(1)

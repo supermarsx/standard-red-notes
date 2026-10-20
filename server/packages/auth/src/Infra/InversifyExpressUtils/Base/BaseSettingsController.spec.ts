@@ -92,9 +92,12 @@ describe('BaseSettingsController cross-service token cache invalidation', () => 
   })
 
   it('reports a configured sensitive secret as present without disclosing its value', async () => {
-    doGetSetting.execute.mockResolvedValueOnce(Result.ok({
-      setting: { props: { sensitive: true } }, decryptedValue: 'do-not-disclose',
-    }))
+    doGetSetting.execute.mockResolvedValueOnce(
+      Result.ok({
+        setting: { props: { sensitive: true } },
+        decryptedValue: 'do-not-disclose',
+      }),
+    )
     const result = await controller.getSetting(
       { params: { userUuid: user.uuid, settingName: 'mfa_secret' }, headers: {} } as unknown as Request,
       response(),

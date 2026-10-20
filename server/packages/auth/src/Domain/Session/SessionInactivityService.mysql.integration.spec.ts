@@ -141,7 +141,9 @@ mysqlDescribe('session inactivity concurrency on real InnoDB', () => {
     } finally {
       await Promise.all(
         [a, b].map(async (runner) => {
-          if (runner.isTransactionActive) {await runner.rollbackTransaction()}
+          if (runner.isTransactionActive) {
+            await runner.rollbackTransaction()
+          }
           await runner.release()
         }),
       )

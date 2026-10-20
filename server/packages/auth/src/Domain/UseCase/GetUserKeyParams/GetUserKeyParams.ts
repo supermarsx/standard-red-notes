@@ -96,9 +96,7 @@ export class GetUserKeyParams implements UseCaseInterface {
 
   private async createKeyParams(dto: GetUserKeyParamsDTO, user: User, authenticated: boolean): Promise<KeyParamsData> {
     if (this.isCodeChallengedVersion(dto)) {
-      const verifiedScope = dto.authenticated
-        ? await this.captureLoginGrantScope(user)
-        : dto.verifiedGrantScope
+      const verifiedScope = dto.authenticated ? await this.captureLoginGrantScope(user) : dto.verifiedGrantScope
       if (!verifiedScope) {
         throw new Error('A verified login factor policy is required')
       }

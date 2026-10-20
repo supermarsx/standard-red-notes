@@ -374,13 +374,11 @@ describe('fresh authorization with warm or late-written credential caches', () =
       }
       ;(verify as unknown as jest.Mock).mockReturnValue(token)
       const proxy = {
-        validateSession: jest
-          .fn()
-          .mockResolvedValue({
-            status: 401,
-            data: { error: { tag: 'invalid-auth', message: 'Invalid login credentials.' } },
-            headers: {},
-          }),
+        validateSession: jest.fn().mockResolvedValue({
+          status: 401,
+          data: { error: { tag: 'invalid-auth', message: 'Invalid login credentials.' } },
+          headers: {},
+        }),
       }
       const cache = { get: jest.fn().mockResolvedValue('stale-grant'), set: jest.fn() }
       const middleware = new RequiredCrossServiceTokenMiddleware(

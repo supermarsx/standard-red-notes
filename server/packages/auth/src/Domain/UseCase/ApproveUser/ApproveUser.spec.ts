@@ -60,9 +60,7 @@ describe('ApproveUser', () => {
   })
 
   it('logs a failed approval email by account and error class, never by the transport text', async () => {
-    sendApprovalNotification.execute = jest
-      .fn()
-      .mockRejectedValue(new Error('550 p@example.com: mailbox unavailable'))
+    sendApprovalNotification.execute = jest.fn().mockRejectedValue(new Error('550 p@example.com: mailbox unavailable'))
     const logger = { error: jest.fn() }
 
     await new ApproveUser(userRepository, timer, sendApprovalNotification, 'https://app', logger).execute({

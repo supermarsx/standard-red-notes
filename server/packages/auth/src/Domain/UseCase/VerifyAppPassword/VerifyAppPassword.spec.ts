@@ -74,7 +74,11 @@ describe('VerifyAppPassword', () => {
   })
 
   it('does not consult another workspace when the selected workspace is absent', async () => {
-    const result = await createUseCase().execute({ email: 'user@example.com', appPassword: plaintext, resolvedUserUuid: null })
+    const result = await createUseCase().execute({
+      email: 'user@example.com',
+      appPassword: plaintext,
+      resolvedUserUuid: null,
+    })
     expect(result.getValue()).toBe(false)
     expect(userRepository.findOneByUsernameOrEmail).not.toHaveBeenCalled()
   })
