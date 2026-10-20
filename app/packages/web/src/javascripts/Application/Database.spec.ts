@@ -1,8 +1,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Database } from './Database'
 import { WebDevice } from './Device/WebDevice'
-import { reportLocalStorageHealth } from '@/Utils/LocalStorageHealth'
-jest.mock('@/Utils/LocalStorageHealth', () => ({ reportLocalStorageHealth: jest.fn() }))
+import { reportLocalStorageHealth } from '@/Utils/LocalStorageHealthEvents'
+jest.mock('@/Utils/LocalStorageHealthEvents', () => ({ reportLocalStorageHealth: jest.fn() }))
 
 /**
  * jsdom provides no IndexedDB implementation and `fake-indexeddb` is not a

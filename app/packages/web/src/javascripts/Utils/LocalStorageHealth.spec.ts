@@ -11,6 +11,14 @@ beforeEach(async () => {
 afterEach(() => jest.useRealTimers())
 const estimate = (usedFraction: number) => ({ usage: usedFraction * 100, quota: 100, usedFraction })
 
+it('receives shared database health events without importing web UI into the database', async () => {
+  const bridge = await import('./LocalStorageHealthEvents')
+  bridge.reportLocalStorageHealth('quota-exceeded', 'items')
+  expect(toast.addToast).toHaveBeenCalledTimes(1)
+  bridge.reportLocalStorageHealth('write-ok', 'items')
+  expect(toast.dismissToast).toHaveBeenCalledWith('storage-warning')
+})
+
 it('shows one persistent actionable quota warning without claiming the physical disk is definitely full', () => {
   health.reportLocalStorageHealth('quota-exceeded', 'outbox')
   health.reportLocalStorageHealth('quota-exceeded', 'outbox')

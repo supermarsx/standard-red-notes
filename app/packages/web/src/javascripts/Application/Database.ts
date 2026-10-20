@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { isString, AlertService, uniqueArray } from '@standardnotes/snjs'
-import { reportLocalStorageHealth } from '@/Utils/LocalStorageHealth'
+import { reportLocalStorageHealth } from '../Utils/LocalStorageHealthEvents'
 
 const STORE_NAME = 'items'
 const READ_WRITE = 'readwrite'

@@ -1,5 +1,6 @@
-import { addToast, dismissToast, ToastType } from '@standardnotes/toast'
 import type { WebApplication } from '@/Application/WebApplication'
+import { LOCAL_STORAGE_HEALTH_EVENT, type LocalStorageHealthEventDetail } from './LocalStorageHealthEvents'
+import { addToast, dismissToast, ToastType } from '@standardnotes/toast'
 import { HIGH_USAGE_THRESHOLD, type StorageEstimateResult } from './StorageQuotaTypes'
 
 export type LocalStorageHealthCode = 'quota-exceeded' | 'database-unavailable' | 'write-ok'
@@ -127,4 +128,15 @@ export function watchStoragePressure(
     window.removeEventListener('online', wake)
     document.removeEventListener('visibilitychange', wake)
   }
+}
+
+// Database is also bundled into Electron's renderer. Keep its storage
+// reporting independent of this web-only toast and application dependency graph.
+if (typeof window !== 'undefined') {
+  window.addEventListener(LOCAL_STORAGE_HEALTH_EVENT, (event) => {
+    const detail = (event as CustomEvent<LocalStorageHealthEventDetail>).detail
+    if (detail?.source === 'items') {
+      reportLocalStorageHealth(detail.code, detail.source)
+    }
+  })
 }
