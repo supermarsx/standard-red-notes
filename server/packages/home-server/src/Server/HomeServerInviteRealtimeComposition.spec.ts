@@ -12,9 +12,17 @@ const mockLogger = {
 
 const mockInviteDispatcher = { dispatch: jest.fn() }
 class MembershipReconcilerDouble {}
+class SessionInactivityDouble {}
+class AccountStorageUsageDouble {}
+class FileStorageUsageDouble {}
+class RevisionStorageUsageDouble {}
 class MembershipAuthorityDouble {}
 class CollaborationSaveFenceDouble {}
 const mockMembershipReconciler = { setReader: jest.fn(), start: jest.fn(), stop: jest.fn() }
+const mockSessionInactivity = { start: jest.fn(), stop: jest.fn() }
+const mockAccountStorageUsage = { setReaders: jest.fn() }
+const mockFileStorageUsage = { measure: jest.fn().mockResolvedValue({ bytes: 12, count: 1, complete: true }) }
+const mockRevisionStorageUsage = { measure: jest.fn().mockResolvedValue({ bytes: 24, count: 2, complete: true }) }
 const mockMembershipAuthority = { read: jest.fn().mockResolvedValue([]) }
 const mockCollaborationSaveFence = {
   request: jest.fn().mockResolvedValue({ room: 'note', token: 'proof', expiresAt: 123 }),
@@ -383,6 +391,7 @@ const mockAuthReadinessUnavailableReport = jest.fn(() => ({
 jest.mock('@standardnotes/auth-server', () => ({
   Service: ServiceDouble,
   SharedVaultMembershipReconciler: MembershipReconcilerDouble,
+  SessionInactivityService: SessionInactivityDouble,
   readAuthRuntimeDiagnosticsSources: mockReadAuthRuntimeDiagnosticsSources,
   resolveAuthRuntimeDiagnosticsReport: mockResolveAuthRuntimeDiagnosticsReport,
   readAuthReadinessSources: mockReadAuthReadinessSources,
@@ -408,10 +417,14 @@ jest.mock('./InternalDiagnosticsListener', () => ({
   ...jest.requireActual<typeof import('./InternalDiagnosticsListener')>('./InternalDiagnosticsListener'),
   startInternalDiagnosticsListener: mockStartInternalDiagnosticsListener,
 }))
-jest.mock('@standardnotes/files-server', () => ({ Service: ServiceDouble }))
-jest.mock('@standardnotes/revisions-server', () => ({ Service: ServiceDouble }))
+jest.mock('@standardnotes/files-server', () => ({ Service: ServiceDouble, FileStorageUsage: FileStorageUsageDouble }))
+jest.mock('@standardnotes/revisions-server', () => ({
+  Service: ServiceDouble,
+  RevisionStorageUsage: RevisionStorageUsageDouble,
+}))
 jest.mock('@standardnotes/syncing-server', () => ({
   Service: ServiceDouble,
+  AccountStorageUsageService: AccountStorageUsageDouble,
   SharedVaultMembershipAuthority: MembershipAuthorityDouble,
   SQLCollaborationSaveFence: CollaborationSaveFenceDouble,
 }))
@@ -422,6 +435,18 @@ jest.mock('inversify', () => ({
     get = jest.fn((token: symbol) => {
       if ((token as unknown) === MembershipReconcilerDouble) {
         return mockMembershipReconciler
+      }
+      if ((token as unknown) === SessionInactivityDouble) {
+        return mockSessionInactivity
+      }
+      if ((token as unknown) === AccountStorageUsageDouble) {
+        return mockAccountStorageUsage
+      }
+      if ((token as unknown) === FileStorageUsageDouble) {
+        return mockFileStorageUsage
+      }
+      if ((token as unknown) === RevisionStorageUsageDouble) {
+        return mockRevisionStorageUsage
       }
       if ((token as unknown) === MembershipAuthorityDouble) {
         return mockMembershipAuthority
@@ -508,6 +533,13 @@ describe('HomeServer invite realtime composition', () => {
     const result = await server.start(configuration)
     expect(result.isFailed()).toBe(false)
     expect(mockMembershipReconciler.start).toHaveBeenCalledTimes(1)
+    expect(mockSessionInactivity.start).toHaveBeenCalledTimes(1)
+    const [filesReader, revisionsReader] = mockAccountStorageUsage.setReaders.mock.calls[0]
+    const scope = { userUuid: 'storage-owner', vaultUuids: ['owned-vault'] }
+    await expect(filesReader(scope)).resolves.toEqual({ bytes: 12, count: 1, complete: true })
+    await expect(revisionsReader(scope)).resolves.toEqual({ bytes: 24, count: 2, complete: true })
+    expect(mockFileStorageUsage.measure).toHaveBeenCalledWith(scope)
+    expect(mockRevisionStorageUsage.measure).toHaveBeenCalledWith(scope)
     const reader = mockMembershipReconciler.setReader.mock.calls[0][0]
     await reader('00000000-0000-4000-8000-000000000001')
     expect(mockMembershipAuthority.read).toHaveBeenCalledWith('00000000-0000-4000-8000-000000000001')
@@ -527,6 +559,7 @@ describe('HomeServer invite realtime composition', () => {
     expect(mockCollaborationSaveFence.request).toHaveBeenCalledWith(claim)
     await server.stop()
     expect(mockMembershipReconciler.stop).toHaveBeenCalledTimes(1)
+    expect(mockSessionInactivity.stop).toHaveBeenCalledTimes(1)
   })
 
   beforeEach(() => {

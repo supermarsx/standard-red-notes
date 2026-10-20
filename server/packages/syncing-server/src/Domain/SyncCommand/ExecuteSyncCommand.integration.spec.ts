@@ -22,6 +22,7 @@ import { GetSyncCommandStatus } from './GetSyncCommandStatus'
 import { SyncCommandOutboxDispatcher } from './SyncCommandOutboxDispatcher'
 import { computeSyncCommandDigest, SyncCommandProtocolError } from './SyncCommandTypes'
 import { SQLCollaborationSaveFence } from '../../Infra/TypeORM/SQLCollaborationSaveFence'
+import { SQLItem } from '../../Infra/TypeORM/SQLItem'
 import { CollaborationSaveFences1791936000001 } from '../../../migrations/sqlite/1791936000001-collaboration-save-fences'
 
 @Entity({ name: 'sync_command_test_mutations' })
@@ -59,7 +60,7 @@ describe('durable sync command transaction integration', () => {
     dataSource = new DataSource({
       type: 'better-sqlite3',
       database: ':memory:',
-      entities: [TypeORMSyncCommand, TypeORMSyncCommandOutbox, SyncCommandTestMutation],
+      entities: [TypeORMSyncCommand, TypeORMSyncCommandOutbox, SyncCommandTestMutation, SQLItem],
       synchronize: true,
     })
     await dataSource.initialize()
@@ -105,6 +106,7 @@ describe('durable sync command transaction integration', () => {
       action: 'claim' as const,
     }
     const claim = await fence.request(owner)
+    expect(claim.serverUpdatedAtTimestamp).toBeUndefined()
     const perform = jest.fn(() =>
       fence.run('user-1', [owner.room], undefined, async () => {
         await transactionContext
