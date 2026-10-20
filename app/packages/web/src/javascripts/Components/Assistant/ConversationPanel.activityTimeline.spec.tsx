@@ -158,11 +158,14 @@ describe('Assistant conversation activity timeline', () => {
     })
     const group = container.querySelector('details')!
     expect(group.open).toBe(false)
-    expect(group.querySelector('[aria-label="Activity updates"]')).toBeNull()
+    // Native details keeps progress hidden but addressable by Select all; expensive tool cards stay lazy.
+    expect(group.querySelector('[aria-label="Activity updates"]')?.textContent).toBe('I will check the note first.')
+    expect(group.querySelectorAll('details')).toHaveLength(0)
     act(() => {
       group.open = true
       group.dispatchEvent(new Event('toggle'))
     })
+    expect(group.querySelectorAll('details')).toHaveLength(1)
     expect(group.querySelector('summary')?.textContent).toContain('Working')
     expect(container.querySelectorAll('[aria-label="Message display format"]')).toHaveLength(0)
     expect(group.querySelector('[aria-label="Activity updates"]')?.textContent).toBe('I will check the note first.')
