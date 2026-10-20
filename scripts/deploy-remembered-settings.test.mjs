@@ -927,6 +927,7 @@ describe("what deploy.sh remembers between runs", { concurrency: true }, () => {
     ]);
     assert.deepEqual(Object.keys(sandbox.app().networks).sort(), [
       "npm_default",
+      "standard-red-notes-single_assistant-pdf",
       "standard-red-notes-single_assistant-search",
       "standard-red-notes-single_default",
     ]);
@@ -1166,6 +1167,7 @@ describe("what deploy.sh remembers between runs", { concurrency: true }, () => {
       assert.equal(single.status, 0, single.stderr);
       const config = JSON.parse(single.stdout);
       assert.deepEqual(config.services.app.networks, {
+        "assistant-pdf": null,
         "assistant-search": null,
         default: {},
         proxy: { aliases: ["standard-red-notes-app"] },
