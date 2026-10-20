@@ -697,7 +697,7 @@ export function validateAppSecurityGraph(packageJsonText, lockfile) {
     axios: ["1.20.0"],
     "body-parser": ["1.20.6", "2.3.0"],
     "fast-xml-parser": ["5.8.0"],
-    "follow-redirects": ["1.16.0"],
+    "follow-redirects": ["1.16.1"],
     "form-data": ["4.0.6"],
     jws: ["3.2.3", "4.0.1"],
     micromatch: ["4.0.8"],

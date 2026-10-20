@@ -368,12 +368,7 @@ test("the app security graph preserves the patched dependency graph", () => {
   for (const [descriptor, safeVersion, vulnerableVersion, packageName] of [
     ['"ajv@npm:^6.12.5, ajv@npm:^6.14.0":', "6.15.0", "6.13.0", "ajv"],
     ['"fast-xml-parser@npm:^5.3.6":', "5.8.0", "5.6.9", "fast-xml-parser"],
-    [
-      '"follow-redirects@npm:1.16.0, follow-redirects@npm:^1.16.0":',
-      "1.16.0",
-      "1.15.11",
-      "follow-redirects",
-    ],
+    ['"follow-redirects@npm:1.16.1":', "1.16.1", "1.16.0", "follow-redirects"],
     [
       '"micromatch@npm:^4.0.2, micromatch@npm:^4.0.4, micromatch@npm:^4.0.8":',
       "4.0.8",
