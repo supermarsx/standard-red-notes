@@ -66,6 +66,14 @@ describe('TelegramBridgeController', () => {
     expect(status).toHaveBeenCalledWith(503)
     expect(json).toHaveBeenCalledWith({ error: { code: 'TELEGRAM_INBOX_FULL' } })
   })
+  it('returns forbidden when the webhook service rejects its separate credential', async () => {
+    response.locals = {}
+    service.webhook.mockRejectedValue(new Error('TELEGRAM_WEBHOOK_UNAUTHORIZED'))
+    await controller().webhook({ headers: {}, body: { update_id: 1 } } as Request, response)
+    expect(service.webhook).toHaveBeenCalledWith(undefined, { update_id: 1 })
+    expect(status).toHaveBeenCalledWith(403)
+    expect(json).toHaveBeenCalledWith({ error: { code: 'TELEGRAM_WEBHOOK_UNAUTHORIZED' } })
+  })
   it('redacts unexpected filesystem/provider errors', async () => {
     service.pair.mockRejectedValue(new Error('/private/path/token-secret'))
     await controller().pair({} as Request, response)

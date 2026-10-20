@@ -323,6 +323,10 @@ describe('versioned route controllers', () => {
       'OfflineController.getOfflineFeatures (/features)',
       // OAuth redirect back from the assistant subscription provider.
       'AssistantController.subscriptionCallback (/subscription/callback)',
+      // Telegram cannot present an account session. The service authenticates
+      // the x-telegram-bot-api-secret-token header before processing any update.
+      // Pairing, inbox access, and replies still require account authentication.
+      'TelegramBridgeController.webhook (/webhook)',
       // The payments site's own pages and its separate admin login, proxied as-is.
       'PaymentsController.adminLogin (/admin/auth/login)',
       'PaymentsController.adminLogout (/admin/auth/logout)',
