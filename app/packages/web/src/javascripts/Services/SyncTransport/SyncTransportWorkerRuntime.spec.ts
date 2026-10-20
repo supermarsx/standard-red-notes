@@ -465,6 +465,80 @@ describe('SyncTransportWorkerRuntime', () => {
     expect(socket.sent.map((entry) => JSON.parse(entry)).filter((frame) => frame.type === 'RPC_REQUEST')).toEqual([])
   })
 
+  it('ignores duplicate ticket answers while the current socket is connecting or authenticating', async () => {
+    const harness = setup()
+    await harness.runtime.handle({
+      type: 'EXECUTE',
+      clientRequestId: 'client-1',
+      body: body(),
+      sessionScope: SESSION_A,
+    })
+    const connect = () =>
+      harness.runtime.handle({
+        type: 'CONNECT',
+        clientRequestId: 'client-1',
+        sessionScope: SESSION_A,
+        authorization: {
+          endpoint: 'wss://sync.example.test/sockets/sync',
+          ticket: 't'.repeat(40),
+          expiresAt: Date.now() + 30_000,
+          deviceId: 'device-1',
+        },
+      })
+    await connect()
+    await connect()
+    expect(harness.sockets).toHaveLength(1)
+    const socket = harness.sockets[0]
+    socket.open()
+    await connect()
+    expect(harness.sockets).toHaveLength(1)
+    expect(socket.sent.map((entry) => JSON.parse(entry).type)).toEqual(['AUTH'])
+    const auth = JSON.parse(socket.sent[0])
+    socket.receive(
+      serverFrame('AUTHENTICATED', auth.commandId, {
+        capability: 'ws-sync',
+        protocolVersion: 1,
+        operations: ['SYNC_ITEMS'],
+        nextClientSequence: 1,
+      }),
+    )
+    await flush()
+    expect(socket.sent.map((entry) => JSON.parse(entry).type)).toContain('COMMAND')
+  })
+
+  it.each([
+    ['SOCKET_LIMIT', 'socket-limit'],
+    ['SYNC_DISABLED', 'server-unavailable'],
+    ['AUTH_REJECTED', 'auth-failed'],
+  ])('reports handshake refusal %s as %s instead of a generic credential failure', async (code, reason) => {
+    const harness = setup()
+    await harness.runtime.handle({
+      type: 'EXECUTE',
+      clientRequestId: 'client-1',
+      body: body(),
+      sessionScope: SESSION_A,
+    })
+    await harness.runtime.handle({
+      type: 'CONNECT',
+      clientRequestId: 'client-1',
+      sessionScope: SESSION_A,
+      authorization: {
+        endpoint: 'wss://sync.example.test/sockets/sync',
+        ticket: 't'.repeat(40),
+        expiresAt: Date.now() + 30_000,
+        deviceId: 'device-1',
+      },
+    })
+    const socket = harness.sockets[0]
+    socket.open()
+    socket.receive({ ...serverFrame('ERROR', 'protocol', { code, retryable: true }), requestId: 'protocol' })
+    await flush()
+    expect(harness.messages).toContainEqual(expect.objectContaining({ type: 'STATE', reason }))
+    if (reason !== 'auth-failed') {
+      expect(harness.messages).not.toContainEqual(expect.objectContaining({ type: 'STATE', reason: 'auth-failed' }))
+    }
+  })
+
   it('bounds a connection that never opens and does not let its deadline close the replacement', async () => {
     const harness = setup()
     await harness.runtime.handle({

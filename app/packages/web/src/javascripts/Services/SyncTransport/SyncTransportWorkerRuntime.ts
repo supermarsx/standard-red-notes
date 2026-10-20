@@ -2317,6 +2317,7 @@ export class SyncTransportWorkerRuntime {
     const active = this.active
     if (
       this.shuttingDown ||
+      this.socket !== undefined ||
       !active ||
       active.clientRequestId !== clientRequestId ||
       active.sessionScope !== sessionScope
@@ -2331,7 +2332,14 @@ export class SyncTransportWorkerRuntime {
       if (previous) {
         await previous.catch(() => undefined)
       }
-      if (this.shuttingDown || this.active !== active || generation !== this.connectionAttemptGeneration) {
+      // A repeated ticket answer must not replace an already dialed socket: the
+      // superseded connection would otherwise retain its server reservation.
+      if (
+        this.socket ||
+        this.shuttingDown ||
+        this.active !== active ||
+        generation !== this.connectionAttemptGeneration
+      ) {
         return
       }
       await this.connectCurrent(clientRequestId, sessionScope, authorization, active, generation)
@@ -3142,10 +3150,10 @@ export class SyncTransportWorkerRuntime {
       this.protocolErrorCode = frame.payload.code
     }
     if (this.state === 'AUTHENTICATING') {
-      // The handshake's own refusal, which already had a path: the ticket is spent
-      // and the request belongs on HTTP. Behaviour unchanged on purpose — only the
-      // close attribution that follows it is new.
-      await this.fallback('auth-failed', this.outboxRecord)
+      // Admission can refuse capacity or service readiness as well as credentials.
+      // Preserve the gateway's code before fallback closes and detaches the socket.
+      const reason = syncCloseFallbackReason({ code: 0, protocolErrorCode: this.protocolErrorCode })
+      await this.fallback(reason ?? 'auth-failed', this.outboxRecord)
     }
     return true
   }
