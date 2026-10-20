@@ -284,7 +284,7 @@ module.exports = (env) => {
            * they may contain class properties and other ES6+ syntax.
            */
           exclude:
-            /node_modules\/(?!(@standardnotes\/common|@standardnotes\/domain-core|webextension-polyfill|yoga-layout))/,
+            /node_modules[\\/](?!(@standardnotes[\\/]common|@standardnotes[\\/]domain-core|webextension-polyfill|yoga-layout))/,
           use: [
             {
               // Standard Red Notes: one fast esbuild pass replaces the old

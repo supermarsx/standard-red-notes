@@ -49,3 +49,17 @@ test('invalid limits fail clearly instead of enabling automatic worker fan-out',
     assert.throws(() => productionConfig({}, {}), /WEBPACK_PARALLELISM must be an integer/)
   })
 })
+
+test('vendor exclusion works on Windows and Linux without transforming sodium before its WASM loader', () => {
+  const config = productionConfig({}, {})
+  const rule = config.module.rules.find((rule) => rule.use?.some?.((use) => use.loader === 'esbuild-loader'))
+  assert.ok(rule)
+  for (const separator of ['/', '\\']) {
+    const vendor = ['project', 'node_modules', 'libsodium-sumo', 'dist', 'modules-sumo', 'libsodium-sumo.js'].join(
+      separator,
+    )
+    assert.equal(rule.exclude.test(vendor), true)
+    const allowed = ['project', 'node_modules', '@standardnotes', 'common', 'index.js'].join(separator)
+    assert.equal(rule.exclude.test(allowed), false)
+  }
+})
