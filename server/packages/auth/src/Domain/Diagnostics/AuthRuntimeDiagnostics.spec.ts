@@ -202,6 +202,22 @@ describe('observeDatastore', () => {
     expect(report.writeRoundTripMs).toBeUndefined()
   })
 
+  it('identifies its own timeout even when the wall clock has not reached the deadline', async () => {
+    jest.useFakeTimers()
+    try {
+      const pending = observeDatastore(probeWith({ write: () => new Promise<void>(() => undefined) }), {
+        timeoutMs: 10,
+        now: () => 1_000,
+      })
+      await jest.advanceTimersByTimeAsync(10)
+      const report = await pending
+      expect(report.writeProbe).toBe('timed-out')
+      expect(report.writeRoundTripMs).toBeUndefined()
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
   it('reports a whole-millisecond duration, never a float off a clock', async () => {
     let clock = 1_000
     const report = await observeDatastore(probeWith(), {

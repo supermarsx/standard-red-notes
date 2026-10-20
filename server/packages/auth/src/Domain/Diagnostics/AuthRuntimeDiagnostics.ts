@@ -288,13 +288,17 @@ const boundedCount = (value: number, max: number): number | undefined => {
 
 type Clock = () => number
 
+// An internal identity distinguishes our deadline from a database refusal.
+// Never inspect or expose a driver's rejection message or properties.
+const PROBE_TIMEOUT = Symbol('probe timeout')
+
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   let timer: NodeJS.Timeout | undefined
   try {
     return await Promise.race([
       promise,
       new Promise<T>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new Error('probe timed out')), timeoutMs)
+        timer = setTimeout(() => reject(PROBE_TIMEOUT), timeoutMs)
       }),
     ])
   } finally {
@@ -317,12 +321,13 @@ async function timeProbe(
   const started = now()
   try {
     await withTimeout(run(), timeoutMs)
-  } catch {
-    // Deliberately blind: the only things read off a failed probe are that it
-    // failed and whether the clock had already passed the deadline.
+  } catch (error) {
+    // Timers and Date.now need not advance together (clock adjustments or timer
+    // granularity). Our timer firing is authoritative even if elapsedMs is short.
+    // Driver failures remain opaque; only identity with our private sentinel is checked.
     const elapsedMs = Math.max(0, now() - started)
 
-    return { outcome: elapsedMs >= timeoutMs ? 'timed-out' : 'failed', elapsedMs }
+    return { outcome: error === PROBE_TIMEOUT || elapsedMs >= timeoutMs ? 'timed-out' : 'failed', elapsedMs }
   }
 
   return { outcome: 'ok', elapsedMs: Math.max(0, now() - started) }
