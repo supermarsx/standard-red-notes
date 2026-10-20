@@ -32,7 +32,13 @@ it('rejects oversized drafts, invalid contexts, permissions and clocks', () => {
   expect(normalize({ draft: { value: null, updatedAt: Infinity } })).toBeUndefined()
 })
 
-
 it.each(['no-note', 'new-note'] as const)('persists %s without retaining stale note context', (scope) => {
-  expect(normalize({ context: { value: { scope, excerpt: { noteUuid: 'old', text: 'private' }, collection: { type: 'notes', uuids: ['old'] } }, updatedAt: 2 } })).toEqual({ context: { value: { scope }, updatedAt: 2 } })
+  expect(
+    normalize({
+      context: {
+        value: { scope, excerpt: { noteUuid: 'old', text: 'private' }, collection: { type: 'notes', uuids: ['old'] } },
+        updatedAt: 2,
+      },
+    }),
+  ).toEqual({ context: { value: { scope }, updatedAt: 2 } })
 })

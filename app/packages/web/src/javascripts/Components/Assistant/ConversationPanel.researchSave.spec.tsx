@@ -1,17 +1,15 @@
 /** @jest-environment jsdom */
 import { AssistantPresence } from '@/Assistant/assistantPresence'
-import { AssistantChatStorageError, type AssistantSharedChatBinding } from '@/Assistant/assistantSyncedChats'
+import { type AssistantSharedChatBinding } from '@/Assistant/assistantSyncedChats'
 import { act, type RefObject, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { ApplicationEvent, PrefKey } from '@standardnotes/snjs'
+import { ApplicationEvent } from '@standardnotes/snjs'
 import { runConversationMode } from '@/Assistant/conversationModeRunner'
 import { type AgentResult } from '@/Assistant/agent'
 import ConversationPanel from './ConversationPanel'
 import { flushAssistantNoteEditors } from '@/Assistant/assistantNoteChanges'
 import { acquireAssistantChatRun } from '@/Assistant/assistantChatRunLease'
-import { prepareAssistantAttachment } from '@/Assistant/attachments'
 import { TextEncoder } from 'util'
-import { AssistantTools } from '@/Assistant/tools'
 import { resolveContextNoteUuids } from '@/Assistant/assistantContextSource'
 import type { AssistantChatDirective } from '@/Assistant/assistantDirectives'
 
@@ -100,7 +98,6 @@ function deferred<T>() {
 describe('Completed research report save offer', () => {
   let container: HTMLDivElement
   let root: Root
-  let eventObserver: (event: ApplicationEvent) => Promise<void>
   let signedIn: boolean
   let mode: 'research' | 'deep-research'
   let scope: string
@@ -124,10 +121,7 @@ describe('Completed research report save offer', () => {
     sessions: { isSignedIn: () => signedIn, getUser: () => (signedIn ? { uuid: 'other-account' } : undefined) },
     getPreference: (_key: unknown, fallback: unknown) => fallback,
     setPreference: jest.fn(),
-    addEventObserver: (callback: typeof eventObserver) => {
-      eventObserver = callback
-      return () => undefined
-    },
+    addEventObserver: (_callback: (event: ApplicationEvent) => Promise<void>) => () => undefined,
     items: { addObserver: () => () => undefined, findItem: () => undefined },
     itemListController: { selectedItemsCount: 0 },
     itemControllerGroup: { itemControllers: [], addActiveControllerChangeObserver: () => () => undefined },
@@ -169,8 +163,6 @@ describe('Completed research report save offer', () => {
         }
       />,
     )
-  const preparing = () => container.querySelector('[aria-label="Preparing assistant message"]')
-  const stop = () => container.querySelector<HTMLButtonElement>('[aria-label="Stop current assistant request"]')
   const guard = () => ({
     proof: { chatId: 'preflight-chat', requestId: 'request', leaseId: 'lease', fence: 1 },
     isCurrent: () => true,

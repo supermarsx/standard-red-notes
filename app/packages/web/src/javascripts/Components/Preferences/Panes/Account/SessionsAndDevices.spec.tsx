@@ -36,20 +36,18 @@ describe('account sessions and devices', () => {
   it('shows authoritative activity and counts profiles without exposing opaque ids', async () => {
     const openSessionsModal = jest.fn()
     await render(
-      jest
-        .fn()
-        .mockResolvedValue({
-          status: 200,
-          data: [
-            {
-              ...row,
-              active: true,
-              last_seen_at: '2026-01-01T00:00:00Z',
-              activity_checked_at: '2026-01-01T00:00:30Z',
-              devices: [{ device_id: 'opaque-hidden-id', active: true, last_seen_at: '2026-01-01T00:00:00Z' }],
-            },
-          ],
-        }),
+      jest.fn().mockResolvedValue({
+        status: 200,
+        data: [
+          {
+            ...row,
+            active: true,
+            last_seen_at: '2026-01-01T00:00:00Z',
+            activity_checked_at: '2026-01-01T00:00:30Z',
+            devices: [{ device_id: 'opaque-hidden-id', active: true, last_seen_at: '2026-01-01T00:00:00Z' }],
+          },
+        ],
+      }),
       openSessionsModal,
     )
     expect(container.textContent).toContain('1 open session')

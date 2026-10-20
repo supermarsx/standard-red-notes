@@ -182,12 +182,10 @@ it('uses a readable theme token for the empty state and permanently acknowledges
 })
 
 it('shows private read failures instead of presenting missing history as an empty conversation', async () => {
-  jest
-    .mocked(useApplication)
-    .mockReturnValue({
-      sessions: { getUser: () => ({ uuid: 'user-a' }), isCurrentSessionReadOnly: () => false },
-      isAuthorizedToRenderItem: () => true,
-    } as never)
+  jest.mocked(useApplication).mockReturnValue({
+    sessions: { getUser: () => ({ uuid: 'user-a' }), isCurrentSessionReadOnly: () => false },
+    isAuthorizedToRenderItem: () => true,
+  } as never)
   jest.mocked(usePrivateNoteComments).mockReturnValue({
     comments: [],
     quarantinedCount: 0,

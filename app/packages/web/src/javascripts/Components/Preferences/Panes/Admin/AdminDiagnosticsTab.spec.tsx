@@ -3671,9 +3671,9 @@ describe('Diagnostics run scopes and cancellation', () => {
       resolve = done
     })
     const normal = app.httpOnlyJsonRequest.getMockImplementation()!
-    app.httpOnlyJsonRequest.mockImplementation((method: string, path: string) =>
-      path === '/v1/sockets/sync/capabilities' ? pending : normal(method, path),
-    )
+    app.httpOnlyJsonRequest.mockImplementation((method: string, path: string) => {
+      return path === '/v1/sockets/sync/capabilities' ? pending : normal(method, path)
+    })
     app.httpOnlyJsonRequest.mockClear()
     await clickButton('Run all checks')
     const signal = app.httpOnlyJsonRequest.mock.calls[0][3] as AbortSignal
@@ -3720,9 +3720,9 @@ describe('Diagnostics run scopes and cancellation', () => {
       complete = resolve
     })
     const normal = app.httpOnlyJsonRequest.getMockImplementation()!
-    app.httpOnlyJsonRequest.mockImplementation((method: string, path: string) =>
-      path === '/v1/sockets/sync/capabilities' ? pending : normal(method, path),
-    )
+    app.httpOnlyJsonRequest.mockImplementation((method: string, path: string) => {
+      return path === '/v1/sockets/sync/capabilities' ? pending : normal(method, path)
+    })
     app.httpOnlyJsonRequest.mockClear()
     await clickButton('Run all checks')
     owner = 'second'
@@ -3771,9 +3771,9 @@ describe('Diagnostics run scopes and cancellation', () => {
       complete = resolve
     })
     const normal = app.httpOnlyJsonRequest.getMockImplementation()!
-    app.httpOnlyJsonRequest.mockImplementation((method: string, path: string) =>
-      path === '/v1/sockets/sync/capabilities' ? pending : normal(method, path),
-    )
+    app.httpOnlyJsonRequest.mockImplementation((method: string, path: string) => {
+      return path === '/v1/sockets/sync/capabilities' ? pending : normal(method, path)
+    })
     app.httpOnlyJsonRequest.mockClear()
     await clickButton('Run all checks')
     const signal = app.httpOnlyJsonRequest.mock.calls[0][3] as AbortSignal
@@ -3806,9 +3806,9 @@ describe('Diagnostics session-generation guard', () => {
       resolve = done
     })
     const normal = app.httpOnlyJsonRequest.getMockImplementation()!
-    app.httpOnlyJsonRequest.mockImplementation((method: string, path: string) =>
-      path === '/v1/sockets/sync/capabilities' ? pending : normal(method, path),
-    )
+    app.httpOnlyJsonRequest.mockImplementation((method: string, path: string) => {
+      return path === '/v1/sockets/sync/capabilities' ? pending : normal(method, path)
+    })
     app.httpOnlyJsonRequest.mockClear()
     await clickButton('Run all checks')
     await act(async () => {

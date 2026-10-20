@@ -96,7 +96,6 @@ describe('account-scoped assistant local settings', () => {
   })
 })
 
-
 it.each(['no-note', 'new-note'] as const)('persists %s in this account without changing another account', (scope) => {
   localStorage.clear()
   persistAssistantContextScope('account-a', scope)

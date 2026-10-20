@@ -87,8 +87,8 @@ it.each(['chat', 'plan', 'agent', 'research', 'deep-research'] as const)(
 it.each(['chat', 'plan'] as const)(
   '%s rejects a forged write tool independently of model instructions and forwards abort signal',
   async (mode) => {
-    const harness = setup((_request, index) =>
-      index === 0
+    const harness = setup((_request, index) => {
+      return index === 0
         ? [
             { kind: 'tool-call', id: 'call', name: 'notes.create', args: {} },
             { kind: 'finish', stopReason: 'tool_use' },
@@ -96,8 +96,8 @@ it.each(['chat', 'plan'] as const)(
         : [
             { kind: 'text-delta', delta: 'Safe response' },
             { kind: 'finish', stopReason: 'end_turn' },
-          ],
-    )
+          ]
+    })
     const result = await runConversationMode(
       mode,
       [{ role: 'user', content: 'change note' }],
@@ -114,14 +114,14 @@ it.each(['chat', 'plan'] as const)(
 )
 
 it.each(['chat', 'plan', 'agent'] as const)('%s retains approved read tools', async (mode) => {
-  const harness = setup((_request, index) =>
-    index === 0
+  const harness = setup((_request, index) => {
+    return index === 0
       ? [
           { kind: 'tool-call', id: 'read', name: 'notes.read', args: { uuid: 'source' } },
           { kind: 'finish', stopReason: 'tool_use' },
         ]
-      : [{ kind: 'finish', stopReason: 'end_turn' }],
-  )
+      : [{ kind: 'finish', stopReason: 'end_turn' }]
+  })
   await runConversationMode(mode, [{ role: 'user', content: 'read' }], harness.options, harness.extras)
   expect(harness.session.call).toHaveBeenCalledWith('notes.read', { uuid: 'source' }, 'read')
 })
@@ -138,8 +138,8 @@ it('preserves selected context in the Chat model request while exposing only rea
 it.each(['chat', 'agent'] as const)(
   '%s advertises and executes web search and page reads through the tool session',
   async (mode) => {
-    const harness = setup((_request, index) =>
-      index === 0
+    const harness = setup((_request, index) => {
+      return index === 0
         ? [
             { kind: 'tool-call', id: 'search', name: 'web.search', args: { query: 'public topic' } },
             { kind: 'finish', stopReason: 'tool_use' },
@@ -152,8 +152,8 @@ it.each(['chat', 'agent'] as const)(
           : [
               { kind: 'text-delta', delta: 'Answer from returned evidence' },
               { kind: 'finish', stopReason: 'end_turn' },
-            ],
-    )
+            ]
+    })
     await runConversationMode(
       mode,
       [{ role: 'user', content: 'Look up public topic' }],
@@ -171,14 +171,14 @@ it.each(['chat', 'agent'] as const)(
 )
 
 it('refreshes advertised web availability after a tool turn when access is disabled', async () => {
-  const harness = setup((_request, index) =>
-    index === 0
+  const harness = setup((_request, index) => {
+    return index === 0
       ? [
           { kind: 'tool-call', id: 'read', name: 'notes.read', args: {} },
           { kind: 'finish', stopReason: 'tool_use' },
         ]
-      : [{ kind: 'finish', stopReason: 'end_turn' }],
-  )
+      : [{ kind: 'finish', stopReason: 'end_turn' }]
+  })
   harness.session.call.mockImplementation(async () => {
     harness.session.tools.mockReturnValue(definitions.filter((tool) => !tool.name.startsWith('web.')))
     return { ok: true }
@@ -189,8 +189,8 @@ it('refreshes advertised web availability after a tool turn when access is disab
 })
 
 it('reports an unconfigured web backend as a failed activity and passes the actual error to the model', async () => {
-  const harness = setup((_request, index) =>
-    index === 0
+  const harness = setup((_request, index) => {
+    return index === 0
       ? [
           { kind: 'tool-call', id: 'search', name: 'web.search', args: { query: 'public topic' } },
           { kind: 'finish', stopReason: 'tool_use' },
@@ -198,8 +198,8 @@ it('reports an unconfigured web backend as a failed activity and passes the actu
       : [
           { kind: 'text-delta', delta: 'The server search backend is not configured.' },
           { kind: 'finish', stopReason: 'end_turn' },
-        ],
-  )
+        ]
+  })
   harness.session.call.mockResolvedValue({ error: 'web search not configured', results: [] } as never)
   const onToolResult = jest.fn()
   const result = await runConversationMode('chat', [], { ...harness.options, onToolResult }, harness.extras)
@@ -393,10 +393,11 @@ it('keeps a timed-out partial report visibly incomplete rather than presenting i
     id: 'partial',
     send: () => ({
       [Symbol.asyncIterator]: () => ({
-        next: async () =>
-          reads++ === 0
+        next: async () => {
+          return reads++ === 0
             ? { done: false as const, value: { kind: 'text-delta' as const, delta: '# Partial findings' } }
-            : new Promise<IteratorResult<ProviderEvent>>(() => {}),
+            : new Promise<IteratorResult<ProviderEvent>>(() => {})
+        },
         return: async () => ({ done: true as const, value: undefined }),
       }),
     }),
@@ -470,11 +471,9 @@ it('reports actual research search/page tool activities including failed page re
 
 it('allows deep research more than six model calls with a 600-source, 90-minute default budget', async () => {
   let rounds = 0
-  jest
-    .mocked(webSearch)
-    .mockImplementation(async () => ({
-      results: [{ title: 'Source', url: `https://example.test/${++rounds}`, snippet: 'Evidence' }],
-    }))
+  jest.mocked(webSearch).mockImplementation(async () => ({
+    results: [{ title: 'Source', url: `https://example.test/${++rounds}`, snippet: 'Evidence' }],
+  }))
   const harness = setup((request) => [
     {
       kind: 'text-delta',

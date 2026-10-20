@@ -221,16 +221,6 @@ const storageReadout = (): string =>
   container.querySelector('[data-test-id="admin-storage-readout"]')?.textContent ?? ''
 const recountStatus = (): string | null =>
   container.querySelector('[data-test-id="admin-quota-recount-status"]')?.textContent ?? null
-const filesCellFor = (email: string): string => {
-  const row = Array.from(container.querySelectorAll('tbody tr')).find((candidate) =>
-    Array.from(candidate.querySelectorAll('td')).some((cell) => cell.textContent === email),
-  )
-  if (!row) {
-    throw new Error(`No list row rendered for ${email}`)
-  }
-
-  return row.querySelector('[data-test-id="admin-row-files"]')?.textContent ?? ''
-}
 const usageReadsFor = (application: Application, uuid: string): number =>
   application.legacyApi.adminGetUserFeatureFlags.mock.calls.filter(([asked]) => asked === uuid).length
 const toastMessages = (): string[] =>

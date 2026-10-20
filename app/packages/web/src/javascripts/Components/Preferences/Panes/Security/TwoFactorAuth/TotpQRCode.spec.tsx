@@ -29,7 +29,10 @@ describe('local authenticator QR enrollment', () => {
     expect(uri.searchParams.get('digits')).toBe('6')
     expect(uri.searchParams.get('period')).toBe('30')
   })
-  it.each([['scan', ScanQRCode], ['save-secret', SaveSecretKey]])('shows a locally generated QR, copyable key and native app link in the %s view', async (_name, Component) => {
+  it.each([
+    ['scan', ScanQRCode],
+    ['save-secret', SaveSecretKey],
+  ])('shows a locally generated QR, copyable key and native app link in the %s view', async (_name, Component) => {
     const container = document.createElement('div')
     document.body.append(container)
     const root = createRoot(container)

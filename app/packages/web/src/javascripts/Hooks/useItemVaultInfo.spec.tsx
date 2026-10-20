@@ -122,9 +122,9 @@ describe('useItemVaultInfo', () => {
       last_edited_by_uuid: 'alice',
     } as DecryptedItemInterface
     application.vaultDisplayService.getItemVault.mockReturnValue({ uuid: 'vault-1' })
-    application.sharedVaults.getItemLastEditedBy.mockImplementation((item) =>
-      item.last_edited_by_uuid === 'alice' ? alice : item.last_edited_by_uuid === 'bob' ? bob : undefined,
-    )
+    application.sharedVaults.getItemLastEditedBy.mockImplementation((item) => {
+      return item.last_edited_by_uuid === 'alice' ? alice : item.last_edited_by_uuid === 'bob' ? bob : undefined
+    })
     act(() => root.render(createElement(Harness, { item: first, onResult: captureResult })))
     const onNotes = application.items.streamItems.mock.calls.find(([type]) => type === ContentType.TYPES.Note)![1]
     const emit = (note: DecryptedItemInterface) => act(() => onNotes({ changed: [note] }))
@@ -151,9 +151,9 @@ describe('useItemVaultInfo', () => {
     } as DecryptedItemInterface
     const contact = { uuid: 'alice', name: 'Alice' }
     application.vaultDisplayService.getItemVault.mockReturnValue({ uuid: 'vault-1' })
-    application.sharedVaults.getItemLastEditedBy.mockImplementation((item) =>
-      item.last_edited_by_uuid ? contact : undefined,
-    )
+    application.sharedVaults.getItemLastEditedBy.mockImplementation((item) => {
+      return item.last_edited_by_uuid ? contact : undefined
+    })
     act(() => root.render(createElement(Harness, { item: first, onResult: captureResult })))
     expect(result.lastEditedByContact).toBe(contact)
     const pending = {

@@ -2017,7 +2017,9 @@ describe('useCollaborationRoomAccess security transitions', () => {
       capability: 'capability:vault-1:note-1:root-version-1',
     })
 
-    if (latestAccess?.status !== 'ready') throw new Error('Lease did not prepare')
+    if (latestAccess?.status !== 'ready') {
+      throw new Error('Lease did not prepare')
+    }
     const lease = latestAccess.editorLease!
     expect(lease.validateAttachment()).toBe(true)
     await act(async () => {
@@ -2027,12 +2029,16 @@ describe('useCollaborationRoomAccess security transitions', () => {
     const prepares = mockedPrepare.mock.calls.length
     const firstAcknowledgementRender = renders.length
     await act(async () => {
-      for (const observer of observers) observer()
+      for (const observer of observers) {
+        observer()
+      }
       await flushMicrotasks()
     })
     expect(latestAccess?.status).toBe('ready')
     expect(renders.slice(firstAcknowledgementRender).every((render) => render.status === 'ready')).toBe(true)
-    if (latestAccess?.status === 'ready') expect(latestAccess.editorLease).toBe(lease)
+    if (latestAccess?.status === 'ready') {
+      expect(latestAccess.editorLease).toBe(lease)
+    }
     expect(lease.isAttached()).toBe(true)
     expect(mockedPrepare).toHaveBeenCalledTimes(prepares)
     expect(sent.filter((frame) => frame.t === 'room-leave')).toHaveLength(0)
@@ -2046,7 +2052,9 @@ describe('useCollaborationRoomAccess security transitions', () => {
     // Losing key/access while the source is being checked also fails closed.
     mockedResolve.mockReturnValue({ available: false, reason: 'Key unavailable' } as never)
     await act(async () => {
-      for (const observer of observers) observer()
+      for (const observer of observers) {
+        observer()
+      }
       await flushMicrotasks()
     })
     expect(latestAccess).toMatchObject({ status: 'disabled', reason: 'Key unavailable' })

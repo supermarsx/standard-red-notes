@@ -48,7 +48,9 @@ beforeEach(() => {
   unmounted = false
 })
 afterEach(async () => {
-  if (!unmounted) await act(async () => root.unmount())
+  if (!unmounted) {
+    await act(async () => root.unmount())
+  }
   container.remove()
   jest.useRealTimers()
 })

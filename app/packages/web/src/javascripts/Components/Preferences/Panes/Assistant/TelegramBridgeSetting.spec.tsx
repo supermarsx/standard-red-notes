@@ -14,11 +14,9 @@ it('preserves configuration status when clearing the inbox and disconnecting', a
   const application = {
     sessions: { isSignedIn: () => true, getUser: () => ({ uuid: 'alice' }) },
   } as unknown as WebApplication
-  jest
-    .mocked(telegramBridgeRequest)
-    .mockImplementation(async (_app, action) =>
-      action === 'inbox' ? { configured: true, linked: true, messages: [{ updateId: 1 }] } : { ok: true },
-    )
+  jest.mocked(telegramBridgeRequest).mockImplementation(async (_app, action) => {
+    return action === 'inbox' ? { configured: true, linked: true, messages: [{ updateId: 1 }] } : { ok: true }
+  })
   const container = document.createElement('div')
   const root = createRoot(container)
   const button = (label: string) =>
@@ -42,13 +40,13 @@ it('pairs explicitly and discards a late pairing response after an account switc
     sessions: { isSignedIn: () => true, getUser: () => ({ uuid: user }) },
   } as unknown as WebApplication
   let finishPair!: (value: Record<string, unknown>) => void
-  jest.mocked(telegramBridgeRequest).mockImplementation(async (_app, action) =>
-    action === 'pair'
+  jest.mocked(telegramBridgeRequest).mockImplementation(async (_app, action) => {
+    return action === 'pair'
       ? new Promise((resolve) => {
           finishPair = resolve
         })
-      : { configured: true, linked: false, messages: [] },
-  )
+      : { configured: true, linked: false, messages: [] }
+  })
   const container = document.createElement('div')
   const root = createRoot(container)
   try {

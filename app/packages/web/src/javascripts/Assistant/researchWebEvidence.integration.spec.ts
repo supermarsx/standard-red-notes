@@ -17,7 +17,10 @@ it('uses authenticated server routes only after actual approval and preserves th
         : { title: 'Official page', text: 'Actual retrieved text' },
     }
   })
-  const application = { serverJsonRequest, getPreference: (key: string, fallback: unknown) => key === 'assistantWebAccessMode' ? 'strict' : fallback } as unknown as WebApplication
+  const application = {
+    serverJsonRequest,
+    getPreference: (key: string, fallback: unknown) => (key === 'assistantWebAccessMode' ? 'strict' : fallback),
+  } as unknown as WebApplication
   const evidence = await gatherResearchWebEvidence(application, 'public topic', {
     isCurrent: () => true,
     signal: controller.signal,

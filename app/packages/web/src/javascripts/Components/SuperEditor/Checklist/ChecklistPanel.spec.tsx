@@ -327,7 +327,9 @@ it.each([false, true])(
     // Losing the editor selection to a ribbon control must retain the range the
     // command was opened for, but never retain an obsolete edit permission.
     await act(async () => editor.update(() => $setSelection(null), { discrete: true }))
-    if (readOnly) await act(async () => editor.setEditable(false))
+    if (readOnly) {
+      await act(async () => editor.setEditable(false))
+    }
     await act(async () =>
       [...container.querySelectorAll<HTMLElement>('[role="menuitem"]')]
         .find((node) => node.textContent === 'Sink completed within heading section')!
@@ -341,7 +343,9 @@ it.each([false, true])(
         ),
       )
     expect(container.querySelector('[role="menuitem"]')).toBeNull()
-    if (!readOnly) expect(flushChanges).toHaveBeenCalled()
+    if (!readOnly) {
+      expect(flushChanges).toHaveBeenCalled()
+    }
     await act(async () => root.unmount())
     container.remove()
   },

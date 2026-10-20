@@ -45,9 +45,9 @@ describe('SelectionTools AI action subtabs', () => {
   let root: Root
 
   beforeEach(() => {
-    application.getPreference.mockImplementation((key: PrefKey, fallback: unknown) =>
-      key === PrefKey.AssistantConnectionMode ? 'proxy' : fallback,
-    )
+    application.getPreference.mockImplementation((key: PrefKey, fallback: unknown) => {
+      return key === PrefKey.AssistantConnectionMode ? 'proxy' : fallback
+    })
     application.hasAccount.mockReturnValue(true)
     application.isAuthorizedToRenderItem.mockReturnValue(true)
     jest.mocked(captureSelectionSnapshot).mockReturnValue({ text: 'exact selection' } as never)

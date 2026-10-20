@@ -201,7 +201,9 @@ describe('the schedule affordance follows the caret through the real plugin', ()
     const styles = jest
       .spyOn(window, 'getComputedStyle')
       .mockImplementation((element: Element, pseudo?: string | null) => {
-        if (pseudo) return { width: '24px' } as CSSStyleDeclaration
+        if (pseudo) {
+          return { width: '24px' } as CSSStyleDeclaration
+        }
         const style = original(element)
         const getPropertyValue = style.getPropertyValue.bind(style)
         // jsdom does not implement CSS zoom's browser default of 1.

@@ -57,13 +57,13 @@ it('shows distinct open sessions and exact device counts with server-clock activ
 it('never displays the previous user response after selection changes', async () => {
   let finish!: (value: unknown) => void
   const api = {
-    getAdminUserSessions: jest.fn().mockImplementation((uuid: string) =>
-      uuid === 'user-a'
+    getAdminUserSessions: jest.fn().mockImplementation((uuid: string) => {
+      return uuid === 'user-a'
         ? new Promise((resolve) => {
             finish = resolve
           })
-        : Promise.resolve({ data: [] }),
-    ),
+        : Promise.resolve({ data: [] })
+    }),
   }
   await render(api)
   await render(api, 'user-b')

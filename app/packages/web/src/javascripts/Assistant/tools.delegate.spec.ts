@@ -431,8 +431,9 @@ describe('AssistantTools selected note scope', () => {
       items: {
         getItems: (contentType: string) => (contentType === ContentType.TYPES.Note ? notes : [selectedTag, privateTag]),
         findItem: (uuid: string) => notes.find((note) => note.uuid === uuid),
-        getSortedTagsForItem: (note: { uuid: string }) =>
-          note.uuid === 'selected-note' ? [selectedTag] : [privateTag],
+        getSortedTagsForItem: (note: { uuid: string }) => {
+          return note.uuid === 'selected-note' ? [selectedTag] : [privateTag]
+        },
         getTagLongTitle: (tag: { title: string }) => tag.title,
       },
     } as unknown as WebApplication
@@ -477,8 +478,9 @@ describe('AssistantTools selected note scope', () => {
               PayloadSource.Constructor,
             ),
           ),
-        findItem: (uuid: string) =>
-          uuid === tag.uuid ? tag : createdNotes.find((candidate) => candidate.uuid === uuid),
+        findItem: (uuid: string) => {
+          return uuid === tag.uuid ? tag : createdNotes.find((candidate) => candidate.uuid === uuid)
+        },
         getItems: () => createdNotes,
         getSortedTagsForItem: () => [],
       },
@@ -707,8 +709,9 @@ describe('AssistantTools bypass confirmation boundaries', () => {
           getTagLongTitle: () => 'Protected hierarchy / Protected tag',
         },
         vaults: {
-          getItemVault: (item: { uuid: string }) =>
-            protection === 'vault' && item.uuid === tag.uuid ? vault : undefined,
+          getItemVault: (item: { uuid: string }) => {
+            return protection === 'vault' && item.uuid === tag.uuid ? vault : undefined
+          },
         },
         vaultUsers: { isCurrentUserReadonlyVaultMember: () => protection === 'vault' },
         mutator: { addTagToNote, changeItem },
@@ -916,13 +919,11 @@ describe('AssistantTools trusted confirmation identity', () => {
 
 describe('Assistant web access modes', () => {
   it('Safe grants explicit PDF links returned by academic search but not unrelated URLs', async () => {
-    const serverJsonRequest = jest
-      .fn()
-      .mockResolvedValue({
-        ok: true,
-        status: 200,
-        data: { data: [{ link: [{ URL: 'https://example.test/paper.pdf' }] }] },
-      })
+    const serverJsonRequest = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: { data: [{ link: [{ URL: 'https://example.test/paper.pdf' }] }] },
+    })
     const requestWebConfirmation = jest.fn(async () => true)
     const app = {
       serverJsonRequest,
