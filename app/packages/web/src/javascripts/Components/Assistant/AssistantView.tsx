@@ -1217,11 +1217,14 @@ const AssistantView = forwardRef<HTMLDivElement, Props>((props, ref) => {
     }
   }, [])
 
-  const startEditing = useCallback((tabId: string) => {
-    setMenu(null)
-    setActiveTabId(tabId)
-    setEditingTabId(tabId)
-  }, [])
+  const startEditing = useCallback(
+    (tabId: string) => {
+      setMenu(null)
+      resumeTab(tabId)
+      setEditingTabId(tabId)
+    },
+    [resumeTab],
+  )
 
   const openMenu = useCallback((event: { clientX: number; clientY: number }, tabId: string) => {
     setActiveTabId(tabId)
@@ -1549,7 +1552,7 @@ const AssistantView = forwardRef<HTMLDivElement, Props>((props, ref) => {
             <Icon type="trash" size="small" />
             {sharedStoreRef.current ? 'Move chat to trash' : 'Delete chat'}
           </button>
-          {visibleTabs.length > 1 && (
+          {visibleTabs.length > 1 && !closedTabIds.includes(menu.tabId) && (
             <button
               role="menuitem"
               className="text-danger hover:bg-contrast flex w-full items-center gap-2 px-3 py-1.5 text-left"
@@ -1724,7 +1727,14 @@ const AssistantView = forwardRef<HTMLDivElement, Props>((props, ref) => {
                         chatContextsRef.current.set(tab.id, snapshot)
                       }
                     }}
-                    recentChats={<AssistantRecentChats tabs={tabs} currentTabId={tab.id} onResume={resumeTab} />}
+                    recentChats={
+                      <AssistantRecentChats
+                        tabs={tabs}
+                        currentTabId={tab.id}
+                        onResume={resumeTab}
+                        onMenu={(position, tabId) => setMenu({ tabId, x: position.clientX, y: position.clientY })}
+                      />
+                    }
                   />
                 </div>
               )

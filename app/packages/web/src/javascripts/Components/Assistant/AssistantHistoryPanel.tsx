@@ -286,7 +286,11 @@ export function AssistantRecentChats({
   tabs,
   currentTabId,
   onResume,
-}: Omit<Props, 'closedTabIds'> & { currentTabId: string }) {
+  onMenu,
+}: Omit<Props, 'closedTabIds'> & {
+  currentTabId: string
+  onMenu: (position: { clientX: number; clientY: number }, id: string) => void
+}) {
   const recent = assistantTabsByActivity(tabs)
     .filter((tab) => tab.id !== currentTabId && (tab.title !== DEFAULT_TAB_TITLE || tab.userRenamed))
     .slice(0, 5)
@@ -298,14 +302,41 @@ export function AssistantRecentChats({
       <h3 className="text-passive-0 mb-2 text-xs font-semibold">Recent chats</h3>
       <ul className="space-y-1">
         {recent.map((tab) => (
-          <li key={tab.id}>
+          <li
+            key={tab.id}
+            className="flex items-center"
+            onContextMenu={(event) => {
+              event.preventDefault()
+              onMenu(event, tab.id)
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+                event.preventDefault()
+                const bounds = event.currentTarget.getBoundingClientRect()
+                onMenu({ clientX: bounds.left, clientY: bounds.bottom }, tab.id)
+              }
+            }}
+          >
             <button
               type="button"
               onClick={() => onResume(tab.id)}
-              className="hover:bg-contrast focus-visible:ring-info flex w-full items-center gap-2 rounded px-2 py-1.5 text-left focus-visible:ring-2"
+              className="hover:bg-contrast focus-visible:ring-info flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-1.5 text-left focus-visible:ring-2"
             >
               <Icon type="comment" size="small" className="text-passive-1 shrink-0" />
               <span className="truncate text-sm">{tab.title}</span>
+            </button>
+            <button
+              type="button"
+              aria-label={`Actions for ${tab.title}`}
+              aria-haspopup="menu"
+              className="hover:bg-contrast focus-visible:ring-info shrink-0 rounded p-1.5 focus-visible:ring-2"
+              onClick={(event) => {
+                event.stopPropagation()
+                const bounds = event.currentTarget.getBoundingClientRect()
+                onMenu({ clientX: bounds.left, clientY: bounds.bottom }, tab.id)
+              }}
+            >
+              <Icon type="more" size="small" />
             </button>
           </li>
         ))}

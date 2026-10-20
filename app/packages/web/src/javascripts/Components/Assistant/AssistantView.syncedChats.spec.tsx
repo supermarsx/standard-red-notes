@@ -88,11 +88,12 @@ const chat = (id: string, text: string): SyncedChat => ({
   deniedToolNames: [],
 })
 it('follows remote chat updates without stealing focus, supports middle-click hide/restore, deletes across views, and fences old checkpoints on sign-out', async () => {
-  jest
-    .mocked(ConversationPanel)
-    .mockImplementation(({ sharedChat }) => (
+  jest.mocked(ConversationPanel).mockImplementation(({ sharedChat, recentChats }) => (
+    <div>
       <p>{sharedChat?.history?.messages.map((message) => message.text).join(' ')}</p>
-    ))
+      {recentChats}
+    </div>
+  ))
   mockRows = [chat('first', 'Original')]
   mockListeners.clear()
   let user: { uuid: string } | undefined = { uuid: 'account-a' }
@@ -129,6 +130,21 @@ it('follows remote chat updates without stealing focus, supports middle-click hi
       first.dispatchEvent(new MouseEvent('auxclick', { bubbles: true, button: 1, cancelable: true })),
     )
     expect(container.querySelector('[role="tab"][aria-label="first"]')).toBeNull()
+    const currentPanel = container.querySelector('[role="tabpanel"].contents')!
+    await act(async () => currentPanel.querySelector<HTMLButtonElement>('[aria-label="Actions for second"]')!.click())
+    expect(container.querySelector('[role="tab"][aria-label="second"]')).toBeNull()
+    await act(async () =>
+      [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+        .find((button) => button.textContent?.includes('Rename'))!
+        .click(),
+    )
+    expect(container.querySelector('[role="tab"][aria-label="second"]')).not.toBeNull()
+    expect(container.querySelector('[aria-label="Rename chat"]')).not.toBeNull()
+    await act(async () =>
+      container
+        .querySelector('[aria-label="Rename chat"]')!
+        .dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })),
+    )
     await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Restore closed chat"]')!.click())
     expect(container.querySelector('[role="tab"][aria-label="first"]')).not.toBeNull()
     await act(async () =>
