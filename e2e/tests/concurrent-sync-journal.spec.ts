@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test'
 import { readFileSync } from 'node:fs'
-import { stripTypeScriptTypes } from 'node:module'
+import { transpileModule, ModuleKind, ScriptTarget } from 'typescript'
 import { resolve } from 'node:path'
 
 // Exercise the production journal against each browser's real IndexedDB transaction
@@ -9,7 +9,10 @@ const source = readFileSync(
   resolve(__dirname, '../../app/packages/web/src/javascripts/Services/SyncTransport/SyncTransportOutbox.ts'),
   'utf8',
 )
-const compiled = stripTypeScriptTypes(source, { mode: 'transform' })
+// Constructor parameter properties need compilation, not Node's strip-only API.
+const compiled = transpileModule(source, {
+  compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 },
+}).outputText
 
 test.beforeEach(async ({ page }) => {
   await page.route('http://journal.test/**', (route) =>
