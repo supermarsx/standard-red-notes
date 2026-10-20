@@ -1,15 +1,5 @@
 [
   {
-    "advisoryId": "1120252",
-    "package": "@opentelemetry/sdk-node",
-    "domain": "app",
-    "vulnerableVersions": "<0.217.0",
-    "versions": ["0.46.0"],
-    "dependents": ["@standardnotes/domain-events-infra@npm:1.23.4"],
-    "rationale": "Re-verified 2026-10-10 structurally rather than by intent, and the previously recorded blocker was WRONG. What holds: the advisory is a crash in the Prometheus exporter's HTTP listener, @opentelemetry/exporter-prometheus appears zero times in app/yarn.lock, and the sdk-node 0.46.0 entry there depends on core, resources, sdk-metrics and sdk-trace-base/node pinned at 1.19.0 and on no prometheus exporter at all, so the vulnerable module is absent from the installed graph and the listener cannot be constructed; the wiring this copy serves (server/packages/domain-events-infra/src/Infra/OpenTelemetry/OpenTelemetrySDK.ts) supplies an explicit OTLP PeriodicExportingMetricReader instead. What was wrong: the previous entry said the patched 0.217.0 needs @opentelemetry/api >= 1.9 while 0.46.0 pins the peer below 1.8. The registry gives 0.217.0 a peer range of >=1.3.0 <1.10.0 against 0.46.0's >=1.3.0 <1.8.0, and app/yarn.lock holds api 1.7.0 and 1.8.0, so the peer is not a blocker and that reason cannot be relied on. The real blocker is the family: 0.217.0 pins core, resources, sdk-metrics, sdk-trace-base and sdk-trace-node at 2.7.1 and adds @opentelemetry/configuration, while the installed copies are pinned at exactly 1.19.0 by this published dependent and by sdk-trace-node@1.19.0, so a keyed resolution on sdk-node alone puts two OpenTelemetry families underneath one prebuilt published package — and 0.217.0 adds exporter-prometheus as a hard dependency, installing the very module whose absence is today's mitigation. A family migration of a published dependency in the app lock domain, not a resolution.",
-    "expiry": "2027-01-08"
-  },
-  {
     "advisoryId": "1124011",
     "package": "@opentelemetry/propagator-jaeger",
     "domain": "app",
