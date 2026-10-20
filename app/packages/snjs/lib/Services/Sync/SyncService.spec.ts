@@ -3004,6 +3004,26 @@ describe('SyncService D4: download-page persist failure must not advance the syn
       service as unknown as { handleSuccessServerResponse: (o: unknown, r: unknown) => Promise<void> }
     ).handleSuccessServerResponse(operation, response)
 
+  it('only publishes exact saved snapshots after the response is persisted', async () => {
+    const { service, local, savePayloads } = buildService(new Error('write failed'))
+    const listener = jest.fn()
+    service.subscribeSavedPayloads(local.uuid, listener)
+    const upload = { uuid: local.uuid }
+    const tracker = (
+      service as unknown as {
+        savedPayloads: { prepare: (payload: unknown, upload: object) => void }
+      }
+    ).savedPayloads
+    tracker.prepare(local, upload)
+    const operation = { ...buildOperation(), payloads: [upload] }
+    await expect(invoke(service, operation, buildResponse(local))).rejects.toThrow('write failed')
+    expect(listener).not.toHaveBeenCalled()
+    savePayloads.mockResolvedValue(undefined)
+    await invoke(service, operation, buildResponse(local))
+    expect(listener).toHaveBeenCalledTimes(1)
+    expect(listener).toHaveBeenCalledWith(local)
+  })
+
   it('a genuine write failure (QuotaExceeded) REJECTS and does NOT advance the sync/pagination token', async () => {
     const quota = new Error('The quota has been exceeded.')
     quota.name = 'QuotaExceededError'

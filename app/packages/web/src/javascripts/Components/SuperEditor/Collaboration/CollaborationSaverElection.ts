@@ -13,6 +13,7 @@ import {
   readCollaborationRevisionStamp,
   revisionStampCoversDocumentState,
   type CollaborativeDocumentState,
+  type CollaborationRevisionStamp,
 } from './CollaborationRevisionStamp'
 
 export type SaverParticipant = {
@@ -173,6 +174,33 @@ export function installCollaborationSaver(
   let retryDelay = SAVER_RETRY_INITIAL_MS
   const preparingPeers = new Map<string, number>()
   let awaiting: { state: CollaborativeDocumentState; since: number; epoch: string } | undefined
+  // The live item may already contain the next keystroke when a save completes.
+  // Only exact payloads acknowledged by the online sync pipeline are proof of
+  // that earlier state; a dirty item's RemoteSaved notification is not proof.
+  const acknowledgedStamps: CollaborationRevisionStamp[] = []
+  const stopSavedPayloads = application.sync.subscribeSavedPayloads?.(room, (payload) => {
+    if (disposed) {
+      return
+    }
+    const stamp = readCollaborationRevisionStamp(payload.content)
+    if (!stamp || stamp.epoch !== roomEpoch) {
+      return
+    }
+    acknowledgedStamps.push(stamp)
+    // Keep bounded evidence across overlapping/out-of-order completions. Dropping
+    // old evidence can only require another save, never acknowledge unsaved edits.
+    if (acknowledgedStamps.length > 8) {
+      acknowledgedStamps.shift()
+    }
+  })
+  const isAcknowledged = (target: CollaborativeDocumentState, epoch: string) => {
+    const note = application.items.findItem(room)
+    const current = note?.dirty === false ? readCollaborationRevisionStamp(note.content) : undefined
+    return (
+      (current?.epoch === epoch && revisionStampCoversDocumentState(current, target)) ||
+      acknowledgedStamps.some((stamp) => stamp.epoch === epoch && revisionStampCoversDocumentState(stamp, target))
+    )
+  }
   const registryOwner = {}
   const initialNote = application.items.findItem<SNNote>(room)
   let saveFence: { room: string; token: string; expiresAt: number } | undefined
@@ -566,11 +594,7 @@ export function installCollaborationSaver(
     if (!state) {
       return false
     }
-    const note = application.items.findItem(room)
-    const stamp = note ? readCollaborationRevisionStamp(note.content) : undefined
-    return (
-      note?.dirty !== false || !stamp || stamp.epoch !== roomEpoch || !revisionStampCoversDocumentState(stamp, state)
-    )
+    return !isAcknowledged(state, roomEpoch)
   })
   CollaborationSaverRegistry.setDurabilityFlusher(room, async () => {
     await provider.flush()
@@ -578,13 +602,9 @@ export function installCollaborationSaver(
     if (!target) {
       throw new Error('The collaboration document is not ready to persist.')
     }
-    const isAcknowledged = () => {
-      const note = application.items.findItem(room)
-      const stamp = note ? readCollaborationRevisionStamp(note.content) : undefined
-      return note?.dirty === false && stamp?.epoch === roomEpoch && revisionStampCoversDocumentState(stamp, target)
-    }
+    const targetAcknowledged = () => isAcknowledged(target, roomEpoch)
     // A clean, exact CRDT acknowledgement needs no new network round trip.
-    if (isAcknowledged()) {
+    if (targetAcknowledged()) {
       return
     }
     const deadline = Date.now() + SAVER_DURABILITY_TIMEOUT_MS
@@ -593,7 +613,7 @@ export function installCollaborationSaver(
       if (disposed) {
         break
       }
-      if (isAcknowledged()) {
+      if (targetAcknowledged()) {
         return
       }
       if (Date.now() >= nextRefreshAt) {
@@ -622,7 +642,7 @@ export function installCollaborationSaver(
           }),
         ])
         clearTimeout(timeout)
-        if (!disposed && isAcknowledged()) {
+        if (!disposed && targetAcknowledged()) {
           return
         }
       }
@@ -649,15 +669,8 @@ export function installCollaborationSaver(
     }
     const document = CollaborativeDocumentRegistry.get(room)
     const state = document?.state()
-    const note = application.items.findItem(room)
-    const stamp = note ? readCollaborationRevisionStamp(note.content) : undefined
     const target = awaiting?.state ?? state
-    const covered =
-      target &&
-      stamp &&
-      !note?.dirty &&
-      stamp.epoch === document?.epoch &&
-      revisionStampCoversDocumentState(stamp, target)
+    const covered = target && document && isAcknowledged(target, document.epoch)
     if (covered) {
       awaiting = undefined
       stalled = false
@@ -697,6 +710,7 @@ export function installCollaborationSaver(
     if (settleTimer !== undefined) {
       clearTimeout(settleTimer)
     }
+    stopSavedPayloads?.()
     stopLane()
     stopRefusals?.()
     stopCanonical()

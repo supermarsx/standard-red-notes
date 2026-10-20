@@ -78,6 +78,8 @@ describe('collaboration saver election', () => {
     let content: unknown
     let activeIdentity: { leaseId: string; roomEpoch: string } | undefined
     let changeIdentity: () => void
+    let acknowledgeSaved: (payload: { content: unknown }) => void
+    let stopSaved: jest.Mock
     beforeEach(() => {
       jest.useFakeTimers()
       doc = new Y.Doc()
@@ -85,6 +87,8 @@ describe('collaboration saver election', () => {
       lane = { usable: true }
       dirty = false
       content = {}
+      stopSaved = jest.fn()
+      acknowledgeSaved = () => undefined
       activeIdentity = { leaseId: 'local', roomEpoch: 'epoch' }
       jest
         .mocked(claimCollaborationSaveFence)
@@ -110,6 +114,10 @@ describe('collaboration saver election', () => {
         },
         items: { findItem: () => ({ dirty, content }) },
         sync: {
+          subscribeSavedPayloads: (_uuid: string, listener: typeof acknowledgeSaved) => {
+            acknowledgeSaved = listener
+            return stopSaved
+          },
           sync: jest.fn().mockResolvedValue({ downloadOnly: true, successful: true }),
           getSyncStatus: () => ({}),
         },
@@ -648,6 +656,71 @@ describe('collaboration saver election', () => {
       }
       expect(CollaborationSaverRegistry.get('room')).toMatchObject({ isSaver: true, saveFence: { token: 'token' } })
     })
+    const stampedContent = (epoch = 'epoch') => {
+      const text = doc.getText('text').toString()
+      const stamp = createCollaborationRevisionStamp(epoch, documentStateOf(doc), text, Date.now())!
+      return {
+        text,
+        appData: {
+          'org.standardnotes.sn': { collaborationRevision: stamp, client_updated_at: new Date(stamp.at).toISOString() },
+        },
+      }
+    }
+
+    it('keeps the saver editable during continuous typing while older snapshots are acknowledged', async () => {
+      await jest.advanceTimersByTimeAsync(500)
+      dirty = true
+      for (let second = 0; second < 35; second++) {
+        doc.getText('text').insert(0, 'a')
+        const sent = stampedContent()
+        // A newer local edit arrives before the server confirms the upload.
+        doc.getText('text').insert(0, 'b')
+        content = stampedContent()
+        acknowledgeSaved({ content: sent })
+        await jest.advanceTimersByTimeAsync(1_000)
+        expect(CollaborationSaverRegistry.get('room')).toMatchObject({ paused: false, isSaver: true })
+      }
+      expect(claimCollaborationSaveFence).toHaveBeenCalledTimes(1)
+    })
+
+    it('still stalls for newer unsaved edits despite repeated stale or wrong-epoch acknowledgements', async () => {
+      await jest.advanceTimersByTimeAsync(500)
+      doc.getText('text').insert(0, 'saved')
+      const old = stampedContent()
+      doc.getText('text').insert(0, 'unsaved')
+      const otherEpoch = stampedContent('other-epoch')
+      content = stampedContent()
+      dirty = true
+      for (let second = 0; second < 16; second++) {
+        acknowledgeSaved({ content: old })
+        acknowledgeSaved({ content: otherEpoch })
+        await jest.advanceTimersByTimeAsync(1_000)
+      }
+      expect(CollaborationSaverRegistry.get('room')?.paused).toBe(true)
+    })
+
+    it('finishes a captured durability wait after its exact upload ACK while later edits remain pending', async () => {
+      await jest.advanceTimersByTimeAsync(500)
+      doc.getText('text').insert(0, 'outgoing')
+      const sent = stampedContent()
+      dirty = true
+      content = sent
+      const waiting = CollaborationSaverRegistry.awaitDurable('room')
+      await jest.advanceTimersByTimeAsync(10)
+      doc.getText('text').insert(0, 'newer')
+      content = stampedContent()
+      acknowledgeSaved({ content: sent })
+      await jest.advanceTimersByTimeAsync(100)
+      await waiting
+      expect(CollaborationSaverRegistry.hasUndurableState('room')).toBe(true)
+    })
+
+    it('unsubscribes exact save observations when the provider is disposed', () => {
+      stop()
+      expect(stopSaved).toHaveBeenCalledTimes(1)
+      stop = () => undefined
+    })
+
     it('accepts an already clean exact acknowledgement without starting another sync', async () => {
       doc.getText('text').insert(0, 'already acknowledged')
       await jest.advanceTimersByTimeAsync(2_000)

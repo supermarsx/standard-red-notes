@@ -16,6 +16,8 @@ import { AccountSyncTransportInterface } from './AccountSyncTransport'
 
 export interface SyncServiceInterface extends AbstractService<SyncEvent> {
   sync(options?: Partial<SyncOptions>): Promise<unknown>
+  /** Observes the exact submitted plaintext only after an online save acknowledgement is persisted. */
+  subscribeSavedPayloads(uuid: string, listener: (payload: DecryptedPayloadInterface) => void): () => void
   setConflictPolicy(policy: SyncConflictPolicy | undefined): void
   setOnlineUploadPolicy(policy: ((uuid: string) => boolean) | undefined): void
   getRawSyncRequestForExternalUse(
