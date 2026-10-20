@@ -59,6 +59,7 @@ it('starts collapsed with the latest real pending activity and retains detailed 
             { label: 'Search notes' },
             { label: 'Read selected note' },
           ],
+          selectableText: createElement('div', { 'aria-label': 'Activity updates' }, 'Inspecting the note.'),
           children: createElement('button', { onClick: undo }, 'Undo change'),
         }),
       ),
@@ -69,6 +70,7 @@ it('starts collapsed with the latest real pending activity and retains detailed 
     expect(summary.textContent).toContain('Read selected note')
     expect(summary.textContent).toContain('Working…')
     expect(summary.textContent).not.toContain('Search notes')
+    expect(container.querySelector('[aria-label="Activity updates"]')?.textContent).toBe('Inspecting the note.')
     expect(container.querySelector('button')).toBeNull()
     act(() => {
       summary.click()

@@ -14,9 +14,11 @@ export default function AssistantActivityGroup({
   children,
   streaming = false,
   omittedCounts,
+  selectableText,
 }: {
   tools: readonly AssistantActivitySummary[]
   children: ReactNode
+  selectableText?: ReactNode
   streaming?: boolean
   omittedCounts?: AssistantActivityOmittedCounts
 }) {
@@ -57,14 +59,18 @@ export default function AssistantActivityGroup({
         ))}
         {changed > 0 && <span className="shrink-0">· {changed} changed</span>}
       </summary>
-      {expanded && (
-        <div className="mt-1 flex max-h-80 min-w-0 flex-col gap-1 overflow-y-auto">
-          {Object.values(omittedCounts ?? {}).some((count) => count > 0) && (
-            <p className="text-passive-1">Counts include earlier actions. Only recent action details are retained.</p>
-          )}
-          {children}
-        </div>
-      )}
+      {/* Keep message text addressable for Select all; native details hides it until opened. */}
+      <div className="mt-1 flex max-h-80 min-w-0 flex-col gap-1 overflow-y-auto">
+        {selectableText}
+        {expanded && (
+          <>
+            {Object.values(omittedCounts ?? {}).some((count) => count > 0) && (
+              <p className="text-passive-1">Counts include earlier actions. Only recent action details are retained.</p>
+            )}
+            {children}
+          </>
+        )}
+      </div>
     </details>
   )
 }

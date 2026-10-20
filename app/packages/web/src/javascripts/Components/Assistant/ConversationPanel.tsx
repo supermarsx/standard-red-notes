@@ -2843,16 +2843,18 @@ export const MessageBubble = memo(function MessageBubble({
                 outcome: tool.outcome,
                 changed: Boolean(tool.noteChange),
               }))}
+              selectableText={
+                progressText && (
+                  <div
+                    ref={!answerText ? messageTextRef : undefined}
+                    aria-label="Activity updates"
+                    className="text-passive-1 whitespace-pre-wrap"
+                  >
+                    {progressText}
+                  </div>
+                )
+              }
             >
-              {progressText && (
-                <div
-                  ref={!answerText ? messageTextRef : undefined}
-                  aria-label="Activity updates"
-                  className="text-passive-1 whitespace-pre-wrap"
-                >
-                  {progressText}
-                </div>
-              )}
               {message.tools.map((tool) => (
                 <ToolActivity key={tool.id} tool={tool} onApplyNoteChange={onApplyNoteChange} />
               ))}
