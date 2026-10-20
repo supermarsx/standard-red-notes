@@ -1,3 +1,5 @@
+/** @jest-environment node */
+
 /**
  * Stress / benchmark harness for the note/file LIST display pipeline (the path
  * the ItemListController + ContentList/ContentTableView drive on every reload).
@@ -35,7 +37,8 @@
  * Run just this file with:
  *   yarn jest --config jest.config.js ItemListDisplay.bench
  */
-import { CollectionSort } from '@standardnotes/snjs'
+// This pure computation benchmark needs no DOM or browser-bundle re-export layer.
+import { CollectionSort } from '../../../../../models/src/Domain/Runtime/Collection/CollectionSort'
 
 type CollectionSortValue = (typeof CollectionSort)[keyof typeof CollectionSort]
 
@@ -258,8 +261,9 @@ function computeRenderWindow(items: BenchItem[], notesToDisplay: number): BenchI
 // ---------------------------------------------------------------------------
 // Timing helpers (identical style to SearchIndex.bench.spec.ts).
 // ---------------------------------------------------------------------------
-const now = (): number =>
-  typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now()
+const now = (): number => {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now()
+}
 
 function ms(value: number): string {
   return `${value.toFixed(2)} ms`
