@@ -69,6 +69,13 @@ module.exports = {
       lines: 80.86,
     },
   },
+  // These build contracts use node:test, not Jest. Both are mandatory lint
+  // steps; exclude only their exact paths so every application suite stays here.
+  testPathIgnorePatterns: [
+    '/node_modules/',
+    '<rootDir>/scripts/GuardTextSizeAdjust\\.test\\.cjs$',
+    '<rootDir>/scripts/WebpackBuildLimits\\.test\\.cjs$',
+  ],
   restoreMocks: true,
   clearMocks: true,
   resetMocks: true,

@@ -63,3 +63,20 @@ test('vendor exclusion works on Windows and Linux without transforming sodium be
     assert.equal(rule.exclude.test(allowed), false)
   }
 })
+
+test('Node build contracts have their own mandatory runner without excluding application Jest suites', () => {
+  const { scripts } = require('../package.json')
+  const jestConfig = require('../jest.config.js')
+  const ignored = (path) =>
+    jestConfig.testPathIgnorePatterns.some((pattern) =>
+      new RegExp(pattern.replace('<rootDir>', '/web')).test(`/web/${path}`),
+    )
+  assert.equal(ignored('scripts/GuardTextSizeAdjust.test.cjs'), true)
+  assert.equal(ignored('scripts/WebpackBuildLimits.test.cjs'), true)
+  assert.equal(ignored('src/javascripts/example.spec.tsx'), false)
+  assert.equal(ignored('src/javascripts/example.test.ts'), false)
+  assert.equal(scripts['lint:css-compat'], 'node --test scripts/GuardTextSizeAdjust.test.cjs')
+  assert.equal(scripts['lint:build-config'], 'node --test scripts/WebpackBuildLimits.test.cjs')
+  assert.ok(scripts.lint.split(' && ').includes('yarn lint:css-compat'))
+  assert.ok(scripts.lint.split(' && ').includes('yarn lint:build-config'))
+})
