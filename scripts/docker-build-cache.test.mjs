@@ -41,11 +41,11 @@ test("web dependencies build before revision scope; the stamped bundle still bui
     source.lastIndexOf("FROM "),
   );
   const dependencies = buildStage.indexOf(
-    "RUN yarn workspaces foreach -pt --topological-dev --verbose -R --from @standardnotes/web --exclude @standardnotes/web run build",
+    'RUN yarn workspaces foreach -pt --jobs "${SRN_BUILD_JOBS}" --topological-dev --verbose -R --from @standardnotes/web --exclude @standardnotes/web run build',
   );
   const revision = buildStage.indexOf("ARG SRN_DEPLOY_REVISION");
   const web = buildStage.indexOf(
-    'RUN SRN_DEPLOY_REVISION="${SRN_DEPLOY_REVISION}" yarn workspace @standardnotes/web build',
+    'RUN SRN_DEPLOY_REVISION="${SRN_DEPLOY_REVISION}" WEBPACK_PARALLELISM="${WEBPACK_PARALLELISM}" WEBPACK_MINIFY_WORKERS="${WEBPACK_MINIFY_WORKERS}" yarn workspace @standardnotes/web build',
   );
   assert.ok(dependencies > 0 && dependencies < revision && revision < web);
   assert.doesNotMatch(buildStage.slice(dependencies), /--mount=type=cache/);
@@ -162,4 +162,20 @@ test("server artifact ownership is assigned during copy without rewriting depend
     source,
     /chown srn:srn \/opt\/server \/opt\/server\/packages\/api-gateway\/data/,
   );
+});
+
+test("app build concurrency defaults are bounded and exposed through Compose", () => {
+  const source = instructions(read("app/Dockerfile"));
+  const compose = read("docker-compose.yml")
+    .split("context: ./app")[1]
+    .split("image:")[0];
+  for (const [name, value] of [
+    ["SRN_BUILD_JOBS", 2],
+    ["WEBPACK_PARALLELISM", 32],
+    ["WEBPACK_MINIFY_WORKERS", 2],
+  ]) {
+    assert.ok(source.includes(`ARG ${name}=${value}`));
+    assert.ok(compose.includes(`${name}: "\${${name}:-${value}}"`));
+  }
+  assert.match(source, /SRN_BUILD_JOBS must be an integer from 1 to 64/);
 });

@@ -11655,6 +11655,7 @@ __metadata:
     mermaid: "npm:^11.16.1"
     mini-css-extract-plugin: "npm:^2.10.2"
     minimatch: "npm:^10.2.6"
+    minimizer-webpack-plugin: "npm:^5.6.1"
     mobx: "npm:^7.0.6"
     mobx-react-lite: "npm:^5.1.0"
     npm-check-updates: "npm:^23.1.0"

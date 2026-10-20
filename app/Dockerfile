@@ -126,7 +126,10 @@ COPY packages/ui-services/ packages/ui-services/
 COPY packages/utils/ packages/utils/
 # Preserve the ordinary topological build and its type checks. Changes to any
 # copied library/configuration still invalidate this layer automatically.
-RUN yarn workspaces foreach -pt --topological-dev --verbose -R --from @standardnotes/web --exclude @standardnotes/web run build
+# Bound simultaneous TypeScript/library compilers on large CPU hosts.
+ARG SRN_BUILD_JOBS=2
+RUN node -e 'const n=Number(process.env.SRN_BUILD_JOBS); if (!Number.isInteger(n) || n < 1 || n > 64) throw new Error("SRN_BUILD_JOBS must be an integer from 1 to 64")'
+RUN yarn workspaces foreach -pt --jobs "${SRN_BUILD_JOBS}" --topological-dev --verbose -R --from @standardnotes/web --exclude @standardnotes/web run build
 # --- Web source + build layer -------------------------------------------------
 # Build output/node_modules are excluded by .dockerignore, so this overlay keeps
 # the freshly compiled libraries while admitting every current web/build input.
@@ -163,7 +166,9 @@ COPY . .
 # identity at all. Scoped to this one command — it is not an ENV, so nothing
 # else in the stage is invalidated by it — and empty is still a valid build.
 ARG SRN_DEPLOY_REVISION
-RUN SRN_DEPLOY_REVISION="${SRN_DEPLOY_REVISION}" yarn workspace @standardnotes/web build
+ARG WEBPACK_PARALLELISM=32
+ARG WEBPACK_MINIFY_WORKERS=2
+RUN SRN_DEPLOY_REVISION="${SRN_DEPLOY_REVISION}" WEBPACK_PARALLELISM="${WEBPACK_PARALLELISM}" WEBPACK_MINIFY_WORKERS="${WEBPACK_MINIFY_WORKERS}" yarn workspace @standardnotes/web build
 
 # Hardening: run the runtime image as a NON-ROOT user. The unprivileged nginx
 # image is a drop-in for nginx:alpine that runs the master process as the

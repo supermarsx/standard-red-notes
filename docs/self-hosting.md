@@ -89,6 +89,33 @@ also removes this benefit. The web bundle, sync worker and deployment identity
 still build together from current sources, without a shared webpack cache.
 This optimization does not change backend startup or readiness wait times.
 
+Build concurrency is bounded by default: two library builds at a time, 32
+webpack module jobs, and two JavaScript minifier workers per compilation.
+These settings reduce simultaneous compiler memory use; they are not a total
+RAM limit. Worker subcompilations and concurrent server builds also use memory.
+On a smaller host, add these build settings to your Compose `.env`:
+
+```dotenv
+SRN_BUILD_JOBS=1
+WEBPACK_PARALLELISM=16
+WEBPACK_MINIFY_WORKERS=1
+```
+
+The defaults are `2`, `32`, and `2`, respectively. `SRN_BUILD_JOBS` accepts
+integers from 1 to 64; `WEBPACK_PARALLELISM` accepts 1 to 1000;
+`WEBPACK_MINIFY_WORKERS` accepts 0 to 64. Set minifier workers to `0` to minify
+serially inside the compiler process without spawning minifier workers.
+Lower concurrency may lengthen builds; increase it only when the host has enough
+free memory. These are build-time settings, so rebuild
+the app to apply them. For direct `docker build`, pass the same names using
+`--build-arg`. Existing compiled library layers remain reusable unless their
+inputs or library job setting change. The web bundle still builds cold.
+
+For a local build outside Docker, set `WEBPACK_PARALLELISM` and
+`WEBPACK_MINIFY_WORKERS` in the build process environment before running
+`yarn workspace @standardnotes/web build` from `app`. `SRN_BUILD_JOBS` controls
+the Docker library build; for local library builds use Yarn's `--jobs` option.
+
 ### 4. Open the app
 
 Go to **http://localhost:3001** (or the app port / domain you chose). Create an

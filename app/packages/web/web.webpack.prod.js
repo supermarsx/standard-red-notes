@@ -1,11 +1,25 @@
 const { merge } = require('webpack-merge')
 const mergeWithEnvDefaults = require('./web.webpack-defaults.js')
 const config = require('./web.webpack.config.js')
+const MinimizerPlugin = require('minimizer-webpack-plugin')
+const buildLimits = require('./webpack-build-limits.cjs')
 
 module.exports = (env, argv) => {
   mergeWithEnvDefaults(env)
+  const limits = buildLimits()
   return merge(config(env, argv), {
     mode: 'production',
+    parallelism: limits.parallelism,
+    optimization: {
+      // Match webpack's default Terser settings, but do not spawn one large
+      // minifier heap per available CPU. Zero runs in the compiler process.
+      minimizer: [
+        new MinimizerPlugin({
+          parallel: limits.minifyWorkers === 0 ? false : limits.minifyWorkers,
+          terserOptions: { compress: { passes: 2 } },
+        }),
+      ],
+    },
     // Standard Red Notes: do NOT emit source maps in the production build.
     // `devtool: 'source-map'` emitted `app.js.map` AND appended a
     // `//# sourceMappingURL=app.js.map` comment to app.js. The served nginx

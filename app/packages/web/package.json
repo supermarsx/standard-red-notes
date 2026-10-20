@@ -82,6 +82,7 @@
     "lint-staged": "^17.6.0",
     "mini-css-extract-plugin": "^2.10.2",
     "minimatch": "^10.2.6",
+    "minimizer-webpack-plugin": "^5.6.1",
     "mobx": "^7.0.6",
     "mobx-react-lite": "^5.1.0",
     "npm-check-updates": "^23.1.0",

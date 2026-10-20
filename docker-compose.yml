@@ -518,6 +518,9 @@ services:
       args:
         SRN_DEPLOY_REVISION: "${SRN_DEPLOY_REVISION:-}"
         SRN_DEPLOY_VERSION: "${SRN_DEPLOY_VERSION:-}"
+        SRN_BUILD_JOBS: "${SRN_BUILD_JOBS:-2}"
+        WEBPACK_PARALLELISM: "${WEBPACK_PARALLELISM:-32}"
+        WEBPACK_MINIFY_WORKERS: "${WEBPACK_MINIFY_WORKERS:-2}"
     image: ${APP_IMAGE:-standard-red-notes/app:local}
     restart: unless-stopped
     # Hardening: the image already runs as the unprivileged `nginx` user (uid 101)
