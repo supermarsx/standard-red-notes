@@ -762,6 +762,15 @@ jobs:
         run: npx playwright test tests/grpc-auth-session.spec.ts --project=chromium --reporter=list,json
       - name: Reject a skipped or incomplete socket sync lane sign-in
         run: yarn ci:verify-playwright --report e2e/artifacts/playwright-grpc-auth.json --min-expected 1 --max-skipped 0
+      - name: Verify socket readiness without animation frames
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_FILE: artifacts/playwright-socket-readiness.json
+        run: npx playwright test tests/socket-readiness-polling.spec.ts --project=firefox --project=chromium --reporter=list,json
+      - name: Reject skipped socket readiness checks
+        run: >-
+          yarn ci:verify-playwright --report e2e/artifacts/playwright-socket-readiness.json
+          --min-expected 2 --min-expected-in firefox=1 --min-expected-in chromium=1 --max-skipped 0
       - name: Verify independent socket workers and durable journal recovery
         working-directory: e2e
         env:

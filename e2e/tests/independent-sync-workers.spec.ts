@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
+import { waitForSocketReady as ready } from '../helpers/socket-readiness'
 import {
   createAndPushNote,
   freshAccount,
@@ -9,17 +10,6 @@ import {
   syncUntilQuiescent,
   waitForApplicationReady,
 } from '../helpers/sync'
-
-async function ready(page: Page) {
-  await page.waitForFunction(
-    () => {
-      const app = (window as any).mainApplicationGroup?.primaryApplication
-      return app?._webSocketSyncTransport?.transportStatus?.state === 'READY'
-    },
-    undefined,
-    { timeout: 20_000 },
-  )
-}
 
 async function rounds(page: Page) {
   return page.evaluate(
@@ -34,6 +24,23 @@ async function drained(page: Page) {
   expect(result.quiescent, JSON.stringify(result)).toBe(true)
 }
 
+async function closeDefaultEditors(page: Page) {
+  // Account-worker isolation: startup selects the same dated note in both tabs.
+  // Leaving it open also starts a separate collaborative saver election, whose
+  // follower must retain dirty state until a room acknowledgement arrives.
+  // Finish the real durable handover before closing; never clear dirty items or
+  // bypass the upload policy. The next scenario exercises concurrent editors.
+  await page.evaluate(async () => {
+    const app = (window as any).mainApplicationGroup.primaryApplication
+    const group = app.itemControllerGroup
+    for (const controller of [...group.itemControllers]) {
+      await group.closeItemControllerAfterSaving(controller, () => true)
+    }
+  })
+  await expect(page.locator('#super-editor-content:visible')).toHaveCount(0)
+  await drained(page)
+}
+
 test('independent workers in one profile both save over sockets and survive a sibling closing', async ({
   page,
   context,
@@ -46,6 +53,7 @@ test('independent workers in one profile both save over sockets and survive a si
   await waitForApplicationReady(page)
   await registerAccount(page, account)
   await ready(page)
+  await closeDefaultEditors(page)
 
   const sibling = await context.newPage()
   // Real dedicated-worker fallback: no replacement of the worker, journal,
@@ -56,6 +64,7 @@ test('independent workers in one profile both save over sockets and survive a si
   await sibling.goto(baseURL ?? '/')
   await waitForApplicationReady(sibling)
   await ready(sibling)
+  await closeDefaultEditors(sibling)
   const baseline = await Promise.all([rounds(page), rounds(sibling)])
   const titles = [`parallel-a-${Date.now()}`, `parallel-b-${Date.now()}`]
   await Promise.all([
@@ -73,6 +82,7 @@ test('independent workers in one profile both save over sockets and survive a si
   await sibling.reload()
   await waitForApplicationReady(sibling)
   await ready(sibling)
+  await closeDefaultEditors(sibling)
   await drained(sibling)
 
   const reader = await openFreshContext(browser, baseURL)

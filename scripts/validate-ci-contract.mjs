@@ -1430,7 +1430,7 @@ export function validateCiContract(files) {
     ],
     [
       "--project=firefox --project=chromium --reporter=list,json",
-      2,
+      3,
       "engine and concurrent sync checks in both Firefox and Chromium",
     ],
     [
@@ -1465,6 +1465,16 @@ export function validateCiContract(files) {
       "tests/independent-sync-workers.spec.ts tests/concurrent-sync-journal.spec.ts",
       1,
       "native journal and independent collaboration browser checks",
+    ],
+    [
+      "tests/socket-readiness-polling.spec.ts --project=firefox --project=chromium",
+      1,
+      "socket readiness without animation frames in both browsers",
+    ],
+    [
+      "playwright-socket-readiness.json",
+      2,
+      "socket readiness report written and then verified",
     ],
     [
       "playwright-parallel-sync.json",

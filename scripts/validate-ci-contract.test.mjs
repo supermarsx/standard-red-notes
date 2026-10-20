@@ -1062,8 +1062,8 @@ test("the Firefox and Chromium engine check cannot be silently disarmed", () => 
     [
       "--project=firefox --project=chromium --reporter=list,json",
       "--project=chromium --reporter=list,json",
-      /container-smoke must apply the engine and concurrent sync checks in both Firefox and Chromium exactly 2 times, found 1/,
-      2,
+      /container-smoke must apply the engine and concurrent sync checks in both Firefox and Chromium exactly 3 times, found 2/,
+      3,
     ],
     [
       "playwright install --with-deps chromium firefox\n",
@@ -1151,7 +1151,7 @@ test("a commented-out engine check does not count as one", () => {
   });
   assert.match(
     validateCiContract(files).join("\n"),
-    /container-smoke must apply the engine and concurrent sync checks in both Firefox and Chromium exactly 2 times, found 1/,
+    /container-smoke must apply the engine and concurrent sync checks in both Firefox and Chromium exactly 3 times, found 2/,
   );
 });
 
