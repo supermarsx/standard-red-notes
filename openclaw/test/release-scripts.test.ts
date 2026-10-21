@@ -1,6 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -145,35 +152,66 @@ describe("package-release.mjs argument validation", () => {
     expect(out.stderr).toContain("--source-repository must be an HTTPS URL");
   });
 
-  it("accepts a fully valid input set and moves past input validation", () => {
-    const output = mkdtempSync(join(tmpdir(), "srn-openclaw-occupied-output-"));
-    writeFileSync(join(output, "keep.txt"), "occupied");
-    try {
-      const out = runScript(packageRelease, [
-        "--tag",
-        currentTag,
-        "--source-sha",
-        validSha,
-        "--source-date-epoch",
-        "1700000000",
-        "--out-dir",
-        output,
-      ]);
-      // Stop deterministically after validation, before corepack, installs, or
-      // packaging. A valid Node 26 machine must not perform a real release here.
-      expect(out.status).toBe(1);
-      if (nodeMajor === 26) {
-        expect(out.stderr).toContain("release output directory must be empty");
+  it.each([false, true])(
+    "accepts valid inputs independently of existing build output (built: %s)",
+    (built) => {
+      const fixture = mkdtempSync(
+        join(tmpdir(), "srn-openclaw-release-inputs-"),
+      );
+      const output = join(fixture, "out");
+      mkdirSync(output);
+      writeFileSync(join(output, "keep.txt"), "occupied");
+      try {
+        mkdirSync(join(fixture, "scripts"));
+        cpSync(packageRelease, join(fixture, "scripts", "package-release.mjs"));
+        cpSync(
+          join(toolRoot, "scripts", "release-config.mjs"),
+          join(fixture, "scripts", "release-config.mjs"),
+        );
+        writeFileSync(
+          join(fixture, "package.json"),
+          JSON.stringify(packageJson),
+        );
+        writeFileSync(join(fixture, "README.md"), "Test release fixture");
+        if (built) {
+          mkdirSync(join(fixture, "dist"));
+          writeFileSync(
+            join(fixture, "dist", "index.js"),
+            "// Packaging must never execute this fixture.\n",
+          );
+        }
+        const out = runScript(join(fixture, "scripts", "package-release.mjs"), [
+          "--tag",
+          currentTag,
+          "--source-sha",
+          validSha,
+          "--source-date-epoch",
+          "1700000000",
+          "--out-dir",
+          output,
+        ]);
+        // Stop deterministically after validation, before corepack, installs, or
+        // packaging. A valid Node 26 machine must not perform a real release here.
+        expect(out.status).toBe(1);
+        if (nodeMajor === 26) {
+          expect(out.stderr).toContain(
+            built
+              ? "release output directory must be empty"
+              : "built OpenClaw entrypoint is missing; run the build before packaging",
+          );
+        }
+        expect(out.stderr).not.toMatch(/--source-sha must be/);
+        expect(out.stderr).not.toMatch(/--source-date-epoch must be/);
+        expect(out.stderr).not.toMatch(/--source-repository must be/);
+        expect(out.stderr).not.toMatch(
+          /does not match openclaw\/package\.json/,
+        );
+        expect(out.stderr).not.toMatch(/release tag must be/);
+      } finally {
+        rmSync(fixture, { recursive: true, force: true });
       }
-      expect(out.stderr).not.toMatch(/--source-sha must be/);
-      expect(out.stderr).not.toMatch(/--source-date-epoch must be/);
-      expect(out.stderr).not.toMatch(/--source-repository must be/);
-      expect(out.stderr).not.toMatch(/does not match openclaw\/package\.json/);
-      expect(out.stderr).not.toMatch(/release tag must be/);
-    } finally {
-      rmSync(output, { recursive: true, force: true });
-    }
-  });
+    },
+  );
 
   it.skipIf(nodeMajor === 26)(
     "refuses to build a release package on a non-Node-26 runtime",
