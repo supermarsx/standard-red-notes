@@ -2313,7 +2313,7 @@ export function validateReleaseContract(files) {
       "supported release-policy parser loader",
     ],
     ['name: "@babel/parser"', "pinned public semantic parser"],
-    ['version: "7.29.7"', "exact semantic parser version"],
+    ['version: "8.0.7"', "exact semantic parser version"],
     ["parseNativeExecutorAst(source)", "module-aware native AST parser"],
     ["canonicalNativeAst(value)", "canonical semantic AST normalizer"],
     [
@@ -7531,22 +7531,22 @@ export function validateReleaseContract(files) {
   if (
     scriptRuntimePackage.private !== true ||
     JSON.stringify(scriptRuntimePackage.dependencies) !==
-      JSON.stringify({ "@babel/parser": "7.29.7" })
+      JSON.stringify({ "@babel/parser": "8.0.7" })
   ) {
     errors.push(
-      "scripts/package.json: release-policy runtime must contain only exact @babel/parser@7.29.7",
+      "scripts/package.json: release-policy runtime must contain only exact @babel/parser@8.0.7",
     );
   }
   if (
     scriptRuntimeLock.lockfileVersion !== 3 ||
     scriptRuntimeLock.packages?.[""]?.dependencies?.["@babel/parser"] !==
-      "7.29.7" ||
+      "8.0.7" ||
     scriptRuntimeLock.packages?.["node_modules/@babel/parser"]?.version !==
-      "7.29.7" ||
+      "8.0.7" ||
     !scriptRuntimeLock.packages?.["node_modules/@babel/parser"]?.integrity
   ) {
     errors.push(
-      "scripts/package-lock.json: exact @babel/parser@7.29.7 resolution and integrity are required",
+      "scripts/package-lock.json: exact @babel/parser@8.0.7 resolution and integrity are required",
     );
   }
 

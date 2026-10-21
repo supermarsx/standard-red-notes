@@ -4,6 +4,6 @@
   "private": true,
   "license": "AGPL-3.0-only",
   "dependencies": {
-    "@babel/parser": "7.29.7"
+    "@babel/parser": "8.0.7"
   }
 }

@@ -1264,11 +1264,11 @@ test("release-policy dependencies install exactly before every parser-backed gat
   );
 
   files = withFileChanged("scripts/package.json", (content) =>
-    content.replace('"@babel/parser": "7.29.7"', '"@babel/parser": "^7.29.7"'),
+    content.replace('"@babel/parser": "8.0.7"', '"@babel/parser": "^8.0.7"'),
   );
   assert.match(
     validateReleaseContract(files).join("\n"),
-    /must contain only exact @babel\/parser@7\.29\.7/,
+    /must contain only exact @babel\/parser@8\.0\.7/,
   );
 
   files = withFileChanged(

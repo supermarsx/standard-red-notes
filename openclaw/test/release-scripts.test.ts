@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -145,21 +146,33 @@ describe("package-release.mjs argument validation", () => {
   });
 
   it("accepts a fully valid input set and moves past input validation", () => {
-    const out = runScript(packageRelease, [
-      "--tag",
-      currentTag,
-      "--source-sha",
-      validSha,
-      "--source-date-epoch",
-      "1700000000",
-    ]);
-    // It will still fail later (no Node 26 / no build / non-empty out dir),
-    // but never on the inputs themselves.
-    expect(out.stderr).not.toMatch(/--source-sha must be/);
-    expect(out.stderr).not.toMatch(/--source-date-epoch must be/);
-    expect(out.stderr).not.toMatch(/--source-repository must be/);
-    expect(out.stderr).not.toMatch(/does not match openclaw\/package\.json/);
-    expect(out.stderr).not.toMatch(/release tag must be/);
+    const output = mkdtempSync(join(tmpdir(), "srn-openclaw-occupied-output-"));
+    writeFileSync(join(output, "keep.txt"), "occupied");
+    try {
+      const out = runScript(packageRelease, [
+        "--tag",
+        currentTag,
+        "--source-sha",
+        validSha,
+        "--source-date-epoch",
+        "1700000000",
+        "--out-dir",
+        output,
+      ]);
+      // Stop deterministically after validation, before corepack, installs, or
+      // packaging. A valid Node 26 machine must not perform a real release here.
+      expect(out.status).toBe(1);
+      if (nodeMajor === 26) {
+        expect(out.stderr).toContain("release output directory must be empty");
+      }
+      expect(out.stderr).not.toMatch(/--source-sha must be/);
+      expect(out.stderr).not.toMatch(/--source-date-epoch must be/);
+      expect(out.stderr).not.toMatch(/--source-repository must be/);
+      expect(out.stderr).not.toMatch(/does not match openclaw\/package\.json/);
+      expect(out.stderr).not.toMatch(/release tag must be/);
+    } finally {
+      rmSync(output, { recursive: true, force: true });
+    }
   });
 
   it.skipIf(nodeMajor === 26)(

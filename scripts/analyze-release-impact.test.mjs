@@ -473,7 +473,7 @@ function repositoryFixture() {
   write(
     repo,
     "scripts/package.json",
-    '{"private":true,"dependencies":{"@babel/parser":"7.29.7"}}\n',
+    '{"private":true,"dependencies":{"@babel/parser":"8.0.7"}}\n',
   );
   write(
     repo,
@@ -1631,7 +1631,7 @@ test("semantic parser dependency changes release every managed product", () => {
     write(
       context.repo,
       "scripts/package-lock.json",
-      '{"lockfileVersion":3,"packages":{"node_modules/@babel/parser":{"version":"7.29.7"}}}\n',
+      '{"lockfileVersion":3,"packages":{"node_modules/@babel/parser":{"version":"8.0.7"}}}\n',
     );
     commit(context.repo, "update semantic parser dependency lock");
 

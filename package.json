@@ -13,10 +13,10 @@
     "openclaw"
   ],
   "resolutions": {
-    "fast-uri@npm:^3.0.1": "3.1.8",
+    "fast-uri@npm:^3.0.1": "3.1.9",
     "proxy-addr@npm:^2.0.7": "2.0.8",
-    "undici@npm:^8.4.1": "8.11.2",
-    "uuid": "14.0.2"
+    "undici@npm:^8.4.1": "8.12.3",
+    "uuid": "14.0.3"
   },
   "scripts": {
     "build": "yarn build:mcp && yarn build:openclaw && yarn build:app && yarn build:server",
@@ -38,12 +38,12 @@
     "coverage:openclaw": "yarn workspace @standard-red-notes/openclaw coverage",
     "coverage:report": "node scripts/coverage.mjs report --input coverage/raw --expect app --expect server --output docs/assets/coverage.svg --summary coverage/summary.json",
     "deps:audit": "yarn deps:audit:owned && yarn deps:audit:app && yarn deps:audit:server",
-    "deps:audit:app": "npx npm-check-updates@23.1.0 --workspaces --root --format group --target latest --cwd app",
-    "deps:audit:cli-client": "npx npm-check-updates@23.1.0 --packageFile cli/srn-client/package.json --format group --target latest",
-    "deps:audit:cli-server": "npx npm-check-updates@23.1.0 --packageFile cli/srn-server/package.json --format group --target latest",
-    "deps:audit:e2e": "npx npm-check-updates@23.1.0 --packageFile e2e/package.json --format group --target latest",
-    "deps:audit:owned": "npx npm-check-updates@23.1.0 --workspaces --root --format group --target latest && yarn deps:audit:cli-client && yarn deps:audit:cli-server && yarn deps:audit:e2e",
-    "deps:audit:server": "npx npm-check-updates@23.1.0 --workspaces --root --format group --target latest --cwd server",
+    "deps:audit:app": "npx npm-check-updates@23.1.1 --workspaces --root --format group --target latest --cwd app",
+    "deps:audit:cli-client": "npx npm-check-updates@23.1.1 --packageFile cli/srn-client/package.json --format group --target latest",
+    "deps:audit:cli-server": "npx npm-check-updates@23.1.1 --packageFile cli/srn-server/package.json --format group --target latest",
+    "deps:audit:e2e": "npx npm-check-updates@23.1.1 --packageFile e2e/package.json --format group --target latest",
+    "deps:audit:owned": "npx npm-check-updates@23.1.1 --workspaces --root --format group --target latest && yarn deps:audit:cli-client && yarn deps:audit:cli-server && yarn deps:audit:e2e",
+    "deps:audit:server": "npx npm-check-updates@23.1.1 --workspaces --root --format group --target latest --cwd server",
     "deps:security:owned": "yarn npm audit --all --recursive",
     "deps:security:production": "node scripts/audit-production-dependencies.mjs",
     "docker:config": "docker compose config",
@@ -113,8 +113,8 @@
   "devDependencies": {
     "istanbul-lib-coverage": "^3.2.2",
     "istanbul-lib-instrument": "^6.0.3",
-    "jsdom": "^30.1.2",
-    "npm-check-updates": "^23.1.0",
-    "turbo": "^2.11.7"
+    "jsdom": "^30.1.3",
+    "npm-check-updates": "^23.1.1",
+    "turbo": "^2.11.10"
   }
 }

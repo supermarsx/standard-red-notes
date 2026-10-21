@@ -28,7 +28,7 @@ const NATIVE_EXECUTOR_SEMANTIC_NORMALIZER = Object.freeze({
 const NATIVE_EXECUTOR_IMPLEMENTATION_FILE = fileURLToPath(import.meta.url);
 const NATIVE_SEMANTIC_PARSER = Object.freeze({
   name: "@babel/parser",
-  version: "7.29.7",
+  version: "8.0.7",
 });
 const nativeRequire = createRequire(import.meta.url);
 
