@@ -1,5 +1,13 @@
 import * as OpenTelemetrySDKNode from '@opentelemetry/sdk-node'
-import { SemanticAttributes, SemanticResourceAttributes } from '@opentelemetry/semantic-conventions'
+import * as Resources from '@opentelemetry/resources'
+import * as Tracing from '@opentelemetry/sdk-trace'
+import * as Metrics from '@opentelemetry/sdk-metrics'
+import {
+  ATTR_CLIENT_ADDRESS,
+  ATTR_NETWORK_PEER_ADDRESS,
+  SemanticAttributes,
+  SemanticResourceAttributes,
+} from '@opentelemetry/semantic-conventions'
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-grpc'
 import { AWSXRayIdGenerator } from '@opentelemetry/id-generator-aws-xray'
 import * as AwsResourceDetectors from '@opentelemetry/resource-detector-aws'
@@ -31,18 +39,18 @@ export class OpenTelemetrySDK implements OpenTelemetrySDKInterface {
   }
 
   build(): void {
-    const otResource = OpenTelemetrySDKNode.resources.defaultResource().merge(
-      OpenTelemetrySDKNode.resources.resourceFromAttributes({
+    const otResource = Resources.defaultResource().merge(
+      Resources.resourceFromAttributes({
         [SemanticResourceAttributes.SERVICE_NAME]: this.options.serviceName,
       }),
     )
 
     const traceExporter = new OTLPTraceExporter()
 
-    const spanProcessor = new OpenTelemetrySDKNode.tracing.BatchSpanProcessor(traceExporter)
+    const spanProcessor = new Tracing.BatchSpanProcessor({ exporter: traceExporter })
 
     const metricExportIntervalMillis = this.options.metricExportIntervalMillis ?? 300_000
-    const metricReader = new OpenTelemetrySDKNode.metrics.PeriodicExportingMetricReader({
+    const metricReader = new Metrics.PeriodicExportingMetricReader({
       exportIntervalMillis: metricExportIntervalMillis,
       exporter: new OTLPMetricExporter(),
     })
@@ -57,7 +65,7 @@ export class OpenTelemetrySDK implements OpenTelemetrySDKInterface {
     const ratio = this.options.spanRatio ?? 0.1
 
     this.sdk = new OpenTelemetrySDKNode.NodeSDK({
-      sampler: new OpenTelemetrySDKNode.tracing.TraceIdRatioBasedSampler(ratio),
+      sampler: new Tracing.TraceIdRatioBasedSampler(ratio),
       textMapPropagator: new AWSXRayPropagator(),
       instrumentations: [
         new HttpInstrumentation({
@@ -69,6 +77,8 @@ export class OpenTelemetrySDK implements OpenTelemetrySDKInterface {
           startIncomingSpanHook: (_request: IncomingMessage): Attributes => {
             return {
               [SemanticAttributes.HTTP_CLIENT_IP]: undefined,
+              [ATTR_CLIENT_ADDRESS]: undefined,
+              [ATTR_NETWORK_PEER_ADDRESS]: undefined,
             }
           },
         }),
@@ -85,9 +95,9 @@ export class OpenTelemetrySDK implements OpenTelemetrySDKInterface {
         new IORedisInstrumentation(),
         new GrpcInstrumentation(),
       ],
-      metricReader: metricReader,
+      metricReaders: [metricReader],
       resource: otResource,
-      spanProcessor: spanProcessor,
+      spanProcessors: [spanProcessor],
       traceExporter: traceExporter,
       idGenerator: new AWSXRayIdGenerator(),
       autoDetectResources: true,

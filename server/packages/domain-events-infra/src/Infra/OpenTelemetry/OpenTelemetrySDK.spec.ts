@@ -1,8 +1,17 @@
 import 'reflect-metadata'
 
 import * as OpenTelemetrySDKNode from '@opentelemetry/sdk-node'
+import { PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics'
 
 import { OpenTelemetrySDK } from './OpenTelemetrySDK'
+
+// The SDK now publishes dual CJS/ESM exports. Mock the module boundary rather
+// than one wildcard-import wrapper, which need not be shared by both imports.
+jest.mock('@opentelemetry/sdk-node', () => ({
+  ...jest.requireActual('@opentelemetry/sdk-node'),
+  __esModule: true,
+  NodeSDK: jest.fn(),
+}))
 
 describe('OpenTelemetrySDK', () => {
   let nodeSdkOptions: Record<string, never>
@@ -18,7 +27,7 @@ describe('OpenTelemetrySDK', () => {
 
     // The real NodeSDK registers global instrumentation hooks in the worker, so
     // capture the assembled configuration instead of standing one up.
-    jest.spyOn(OpenTelemetrySDKNode, 'NodeSDK').mockImplementation(function (options: unknown) {
+    jest.mocked(OpenTelemetrySDKNode.NodeSDK).mockImplementation(function (options: unknown) {
       nodeSdkOptions = options as Record<string, never>
 
       return { start, shutdown } as never
@@ -46,9 +55,18 @@ describe('OpenTelemetrySDK', () => {
   it('exports metrics every five minutes by default', () => {
     createSDK({ serviceName: 'auth' })
 
-    expect(nodeSdkOptions.metricReader).toBeInstanceOf(
-      OpenTelemetrySDKNode.metrics.PeriodicExportingMetricReader as never,
-    )
+    expect(nodeSdkOptions.metricReaders).toHaveLength(1)
+    expect(nodeSdkOptions.metricReaders[0]).toBeInstanceOf(PeriodicExportingMetricReader)
+  })
+
+  it('provides the real batch span processor with an exporter that can flush and shut down', async () => {
+    createSDK({ serviceName: 'auth' })
+    const [processor] = nodeSdkOptions.spanProcessors as unknown as {
+      forceFlush(): Promise<void>
+      shutdown(): Promise<void>
+    }[]
+    await expect(processor.forceFlush()).resolves.toBeUndefined()
+    await expect(processor.shutdown()).resolves.toBeUndefined()
   })
 
   it('registers the instrumentations the services depend on', () => {
@@ -114,8 +132,10 @@ describe('OpenTelemetrySDK', () => {
 
     // The client ip is personal data and must not be attached to exported spans.
     const attributes = startIncomingSpanHook({})
-    expect(Object.keys(attributes)).toEqual(['http.client_ip'])
+    expect(Object.keys(attributes).sort()).toEqual(['client.address', 'http.client_ip', 'network.peer.address'])
     expect(attributes['http.client_ip']).toBeUndefined()
+    expect(attributes['client.address']).toBeUndefined()
+    expect(attributes['network.peer.address']).toBeUndefined()
   })
 
   it('stamps the service name onto every winston log record', () => {

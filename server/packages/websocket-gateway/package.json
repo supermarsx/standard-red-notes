@@ -38,23 +38,23 @@
     "format:check": "prettier --check \"src/**/*.{ts,tsx,js,json,md}\" \"test/**/*.{ts,tsx,js,json,md}\""
   },
   "dependencies": {
-    "@aws-sdk/client-sqs": "^3.1147.0",
+    "@aws-sdk/client-sqs": "^3.1154.0",
     "ioredis": "^6.0.0",
     "jsonwebtoken": "^9.0.3",
     "ws": "^8.22.0"
   },
   "devDependencies": {
     "@types/jsonwebtoken": "^9.0.10",
-    "@types/node": "^26.6.4",
+    "@types/node": "^26.6.5",
     "@types/ws": "^8.18.2",
-    "@vitest/coverage-v8": "^5.0.3",
-    "eslint": "^10.12.0",
-    "playwright": "^1.64.0",
-    "prettier": "^3.9.9",
+    "@vitest/coverage-v8": "^5.0.5",
+    "eslint": "^10.13.0",
+    "playwright": "^1.64.1",
+    "prettier": "^3.9.10",
     "tsx": "^4.23.15",
     "typescript": "6.0.3",
-    "vite": "^8.3.4",
-    "vitest": "^5.0.3",
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5",
     "y-protocols": "^1.0.7",
     "yjs": "^13.6.33"
   },
