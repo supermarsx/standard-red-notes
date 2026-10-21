@@ -433,6 +433,8 @@
           url: /security-and-account.html#server-side-security
         - title: Secrets and configuration
           url: /security-and-account.html#secrets-and-configuration
+        - title: Dependency security checks
+          url: /security-and-account.html#dependency-security-checks
     - title: Sharing and collaboration
       items:
         - title: Collaboration overview
@@ -990,6 +992,8 @@
           url: /development-guide.html#repository-map
         - title: Toolchain
           url: /development-guide.html#toolchain
+        - title: Maintained dependencies
+          url: /development-guide.html#dependency-upgrades-and-maintained-upstream-packages
         - title: Common commands
           url: /development-guide.html#common-commands
         - title: Launch preflight

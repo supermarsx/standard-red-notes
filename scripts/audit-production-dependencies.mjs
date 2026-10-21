@@ -136,13 +136,13 @@ const securityManifestDeclarations = Object.freeze([
     file: "app/packages/utils/package.json",
     section: "dependencies",
     packageName: "dompurify",
-    expected: "^3.4.13",
+    expected: "^3.4.17",
   }),
   Object.freeze({
     file: "app/packages/web/package.json",
     section: "dependencies",
     packageName: "mermaid",
-    expected: "^11.16.1",
+    expected: "^12.2.0",
   }),
   Object.freeze({
     file: "app/packages/filepicker/example/package.json",
@@ -161,7 +161,7 @@ const securityManifestDeclarations = Object.freeze([
     file: "server/package.json",
     section: "resolutions",
     packageName: "dompurify",
-    expected: "npm:3.4.16",
+    expected: "npm:3.4.17",
   }),
 ]);
 
@@ -500,6 +500,12 @@ const yarnSecurityPatchFloors = Object.freeze({
       4: Object.freeze([4, 1, 0]),
     }),
   }),
+  "launch-editor": Object.freeze({
+    minimumMajor: 2,
+    floors: Object.freeze({
+      2: Object.freeze([2, 14, 2]),
+    }),
+  }),
   mermaid: Object.freeze({
     minimumMajor: 11,
     floors: Object.freeze({
@@ -662,21 +668,21 @@ export function validateAppSecurityGraph(packageJsonText, lockfile) {
   const errors = [];
   const packageJson = JSON.parse(packageJsonText);
   const expectedResolutions = {
-    "@grpc/grpc-js@npm:^1.7.1": "1.14.5",
-    "@grpc/grpc-js@npm:^1.9.13": "1.14.5",
+    "@grpc/grpc-js@npm:^1.7.1": "1.14.6",
+    "@grpc/grpc-js@npm:^1.9.13": "1.14.6",
     "axios@npm:^1.6.1": "1.20.0",
-    "body-parser@npm:1.20.1": "1.20.6",
+    "body-parser@npm:1.20.1": "1.20.8",
     "form-data": "4.0.6",
     "jws@npm:^3.2.2": "3.2.3",
     "lodash-es@npm:4.17.21": "4.18.1",
-    "nanoid@npm:3.3.3": "3.3.18",
+    "nanoid@npm:3.3.3": "3.3.20",
     "nanoid@npm:4.0.2": "5.1.16",
-    "node-gyp@npm:latest": "12.3.0",
+    "node-gyp@npm:latest": "12.4.0",
     "path-to-regexp@npm:0.1.7": "0.1.13",
     "path-to-regexp@npm:~0.1.12": "0.1.13",
-    protobufjs: "7.6.5",
+    protobufjs: "7.6.6",
     "sha.js": "2.4.12",
-    "shell-quote": "1.11.0",
+    "shell-quote": "1.12.0",
     "sqlite3@npm:^5.1.6": "6.0.1",
     "typeorm@npm:^0.3.17": "0.3.31",
     "uuid@npm:^8.3.2": "11.1.1",
@@ -692,7 +698,7 @@ export function validateAppSecurityGraph(packageJsonText, lockfile) {
   }
 
   for (const [name, expected] of Object.entries({
-    "@grpc/grpc-js": ["1.14.5"],
+    "@grpc/grpc-js": ["1.14.6"],
     ajv: ["6.15.0", "8.20.0"],
     axios: ["1.20.0"],
     "body-parser": ["1.20.6", "2.3.0"],
@@ -701,15 +707,15 @@ export function validateAppSecurityGraph(packageJsonText, lockfile) {
     "form-data": ["4.0.6"],
     jws: ["3.2.3", "4.0.1"],
     micromatch: ["4.0.8"],
-    nanoid: ["3.3.18", "5.1.16", "6.0.1"],
-    "path-to-regexp": ["0.1.13"],
-    protobufjs: ["7.6.5"],
+    nanoid: ["3.3.18", "3.3.20", "5.1.16", "6.0.2"],
+    "path-to-regexp": ["0.1.13", "8.4.2"],
+    protobufjs: ["7.6.6"],
     "sha.js": ["2.4.12"],
-    "shell-quote": ["1.11.0"],
+    "shell-quote": ["1.12.0"],
     sqlite3: ["6.0.1"],
     typeorm: ["0.3.31"],
-    uuid: ["11.1.1", "14.0.0", "14.0.1"],
-    "websocket-driver": ["0.7.5"],
+    uuid: ["11.1.1", "14.0.0", "14.0.3"],
+    "websocket-driver": [],
   })) {
     const versions = yarnVersions(lockfile, name).sort();
     if (versions.join("\0") !== expected.join("\0")) {
@@ -719,13 +725,13 @@ export function validateAppSecurityGraph(packageJsonText, lockfile) {
     }
   }
 
-  if (!lockfile.includes("hash=7b308c")) {
+  if (!lockfile.includes("hash=1d8f4e")) {
     errors.push(
       "app/yarn.lock: embedded home-server loopback patch hash changed",
     );
   }
-  if (!lockfile.includes('"pdfjs-dist@npm:6.2.108":')) {
-    errors.push("app/yarn.lock: PDF.js must remain on patched 6.2.108");
+  if (!lockfile.includes('"pdfjs-dist@npm:6.4.299":')) {
+    errors.push("app/yarn.lock: PDF.js must remain on patched 6.4.299");
   }
 
   return errors;

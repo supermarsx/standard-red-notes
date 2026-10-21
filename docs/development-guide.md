@@ -49,6 +49,28 @@ yarn install --immutable
 
 Do not regenerate an app or server lockfile from the wrong workspace root.
 
+### Dependency upgrades and maintained upstream packages
+
+Update each workspace and its lockfile together, then run its build, tests and
+the production dependency audit. A registry `latest` tag is not proof that a
+package supports this application's runtime.
+
+The October 2026 upgrade retains TypeScript 6.0.3 because the current `ts-jest`
+release requires TypeScript below 7. React Native's Babel tooling stays on the
+latest compatible Babel 7 releases: its plugins reject Babel 8. These holds
+should be reviewed when those upstream tools add support.
+
+The desktop's embedded home server uses a matching upstream source cohort in
+`app/vendor` for packages referenced by the published release but missing from
+npm. Preserve the licenses, provenance and rebuild instructions there when
+making local fixes. The desktop loopback binding remains a separate Yarn patch;
+updating upstream must not expose that server on public interfaces.
+
+The shared `domain-core` 1.41.8 package also has a narrow Yarn patch: its UUID
+generator uses the cross-platform `uuid` package instead of importing
+`node:crypto` into browser bundles. Its added dependency is declared in
+`app/.yarnrc.yml` so clean installs reproduce the same graph.
+
 ## Common commands
 
 ```bash

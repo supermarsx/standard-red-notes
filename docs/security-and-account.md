@@ -267,6 +267,21 @@ web client is not sufficient authorization.
   link_text="Harden the runtime"
 %}
 
+## Dependency security checks
+
+Run `node scripts/audit-production-dependencies.mjs` from the repository root to
+check every committed JavaScript lockfile. The gate reports dependency-policy
+mismatches separately from vulnerability findings and still scans when a
+structural check fails. Exceptions are tied to the exact advisory, dependency
+versions and dependents; unused exceptions must be removed after upgrades.
+
+The October 2026 dependency refresh pins `launch-editor` to 2.14.2 and prevents
+downgrades below that patched release. Earlier versions are affected by a
+[Windows path validation vulnerability](https://github.com/advisories/GHSA-587h-7wmj-h5pm)
+in editor-launch tooling. The obsolete `image-size` exception was removed after
+the refreshed graph stopped reporting its advisory. These checks apply to
+developer tooling as well as the dependencies used by shipped applications.
+
 For operator controls, continue with [Administration](administration.md). For
 credential use in automation, see [MCP Bridge](mcp-bridge.md) and
 [Workflows with n8n](workflows.md).

@@ -126,15 +126,15 @@ test("owned security manifests preserve supported direct dependency floors", () 
     ],
     [
       "app/packages/utils/package.json",
-      '"dompurify": "^3.4.13"',
+      '"dompurify": "^3.4.17"',
       '"dompurify": "^3.4.12"',
-      /dependencies\.dompurify must remain \^3\.4\.13/,
+      /dependencies\.dompurify must remain \^3\.4\.17/,
     ],
     [
       "app/packages/web/package.json",
-      '"mermaid": "^11.16.1"',
+      '"mermaid": "^12.2.0"',
       '"mermaid": "^11.16.0"',
-      /dependencies\.mermaid must remain \^11\.16\.1/,
+      /dependencies\.mermaid must remain \^12\.2\.0/,
     ],
     [
       "app/packages/filepicker/example/package.json",
@@ -144,9 +144,9 @@ test("owned security manifests preserve supported direct dependency floors", () 
     ],
     [
       "server/package.json",
-      '"dompurify": "npm:3.4.16"',
+      '"dompurify": "npm:3.4.17"',
       '"dompurify": "npm:3.4.12"',
-      /resolutions\.dompurify must remain npm:3\.4\.16/,
+      /resolutions\.dompurify must remain npm:3\.4\.17/,
     ],
   ]) {
     const mutatedText = securityManifests[file].replace(current, vulnerable);
@@ -359,7 +359,7 @@ test("the app security graph preserves the patched dependency graph", () => {
     validateAppSecurityGraph(
       appPackage,
       appLock.replace(
-        '"axios@npm:1.20.0":\n  version: 1.20.0',
+        /^"axios@npm:[^\n]+\n  version: 1\.20\.0/m,
         '"axios@npm:1.20.0":\n  version: 1.19.0',
       ),
     ).join("\n"),
@@ -383,7 +383,10 @@ test("the app security graph preserves the patched dependency graph", () => {
       validateAppSecurityGraph(
         appPackage,
         appLock.replace(
-          `${descriptor}\n  version: ${safeVersion}`,
+          new RegExp(
+            `^"${packageName}@npm:[^\\n]+\\n  version: ${safeVersion.replaceAll(".", "\\.")}`,
+            "m",
+          ),
           `${descriptor}\n  version: ${vulnerableVersion}`,
         ),
       ).join("\n"),
@@ -393,12 +396,12 @@ test("the app security graph preserves the patched dependency graph", () => {
   assert.match(
     validateAppSecurityGraph(
       appPackage.replace(
-        '"nanoid@npm:3.3.3": "3.3.18"',
+        '"nanoid@npm:3.3.3": "3.3.20"',
         '"nanoid@npm:3.3.3": "3.3.3"',
       ),
       appLock,
     ).join("\n"),
-    /security resolution nanoid@npm:3\.3\.3 must remain 3\.3\.18/,
+    /security resolution nanoid@npm:3\.3\.3 must remain 3\.3\.20/,
   );
   assert.match(
     validateAppSecurityGraph(
@@ -433,12 +436,12 @@ test("the app security graph preserves the patched dependency graph", () => {
   assert.match(
     validateAppSecurityGraph(
       appPackage.replace(
-        '"node-gyp@npm:latest": "12.3.0"',
+        '"node-gyp@npm:latest": "12.4.0"',
         '"node-gyp@npm:latest": "9.4.0"',
       ),
       appLock,
     ).join("\n"),
-    /security resolution node-gyp@npm:latest must remain 12\.3\.0/,
+    /security resolution node-gyp@npm:latest must remain 12\.4\.0/,
   );
   assert.match(
     validateAppSecurityGraph(
@@ -453,7 +456,7 @@ test("the app security graph preserves the patched dependency graph", () => {
   assert.match(
     validateAppSecurityGraph(
       appPackage,
-      appLock.replace("hash=7b308c", "hash=000000"),
+      appLock.replace("hash=1d8f4e", "hash=000000"),
     ).join("\n"),
     /loopback patch hash changed/,
   );
@@ -469,6 +472,13 @@ test("every Yarn domain keeps security-sensitive packages on patched floors", ()
     safeVersion,
     vulnerableVersion,
   ] of [
+    [
+      "app/yarn.lock",
+      "launch-editor",
+      '"launch-editor@npm:2.14.2":',
+      "2.14.2",
+      "2.14.1",
+    ],
     [
       "app/yarn.lock",
       "@babel/core",
@@ -522,7 +532,7 @@ test("every Yarn domain keeps security-sensitive packages on patched floors", ()
     [
       "app/yarn.lock",
       "dompurify",
-      '"dompurify@npm:3.4.16, dompurify@npm:^3.4.13":',
+      '"dompurify@npm:3.4.17, dompurify@npm:^3.4.17":',
       "3.4.16",
       "3.4.12",
     ],
@@ -565,7 +575,7 @@ test("every Yarn domain keeps security-sensitive packages on patched floors", ()
     [
       "app/yarn.lock",
       "mermaid",
-      '"mermaid@npm:^11.16.1":',
+      '"mermaid@npm:^12.2.0":',
       "11.17.2",
       "11.16.0",
     ],
@@ -609,16 +619,16 @@ test("every Yarn domain keeps security-sensitive packages on patched floors", ()
       "7.5.20",
     ],
   ]) {
-    const mutatedLockfile = yarnLockfiles[lockfile].replace(
-      `${descriptor}\n  version: ${safeVersion}`,
-      `${descriptor}\n  version: ${vulnerableVersion}`,
+    // Synthetic fixtures keep downgrade coverage for supported versions even when
+    // an upgraded application no longer installs that dependency or descriptor.
+    const safeLockfile = descriptor + "\n  version: " + safeVersion + "\n";
+    assert.deepEqual(
+      validateYarnSecurityGraph({ [lockfile]: safeLockfile }),
+      [],
     );
-    assert.notEqual(
-      mutatedLockfile,
-      yarnLockfiles[lockfile],
-      `${lockfile}: fixture no longer contains ${descriptor} at version ${safeVersion}, so this mutation is a silent no-op and the assertion below would prove nothing`,
-    );
-    const vulnerable = { ...yarnLockfiles, [lockfile]: mutatedLockfile };
+    const vulnerable = {
+      [lockfile]: descriptor + "\n  version: " + vulnerableVersion + "\n",
+    };
     assert.match(
       validateYarnSecurityGraph(vulnerable).join("\n"),
       new RegExp(
@@ -630,7 +640,7 @@ test("every Yarn domain keeps security-sensitive packages on patched floors", ()
   const prerelease = {
     ...yarnLockfiles,
     "app/yarn.lock": yarnLockfiles["app/yarn.lock"].replace(
-      '"undici@npm:6.28.1":\n  version: 6.28.1',
+      '"undici@npm:6.29.1":\n  version: 6.29.1',
       '"undici@npm:6.28.1":\n  version: 6.28.0-rc.1',
     ),
   };
@@ -642,7 +652,7 @@ test("every Yarn domain keeps security-sensitive packages on patched floors", ()
   const buildMetadata = {
     ...yarnLockfiles,
     "app/yarn.lock": yarnLockfiles["app/yarn.lock"].replace(
-      '"undici@npm:6.28.1":\n  version: 6.28.1',
+      '"undici@npm:6.29.1":\n  version: 6.29.1',
       '"undici@npm:6.28.1":\n  version: 6.28.0+build.1',
     ),
   };
