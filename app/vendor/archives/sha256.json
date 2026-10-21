@@ -1,0 +1,10 @@
+{
+  "predicates.tgz": "aebaad4026be062d8d63257c84fed4250840bb8f15654cd928951f296107c39a",
+  "security.tgz": "6924ea982efbc1aecca8d0984d75b8135d590f7c9a14692ef6ecaad64b2beb98",
+  "common.tgz": "1b6fc2b86976ad5ae83361440699dc8835e7695121eda30aa89a0463d5074d6e",
+  "time.tgz": "e17f4dc2a83e6285bf34876fb321ab63639b1af4766157df3d5e92d2547a6185",
+  "sncrypto-node.tgz": "e766464d8681d3c6714fcd8882515aeacba273067c783de55fdfe2647988b7ef",
+  "domain-events.tgz": "5185d46096b3f614308b3f6c9971727bc97cb7bdb3e7323d87bd366fde6e1522",
+  "grpc.tgz": "cc9a8d2c536a80c82b0887dabeaca42358891ae8cfb03afd4a7ceb320563de58",
+  "domain-events-infra.tgz": "3a065017c767dc34fbea5709afae94dc3f19eafac5b93b8e0c43eddab5dc64be"
+}

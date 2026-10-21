@@ -8,7 +8,7 @@
       "1.19.0"
     ],
     "dependents": [
-      "@opentelemetry/sdk-trace-node@virtual:5575ed8c9a80d7fe12a643cb059000db0e445d625c5f8ed9bc220dac459c651119c033d165d2cdf0b1fd9705528121032b6cce48e844530e5e5fed0887131236#npm:1.19.0"
+      "@opentelemetry/sdk-trace-node@virtual:f3cfb5e791bbee068daa610d8ebd7de1d408f17b41814dcceefb72c7400e0fef6398cd9b9550f808cddf9f9ad0c05a7ab8eeab9d01697afed06c1c252a70adf6#npm:1.19.0"
     ],
     "rationale": "Re-verified 2026-10-21: the vulnerable JaegerPropagator.extract is only reachable once the propagator is registered, and the telemetry wiring this transitive copy serves (app/vendor/domain-events-infra/src/Infra/OpenTelemetry/OpenTelemetrySDK.ts line 61 and its built dist/src/Infra/OpenTelemetry/OpenTelemetrySDK.js line 44, the vendored domain-events-infra the bundled home server depends on) passes a single explicit textMapPropagator of AWSXRayPropagator, which replaces the default propagator set rather than adding to it; git grep finds no OTEL_PROPAGATORS value anywhere in the tracked tree except this rationale, so nothing re-adds jaeger. Not resolvable by a pin: the registry shows the patched 2.9.0 depending on @opentelemetry/core 2.9.0, while this copy's dependent sdk-trace-node@1.19.0 pins core 1.19.0, so adopting it crosses OpenTelemetry major families inside a published patched dependency of the app lock domain — a family migration, not a keyed resolution.",
     "expiry": "2027-01-08"

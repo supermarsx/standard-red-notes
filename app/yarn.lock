@@ -10631,12 +10631,12 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@standardnotes/common@file:./vendor/common::locator=%40standard-red-notes%2Fapp-monorepo%40workspace%3A.":
+"@standardnotes/common@file:./vendor/archives/common.tgz::locator=%40standard-red-notes%2Fapp-monorepo%40workspace%3A.":
   version: 1.52.5-srn.1
-  resolution: "@standardnotes/common@file:./vendor/common#./vendor/common::hash=4c00a7&locator=%40standard-red-notes%2Fapp-monorepo%40workspace%3A."
+  resolution: "@standardnotes/common@file:./vendor/archives/common.tgz#./vendor/archives/common.tgz::hash=3443f9&locator=%40standard-red-notes%2Fapp-monorepo%40workspace%3A."
   dependencies:
     reflect-metadata: "npm:^0.2.1"
-  checksum: 10/81fb34178832d88f2a719f77b3239e40f564c484f740f673f2c0482dfb1b1be223e55b1140700426af9da52f643235c03131416613465bc0afc0e2c19e25d45b
+  checksum: 10/bfe59832c79dbb6a74acdc25a4ab395bbc89da527ca75572bf9b87fb1a71dfe913f2a218e9362bde7cdfa59d569e891adac15ee881ffe185f8d334a927ebdfed
   languageName: node
   linkType: hard
 
@@ -10727,9 +10727,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@standardnotes/domain-events-infra@file:./vendor/domain-events-infra::locator=%40standard-red-notes%2Fapp-monorepo%40workspace%3A.":
+"@standardnotes/domain-events-infra@file:./vendor/archives/domain-events-infra.tgz::locator=%40standard-red-notes%2Fapp-monorepo%40workspace%3A.":
   version: 1.23.5-srn.1
-  resolution: "@standardnotes/domain-events-infra@file:./vendor/domain-events-infra#./vendor/domain-events-infra::hash=0855bd&locator=%40standard-red-notes%2Fapp-monorepo%40workspace%3A."
+  resolution: "@standardnotes/domain-events-infra@file:./vendor/archives/domain-events-infra.tgz#./vendor/archives/domain-events-infra.tgz::hash=56946d&locator=%40standard-red-notes%2Fapp-monorepo%40workspace%3A."
   dependencies:
     "@aws-sdk/client-sns": "npm:^3.484.0"
     "@aws-sdk/client-sqs": "npm:^3.484.0"
@@ -10753,17 +10753,17 @@ __metadata:
     reflect-metadata: "npm:^0.2.1"
     sqs-consumer: "npm:^8.1.0"
     winston: "npm:^3.8.1"
-  checksum: 10/fca84b8c9e3a43dac2c57679c170752b97c77a5cb05e6f26255c33d07479c32a1d3fb514446d784e62d3a0ba1a23457e457245363a8829048f8d43043fd0b339
+  checksum: 10/574a4d4344e6357750f8d960f9d609a516f290a0ad197884a1717623d9f4e8818f96de3c92e6075a39fbab3af82fdf65122b7076033317e9b15c7de326ac226f
   languageName: node
   linkType: hard
 
-"@standardnotes/domain-events@file:./vendor/domain-events::locator=%40standard-red-notes%2Fapp-monorepo%40workspace%3A.":
+"@standardnotes/domain-events@file:./vendor/archives/domain-events.tgz::locator=%40standard-red-notes%2Fapp-monorepo%40workspace%3A.":
   version: 2.141.2-srn.1
-  resolution: "@standardnotes/domain-events@file:./vendor/domain-events#./vendor/domain-events::hash=fecf1e&locator=%40standard-red-notes%2Fapp-monorepo%40workspace%3A."
+  resolution: "@standardnotes/domain-events@file:./vendor/archives/domain-events.tgz#./vendor/archives/domain-events.tgz::hash=934b08&locator=%40standard-red-notes%2Fapp-monorepo%40workspace%3A."
   dependencies:
     "@standardnotes/predicates": "npm:1.8.3"
     "@standardnotes/security": "npm:1.17.5"
-  checksum: 10/77e165205c4fb083fcbc5414a7f4044f0b045fca251fadfa556968087b2882bfee37f60614090fd49b30cee40943e55e4e9125f530d9012e0e045a1ebb51a9e3
+  checksum: 10/a50e4c4743d24944c3df1776b82bc4fc6ef6e7d6df900bab9b16a57e56d99e11c7d499f48071f74a895ad13902e46c447d1efbec61d1b0649380efc2b00a42f9
   languageName: node
   linkType: hard
 
@@ -10940,13 +10940,13 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@standardnotes/grpc@file:./vendor/grpc::locator=%40standard-red-notes%2Fapp-monorepo%40workspace%3A.":
+"@standardnotes/grpc@file:./vendor/archives/grpc.tgz::locator=%40standard-red-notes%2Fapp-monorepo%40workspace%3A.":
   version: 1.4.3-srn.1
-  resolution: "@standardnotes/grpc@file:./vendor/grpc#./vendor/grpc::hash=6b3726&locator=%40standard-red-notes%2Fapp-monorepo%40workspace%3A."
+  resolution: "@standardnotes/grpc@file:./vendor/archives/grpc.tgz#./vendor/archives/grpc.tgz::hash=edfcdf&locator=%40standard-red-notes%2Fapp-monorepo%40workspace%3A."
   dependencies:
     "@grpc/grpc-js": "npm:1.9.13"
     google-protobuf: "npm:^3.21.2"
-  checksum: 10/88a33fae737b405c12d39fdf234838627c5ffd22fe92e089a64080a47319565f4cb7ff54355a4969eaabdc33faaf56314048cedf1ab884422a0f2c611b7a439f
+  checksum: 10/6a5c55dff0861fac7a6ce896d814cb4145649f219f9615bffdbade5b5f2ac2a8da51722b6230c657d903951b8b27460b9abc7caac1b954c6029153745b329b06
   languageName: node
   linkType: hard
 
@@ -11164,10 +11164,10 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@standardnotes/predicates@file:./vendor/predicates::locator=%40standard-red-notes%2Fapp-monorepo%40workspace%3A.":
+"@standardnotes/predicates@file:./vendor/archives/predicates.tgz::locator=%40standard-red-notes%2Fapp-monorepo%40workspace%3A.":
   version: 1.8.3-srn.1
-  resolution: "@standardnotes/predicates@file:./vendor/predicates#./vendor/predicates::hash=cb777c&locator=%40standard-red-notes%2Fapp-monorepo%40workspace%3A."
-  checksum: 10/479d6e1eb378c93d6d9d32799752d8d73d59a4337d3fcba14da1244513a68df9f87a854177839f0724bda827c9b5833d38bf37f3f43b14dfa137a826f70913a3
+  resolution: "@standardnotes/predicates@file:./vendor/archives/predicates.tgz#./vendor/archives/predicates.tgz::hash=f8fa31&locator=%40standard-red-notes%2Fapp-monorepo%40workspace%3A."
+  checksum: 10/7592a20b870821d0db66985623022393228f6d91ac400279dbdb94a9c18f7d3567658b2d29b1afbc026be82bf11ff1142bbdb939fe9ddd7a0c8639c6db798c41
   languageName: node
   linkType: hard
 
@@ -11262,13 +11262,13 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@standardnotes/security@file:./vendor/security::locator=%40standard-red-notes%2Fapp-monorepo%40workspace%3A.":
+"@standardnotes/security@file:./vendor/archives/security.tgz::locator=%40standard-red-notes%2Fapp-monorepo%40workspace%3A.":
   version: 1.17.5-srn.1
-  resolution: "@standardnotes/security@file:./vendor/security#./vendor/security::hash=f1e054&locator=%40standard-red-notes%2Fapp-monorepo%40workspace%3A."
+  resolution: "@standardnotes/security@file:./vendor/archives/security.tgz#./vendor/archives/security.tgz::hash=5d171d&locator=%40standard-red-notes%2Fapp-monorepo%40workspace%3A."
   dependencies:
     jsonwebtoken: "npm:^9.0.0"
     reflect-metadata: "npm:^0.2.1"
-  checksum: 10/5bb216bc5283a1a715d5014bb7703d53695dfabb6b84eaab11967f6318dc0990859dd9f65f92e9ef314078b552dae8d6055752946312728bc4d95c53a8288211
+  checksum: 10/b987c21d61e032f6f0433c4572f0b1e853e02cd85298ca258a888fd931d405a83f1b4c6a74d10dd6ff51cceab7437e76ab5f4f790140ac4e1dca52734bd000e6
   languageName: node
   linkType: hard
 
@@ -11349,13 +11349,13 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@standardnotes/sncrypto-node@file:./vendor/sncrypto-node::locator=%40standard-red-notes%2Fapp-monorepo%40workspace%3A.":
+"@standardnotes/sncrypto-node@file:./vendor/archives/sncrypto-node.tgz::locator=%40standard-red-notes%2Fapp-monorepo%40workspace%3A.":
   version: 1.16.4-srn.1
-  resolution: "@standardnotes/sncrypto-node@file:./vendor/sncrypto-node#./vendor/sncrypto-node::hash=c64a72&locator=%40standard-red-notes%2Fapp-monorepo%40workspace%3A."
+  resolution: "@standardnotes/sncrypto-node@file:./vendor/archives/sncrypto-node.tgz#./vendor/archives/sncrypto-node.tgz::hash=73bed7&locator=%40standard-red-notes%2Fapp-monorepo%40workspace%3A."
   dependencies:
     "@standardnotes/sncrypto-common": "npm:^1.13.4"
     reflect-metadata: "npm:^0.2.1"
-  checksum: 10/fc42cc34071f305805785727cbf0c2b15f62742d5bb65e9fbf773ba85710ab6b34a6bd13b81fe328637fa3682ea44325d842305280c978d8d5503a61d851f5b4
+  checksum: 10/d88374bbc408a64b187b14af91a35932c64d1bc84c03ad84656596910106bbcefb6c8fab3e9a2554b236205e43b2eb105e4b945f6f037a251baf7b6abc06a0d8
   languageName: node
   linkType: hard
 
@@ -11538,14 +11538,14 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@standardnotes/time@file:./vendor/time::locator=%40standard-red-notes%2Fapp-monorepo%40workspace%3A.":
+"@standardnotes/time@file:./vendor/archives/time.tgz::locator=%40standard-red-notes%2Fapp-monorepo%40workspace%3A.":
   version: 1.19.2-srn.1
-  resolution: "@standardnotes/time@file:./vendor/time#./vendor/time::hash=319d24&locator=%40standard-red-notes%2Fapp-monorepo%40workspace%3A."
+  resolution: "@standardnotes/time@file:./vendor/archives/time.tgz#./vendor/archives/time.tgz::hash=c1dc68&locator=%40standard-red-notes%2Fapp-monorepo%40workspace%3A."
   dependencies:
     dayjs: "npm:^1.11.6"
     microtime: "npm:^3.1.0"
     reflect-metadata: "npm:^0.2.1"
-  checksum: 10/a8df96406355ee24df6f486c6882489ce69bce470ccaa63d08d9b0211fc8cbba16f9272a235d72b193ecd32f7d1ca5dd5763d603d0826901de062390dcacda9c
+  checksum: 10/0cd887fb38bee7d4f74cd31e70baad1ad54b2f607fb8574b91a3c5e8ec27856f082a610454a09e949e72000ee5c1987a2a2f6cf35ad7e60a8a3460a01b6c39c5
   languageName: node
   linkType: hard
 

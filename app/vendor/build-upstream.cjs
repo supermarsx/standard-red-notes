@@ -141,4 +141,5 @@ if (verifyOnly || checkBuild) {
   if (fs.readFileSync(artifactPath, 'utf8') !== artifactManifest)
     throw new Error('Vendored artifact hashes or compiler version differ; rebuild and review the artifact manifest')
 } else fs.writeFileSync(artifactPath, artifactManifest)
+require('./package-upstream.cjs').packageUpstream(verifyOnly || checkBuild)
 console.log(verifyOnly ? 'All upstream sources verified' : 'All vendored packages built')

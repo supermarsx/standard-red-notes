@@ -3,6 +3,7 @@ const assert = require('node:assert/strict')
 const path = require('node:path')
 const { createRequire } = require('node:module')
 const fs = require('node:fs')
+const zlib = require('node:zlib')
 const desktopRequire = createRequire(path.resolve(__dirname, '../packages/desktop/app/package.json'))
 const names = [
   'predicates',
@@ -17,6 +18,23 @@ const names = [
 function installed(name) {
   return desktopRequire(`@standardnotes/${name}`)
 }
+test('vendor archives normalize permissions and timestamps across host operating systems', () => {
+  require('./package-upstream.cjs').packageUpstream(true)
+  for (const name of names) {
+    const compressed = fs.readFileSync(path.join(__dirname, 'archives', `${name}.tgz`))
+    assert.equal(compressed[9], 255)
+    const tar = zlib.gunzipSync(compressed)
+    for (let offset = 0; tar[offset] !== 0;) {
+      const header = tar.subarray(offset, offset + 512)
+      const number = (start, length) => Number.parseInt(header.toString('ascii', start, start + length), 8)
+      assert.equal(number(100, 8), header[156] === 53 ? 0o755 : 0o644)
+      assert.equal(number(108, 8), 0)
+      assert.equal(number(116, 8), 0)
+      assert.equal(number(136, 12), 0)
+      offset += 512 + Math.ceil(number(124, 12) / 512) * 512
+    }
+  }
+})
 test('installed embedded dependencies use the complete matching vendored cohort', () => {
   for (const name of names) {
     const manifest = desktopRequire(`@standardnotes/${name}/package.json`)
