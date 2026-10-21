@@ -128,7 +128,9 @@ describe('a kind of diagram is a grammar, handlers and a reader', () => {
       rewrites: [{ pattern: / +\n/g, remove: (match) => ({ from: 0, to: match[0].length - 1 }) }],
     }
     const source = 'flowchart LR\n  A --> B   \n'
-    expect(lexMermaidSource(source, COUNTING).map((token) => token.text)).toContain(' ')
+    // Mermaid 12 groups adjacent spaces into one token. Assert the exact
+    // trailing whitespace this wrapper removes, not the older token splitting.
+    expect(lexMermaidSource(source, COUNTING).map((token) => token.text)).toContain('   ')
     const document = parseMermaidSource(source, trimming)
     expect(document.parsedText).toBe('flowchart LR\n  A --> B\n\n')
     expect(document.pieces.filter((piece) => piece.kind === 'space').map((piece) => piece.text)).toEqual(['   '])
