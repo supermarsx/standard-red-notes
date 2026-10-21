@@ -94,6 +94,21 @@ describe('StreamingFileApi', () => {
   })
 
   describe('writing', () => {
+    it('copies only the selected shared-buffer view into owned bytes before writing', async () => {
+      const writableStream = createWritable()
+      const original = new Uint8Array(new SharedArrayBuffer(5))
+      original.set([99, 1, 2, 3, 88])
+      const selected = original.subarray(1, 4)
+      const file = { writableStream } as unknown as Parameters<StreamingFileApi['saveBytes']>[0]
+
+      await api.saveBytes(file, selected)
+      const written = writableStream.write.mock.calls[0][0] as Uint8Array
+      expect(written.buffer).toBeInstanceOf(ArrayBuffer)
+      expect(Array.from(written)).toEqual([1, 2, 3])
+      selected.fill(0)
+      expect(Array.from(written)).toEqual([1, 2, 3])
+    })
+
     it('saveBytes should write the bytes to the stream', async () => {
       const writableStream = createWritable()
       const bytes = chunk(1, 2, 3)

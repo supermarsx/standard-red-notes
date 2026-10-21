@@ -1,4 +1,4 @@
-import { SNApplication, Environment, Platform, SNLog } from '../../../snjs'
+import { SNApplication, Environment, Platform, SNLog, AlertService, ApiVersion } from '../../../snjs'
 import WebDeviceInterface from './web_device_interface'
 import { SNWebCrypto } from '../../../sncrypto-web'
 import { ClassicFileApi } from './classic_file_api'
@@ -7,8 +7,28 @@ import { FileSystemApi } from './file_system_api'
 SNLog.onLog = console.log
 SNLog.onError = console.error
 
-console.log('Clearing localStorage...')
-localStorage.clear()
+class BrowserAlerts extends AlertService {
+  async confirm(text: string): Promise<boolean> {
+    return window.confirm(text)
+  }
+
+  async confirmV2(dto: Parameters<AlertService['confirmV2']>[0]): Promise<boolean> {
+    return this.confirm(dto.text)
+  }
+
+  async alert(text: string): Promise<void> {
+    window.alert(text)
+  }
+
+  async alertV2(dto: Parameters<AlertService['alertV2']>[0]): Promise<void> {
+    return this.alert(dto.text)
+  }
+
+  blockingDialog(text: string): () => void {
+    window.alert(text)
+    return () => undefined
+  }
+}
 
 /**
  * Important:
@@ -24,21 +44,14 @@ const application = new SNApplication({
   platform: Platform.MacWeb,
   deviceInterface: new WebDeviceInterface(),
   crypto: new SNWebCrypto(),
-  alertService: {
-    confirm: async () => true,
-    alert: async () => {
-      alert()
-    },
-    blockingDialog: () => () => {
-      confirm()
-    },
-  },
-  identifier: `${Math.random()}`,
+  alertService: new BrowserAlerts(),
+  identifier: crypto.randomUUID(),
   defaultHost: host,
   appVersion: '1.0.0',
+  apiVersion: ApiVersion.v1,
 })
 
-console.log('Created application', application)
+console.log('Created demo application')
 
 export async function publishMockedEvent(eventType: string, eventPayload: unknown): Promise<void> {
   await fetch(`${mocksHost}/events`, {
@@ -64,12 +77,12 @@ const run = async () => {
   await application.launch()
   console.log('Application launched...')
 
-  const email = String(Math.random())
-  const password = String(Math.random())
+  const email = `filepicker-${crypto.randomUUID()}@example.test`
+  const password = crypto.randomUUID()
 
   console.log('Registering account...')
-  await application.register(email, password)
-  console.log(`Registered account ${email}/${password}. Be sure to edit docker/auth.env to increase session TTL.`)
+  await application.register(email, password, '')
+  console.log('Registered demo account. Be sure to edit docker/auth.env to increase session TTL.')
 
   console.log('Creating mock subscription...')
   await publishMockedEvent('SUBSCRIPTION_PURCHASED', {

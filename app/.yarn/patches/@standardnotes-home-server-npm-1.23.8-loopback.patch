@@ -1,0 +1,42 @@
+diff --git a/dist/src/Server/HomeServer.js b/dist/src/Server/HomeServer.js
+--- a/dist/src/Server/HomeServer.js
++++ b/dist/src/Server/HomeServer.js
+@@ -195,7 +195,7 @@
+                 });
+             });
+             const port = env.get('PORT', true) ? +env.get('PORT', true) : 3000;
+-            const serverInstance = server.build().listen(port);
++            const serverInstance = server.build().listen(port, '127.0.0.1');
+             const keepAliveTimeout = env.get('HTTP_KEEP_ALIVE_TIMEOUT', true)
+                 ? +env.get('HTTP_KEEP_ALIVE_TIMEOUT', true)
+                 : 5000;
+@@ -207,7 +207,7 @@
+                     logger.info('HTTP server closed');
+                 });
+             });
+-            logger.info(`Server started on port ${port}. Log level: ${env.get('LOG_LEVEL', true)}.`);
++            logger.info(`Server started on 127.0.0.1:${port}. Log level: ${env.get('LOG_LEVEL', true)}.`);
+             return domain_core_1.Result.ok('Server started.');
+         }
+         catch (error) {
+diff --git a/src/Server/HomeServer.ts b/src/Server/HomeServer.ts
+--- a/src/Server/HomeServer.ts
++++ b/src/Server/HomeServer.ts
+@@ -239,7 +239,7 @@
+ 
+       const port = env.get('PORT', true) ? +env.get('PORT', true) : 3000
+ 
+-      const serverInstance = server.build().listen(port)
++      const serverInstance = server.build().listen(port, '127.0.0.1')
+ 
+       const keepAliveTimeout = env.get('HTTP_KEEP_ALIVE_TIMEOUT', true)
+         ? +env.get('HTTP_KEEP_ALIVE_TIMEOUT', true)
+@@ -256,7 +256,7 @@
+         })
+       })
+ 
+-      logger.info(`Server started on port ${port}. Log level: ${env.get('LOG_LEVEL', true)}.`)
++      logger.info(`Server started on 127.0.0.1:${port}. Log level: ${env.get('LOG_LEVEL', true)}.`)
+ 
+       return Result.ok('Server started.')
+     } catch (error) {

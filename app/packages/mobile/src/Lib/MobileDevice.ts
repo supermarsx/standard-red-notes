@@ -465,9 +465,8 @@ export class MobileDevice implements MobileDeviceInterface {
   }
 
   reloadStatusBarStyle(animated = true) {
-    if (this.statusBarBgColor && Platform.OS === 'android') {
-      StatusBar.setBackgroundColor(this.statusBarBgColor, animated)
-    }
+    // RN 0.87 removed Android background-color setters; the app owns the system-bar background.
+    // Keep the supported foreground style update on both platforms.
     StatusBar.setBarStyle(this.isDarkMode ? 'light-content' : 'dark-content', animated)
   }
 
@@ -625,7 +624,10 @@ export class MobileDevice implements MobileDeviceInterface {
   }
 
   async getAppState(): Promise<AppStateStatus> {
-    return AppState.currentState
+    const state = AppState.currentState
+    return state === 'active' || state === 'background' || state === 'inactive' || state === 'extension'
+      ? state
+      : 'unknown'
   }
 
   async getColorScheme(): Promise<'light' | 'dark' | null | undefined> {

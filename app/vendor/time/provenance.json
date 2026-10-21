@@ -1,0 +1,120 @@
+{
+  "repository": "https://github.com/standardnotes/server",
+  "revision": "a9646f0f9ccb190050292774f6ba47a785969963",
+  "upstreamVersion": "1.19.2",
+  "sourceBlobs": [
+    {
+      "path": "packages/time/.eslintignore",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1521c8b7652b1eec8ed4fe50877aae880c758ee3",
+      "size": 5,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/1521c8b7652b1eec8ed4fe50877aae880c758ee3"
+    },
+    {
+      "path": "packages/time/.eslintrc",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "697bc808d0bf6b7120988457389c1ce9e12e0415",
+      "size": 142,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/697bc808d0bf6b7120988457389c1ce9e12e0415"
+    },
+    {
+      "path": "packages/time/CHANGELOG.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "321edd0eb1f43f9b40f3d7d5ef30bef0a16aa9b2",
+      "size": 15627,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/321edd0eb1f43f9b40f3d7d5ef30bef0a16aa9b2"
+    },
+    {
+      "path": "packages/time/jest.config.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "09dfc80dbd0240f6e4a708a5bbda28315f15bd6b",
+      "size": 245,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/09dfc80dbd0240f6e4a708a5bbda28315f15bd6b"
+    },
+    {
+      "path": "packages/time/linter.tsconfig.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c1a7d22c5a15e5043eb3e701255fa6200066324b",
+      "size": 58,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/c1a7d22c5a15e5043eb3e701255fa6200066324b"
+    },
+    {
+      "path": "packages/time/package.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6ce0b8d355996eafc4e1d219b0087429134e6f3e",
+      "size": 1017,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/6ce0b8d355996eafc4e1d219b0087429134e6f3e"
+    },
+    {
+      "path": "packages/time/src/Domain/Time/Time.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "72a5a34830deba547459061afd7672dd2550f43e",
+      "size": 213,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/72a5a34830deba547459061afd7672dd2550f43e"
+    },
+    {
+      "path": "packages/time/src/Domain/Time/TimeStructure.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1d1dad69484e80fe7a94cb45f4fe31c6014c2f93",
+      "size": 122,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/1d1dad69484e80fe7a94cb45f4fe31c6014c2f93"
+    },
+    {
+      "path": "packages/time/src/Domain/Time/Timer.spec.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "583286bbeccae034ee0a1abb3c8e91d49c690150",
+      "size": 5004,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/583286bbeccae034ee0a1abb3c8e91d49c690150"
+    },
+    {
+      "path": "packages/time/src/Domain/Time/Timer.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4ec737212f870a5b938e099c99a478c58b31f304",
+      "size": 4041,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/4ec737212f870a5b938e099c99a478c58b31f304"
+    },
+    {
+      "path": "packages/time/src/Domain/Time/TimerInterface.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "21bbcd395dfdf69f033d86e09e8900d206c85830",
+      "size": 1291,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/21bbcd395dfdf69f033d86e09e8900d206c85830"
+    },
+    {
+      "path": "packages/time/src/Domain/index.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2d5af0092d22fd9c58bad22bb67d3b8b65549129",
+      "size": 132,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/2d5af0092d22fd9c58bad22bb67d3b8b65549129"
+    },
+    {
+      "path": "packages/time/src/index.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "920deacdb32a1f89ed2cb0a115ba4dab231a96db",
+      "size": 25,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/920deacdb32a1f89ed2cb0a115ba4dab231a96db"
+    },
+    {
+      "path": "packages/time/tsconfig.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8d2588d39c251ad828fbfb49565538fa28e76992",
+      "size": 169,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/8d2588d39c251ad828fbfb49565538fa28e76992"
+    }
+  ],
+  "licenseSha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+}

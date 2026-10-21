@@ -1,0 +1,112 @@
+{
+  "repository": "https://github.com/standardnotes/server",
+  "revision": "a9646f0f9ccb190050292774f6ba47a785969963",
+  "upstreamVersion": "1.16.4",
+  "sourceBlobs": [
+    {
+      "path": "packages/sncrypto-node/.eslintignore",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "5752c5132639d03ea022e60af8a5cd94ffc569e4",
+      "size": 37,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/5752c5132639d03ea022e60af8a5cd94ffc569e4"
+    },
+    {
+      "path": "packages/sncrypto-node/.eslintrc",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "697bc808d0bf6b7120988457389c1ce9e12e0415",
+      "size": 142,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/697bc808d0bf6b7120988457389c1ce9e12e0415"
+    },
+    {
+      "path": "packages/sncrypto-node/CHANGELOG.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "5e9bd7ff56969c05a2ea9b5adcc21d5bc3479a5a",
+      "size": 10272,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/5e9bd7ff56969c05a2ea9b5adcc21d5bc3479a5a"
+    },
+    {
+      "path": "packages/sncrypto-node/README.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b699b70a13f25d9287e7d5b8bebd3a9d05607851",
+      "size": 399,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/b699b70a13f25d9287e7d5b8bebd3a9d05607851"
+    },
+    {
+      "path": "packages/sncrypto-node/jest.config.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f82d63baecab0b0410894a706471a79e161c4273",
+      "size": 374,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/f82d63baecab0b0410894a706471a79e161c4273"
+    },
+    {
+      "path": "packages/sncrypto-node/linter.tsconfig.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c1a7d22c5a15e5043eb3e701255fa6200066324b",
+      "size": 58,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/c1a7d22c5a15e5043eb3e701255fa6200066324b"
+    },
+    {
+      "path": "packages/sncrypto-node/package.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4e7ec85562c8c36411137d2e9b3cc489d7983926",
+      "size": 1081,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/4e7ec85562c8c36411137d2e9b3cc489d7983926"
+    },
+    {
+      "path": "packages/sncrypto-node/src/CryptoNode.spec.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "380b0f9be63d334e93989df7b45dd026d9871870",
+      "size": 8100,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/380b0f9be63d334e93989df7b45dd026d9871870"
+    },
+    {
+      "path": "packages/sncrypto-node/src/CryptoNode.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a4289aa2a2696e706bca0d45eb5099e2fc2b0751",
+      "size": 5931,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/a4289aa2a2696e706bca0d45eb5099e2fc2b0751"
+    },
+    {
+      "path": "packages/sncrypto-node/src/CryptoTotpInterface.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "17127a2ea97fa1e31a1965f9ae9f04423344cd9b",
+      "size": 781,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/17127a2ea97fa1e31a1965f9ae9f04423344cd9b"
+    },
+    {
+      "path": "packages/sncrypto-node/src/Utils.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "db94100129f3ed40fb09721ce52d459fae523054",
+      "size": 578,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/db94100129f3ed40fb09721ce52d459fae523054"
+    },
+    {
+      "path": "packages/sncrypto-node/src/index.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "09d3f765fbd46b3f213bf6925ee38e10b81cfe4f",
+      "size": 91,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/09d3f765fbd46b3f213bf6925ee38e10b81cfe4f"
+    },
+    {
+      "path": "packages/sncrypto-node/tsconfig.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9aa23563f2eef5d00e3a534b8445e8769253dde4",
+      "size": 198,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/9aa23563f2eef5d00e3a534b8445e8769253dde4"
+    }
+  ],
+  "licenseSha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+}

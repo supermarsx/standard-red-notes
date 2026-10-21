@@ -1,0 +1,35 @@
+{
+  "name": "@standardnotes/security",
+  "version": "1.17.5-srn.1",
+  "engines": {
+    "node": ">=18.0.0 <21.0.0"
+  },
+  "description": "Security SDK for Standard Notes projects",
+  "main": "dist/src/index.js",
+  "author": "Standard Notes",
+  "types": "dist/src/index.d.ts",
+  "files": [
+    "dist/src/**/*.js",
+    "dist/src/**/*.d.ts",
+    "src",
+    "LICENSE",
+    "README.md",
+    "provenance.json",
+    "upstream-package.json",
+    "tsconfig.build.json"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "repository": {
+    "type": "git",
+    "url": "git@github.com:standardnotes/server.git",
+    "directory": "packages/security"
+  },
+  "license": "AGPL-3.0-or-later",
+  "dependencies": {
+    "jsonwebtoken": "^9.0.0",
+    "reflect-metadata": "^0.2.1"
+  }
+}

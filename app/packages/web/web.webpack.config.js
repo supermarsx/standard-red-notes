@@ -324,7 +324,9 @@ module.exports = (env) => {
               loader: MiniCssExtractPlugin.loader,
               options: { publicPath: '../' },
             },
-            'css-loader',
+            // Extraction executes this module in Node. CommonJS asset imports
+            // avoid evaluating our browser-only import.meta.url replacement.
+            { loader: 'css-loader', options: { esModule: false } },
             'postcss-loader',
           ],
         },
@@ -339,7 +341,7 @@ module.exports = (env) => {
               loader: MiniCssExtractPlugin.loader,
               options: { publicPath: '../' },
             },
-            'css-loader',
+            { loader: 'css-loader', options: { esModule: false } },
             {
               loader: 'sass-loader',
               // Use the modern Dart Sass API and silence deprecation notices for

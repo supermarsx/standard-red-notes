@@ -200,6 +200,10 @@ function siteConfig(request: MermaidRenderRequest, withAppPalette: boolean): Mer
   return {
     startOnLoad: false,
     securityLevel: 'strict',
+    // Preserve existing diagrams' layout and curve controls. Mermaid 12 defaults
+    // to ELK, whose flowchart renderer replaces configured curves with rounded
+    // edges. This is a default only: a diagram may still explicitly choose ELK.
+    layout: 'dagre',
     theme: request.theme.theme,
     // The APPLICATION's own design tokens, not mermaid's generic palette.
     // Absent for a pinned built-in theme: `initialize` rebuilds its config from

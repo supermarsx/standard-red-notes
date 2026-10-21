@@ -6,8 +6,15 @@
   "coveragePathIgnorePatterns": ["/node_modules/"],
   "moduleFileExtensions": ["ts", "tsx", "js", "jsx", "json"],
   "transform": {
-    "^.+\\.tsx?$": ["ts-jest", { "tsconfig": "tsconfig.json" }]
+    "[/\\\\]node_modules[/\\\\]uuid[/\\\\].+\\.js$": "<rootDir>/../../jest.javascript-transformer.cjs",
+    "^.+\\.tsx?$": [
+      "ts-jest",
+      {
+        "tsconfig": "tsconfig.json"
+      }
+    ]
   },
+  "transformIgnorePatterns": ["node_modules/(?!(uuid)/)"],
   "coverageThreshold": {
     "global": {
       "branches": 100,

@@ -1,0 +1,138 @@
+{
+  "repository": "https://github.com/standardnotes/server",
+  "revision": "a9646f0f9ccb190050292774f6ba47a785969963",
+  "upstreamVersion": "1.23.5",
+  "sourceBlobs": [
+    {
+      "path": "packages/domain-events-infra/.eslintignore",
+      "sha": "1521c8b7652b1eec8ed4fe50877aae880c758ee3",
+      "type": "blob"
+    },
+    {
+      "path": "packages/domain-events-infra/.eslintrc",
+      "sha": "697bc808d0bf6b7120988457389c1ce9e12e0415",
+      "type": "blob"
+    },
+    {
+      "path": "packages/domain-events-infra/CHANGELOG.md",
+      "sha": "ccbdc0a162091584051bf2e6b07375ecc28f3142",
+      "type": "blob"
+    },
+    {
+      "path": "packages/domain-events-infra/jest.config.js",
+      "sha": "09dfc80dbd0240f6e4a708a5bbda28315f15bd6b",
+      "type": "blob"
+    },
+    {
+      "path": "packages/domain-events-infra/linter.tsconfig.json",
+      "sha": "c1a7d22c5a15e5043eb3e701255fa6200066324b",
+      "type": "blob"
+    },
+    {
+      "path": "packages/domain-events-infra/package.json",
+      "sha": "108e434d2c5cd350a94736d2c33de80549723871",
+      "type": "blob"
+    },
+    {
+      "path": "packages/domain-events-infra/src/Infra/DirectCall/DirectCallDomainEventPublisher.ts",
+      "sha": "887aefd11f53db6c90c883b541834659447dc188",
+      "type": "blob"
+    },
+    {
+      "path": "packages/domain-events-infra/src/Infra/DirectCall/DirectCallEventMessageHandler.ts",
+      "sha": "4890f217fc024fe661e3d69140bcb3651624d332",
+      "type": "blob"
+    },
+    {
+      "path": "packages/domain-events-infra/src/Infra/OpenTelemetry/OpenTelemetrySDK.ts",
+      "sha": "cb961be4260ee47f376afe2ffb08d5ad4cf8e8b6",
+      "type": "blob"
+    },
+    {
+      "path": "packages/domain-events-infra/src/Infra/OpenTelemetry/OpenTelemetrySDKInterface.ts",
+      "sha": "20c719c44661ad0ee645ae03e3c73c68e51f6ff5",
+      "type": "blob"
+    },
+    {
+      "path": "packages/domain-events-infra/src/Infra/OpenTelemetry/OpenTelemetryTracer.ts",
+      "sha": "8cff40a3b0a65fc80ad2746e456bf3ffb038f6e6",
+      "type": "blob"
+    },
+    {
+      "path": "packages/domain-events-infra/src/Infra/OpenTelemetry/OpenTelemetryTracerInterface.ts",
+      "sha": "9d5514e720fa90f40378c5eec8fd183ef86c5382",
+      "type": "blob"
+    },
+    {
+      "path": "packages/domain-events-infra/src/Infra/Redis/RedisDomainEventPublisher.spec.ts",
+      "sha": "a7ef8f2bcfb20bcc0a46f4d315278ddf5cb33a4f",
+      "type": "blob"
+    },
+    {
+      "path": "packages/domain-events-infra/src/Infra/Redis/RedisDomainEventPublisher.ts",
+      "sha": "eb0107335b838115444da45682cf38f39a523eec",
+      "type": "blob"
+    },
+    {
+      "path": "packages/domain-events-infra/src/Infra/Redis/RedisEventMessageHandler.spec.ts",
+      "sha": "1a6adb385935938b464e29263ff2fa781d1ab2a3",
+      "type": "blob"
+    },
+    {
+      "path": "packages/domain-events-infra/src/Infra/Redis/RedisEventMessageHandler.ts",
+      "sha": "b6e1fd28500be8aeb28924cd9da913b37fd42a16",
+      "type": "blob"
+    },
+    {
+      "path": "packages/domain-events-infra/src/Infra/SNS/SNSDomainEventPublisher.ts",
+      "sha": "acd7da79a45f9eecacf0e75834cb0cffb36d8138",
+      "type": "blob"
+    },
+    {
+      "path": "packages/domain-events-infra/src/Infra/SNS/SNSOpenTelemetryDomainEventPublisher.ts",
+      "sha": "ab74e8a18d81be9260e61c54f77efde93c3aa561",
+      "type": "blob"
+    },
+    {
+      "path": "packages/domain-events-infra/src/Infra/SQS/SQSBounceNotificiationHandler.ts",
+      "sha": "3c07fcefe59a20c864ff7c964f35669cb397c757",
+      "type": "blob"
+    },
+    {
+      "path": "packages/domain-events-infra/src/Infra/SQS/SQSDomainEventSubscriber.ts",
+      "sha": "d33708ac04b73ff600a0ad7e390806ea3bbf7255",
+      "type": "blob"
+    },
+    {
+      "path": "packages/domain-events-infra/src/Infra/SQS/SQSEventMessageHandler.ts",
+      "sha": "dc7125ef5ec151b47c8c85d544d0e52531efa7a1",
+      "type": "blob"
+    },
+    {
+      "path": "packages/domain-events-infra/src/Infra/SQS/SQSOpenTelemetryDomainEventSubscriber.ts",
+      "sha": "deb3cf3f236c30dc9fae3f7371bfbaad6fdfc113",
+      "type": "blob"
+    },
+    {
+      "path": "packages/domain-events-infra/src/Infra/index.ts",
+      "sha": "333fe60bd836aa2f4014f4f2565f3f37d69a7fb2",
+      "type": "blob"
+    },
+    {
+      "path": "packages/domain-events-infra/src/index.ts",
+      "sha": "96478abf058e199e058850be40e7911dd6a8e5b3",
+      "type": "blob"
+    },
+    {
+      "path": "packages/domain-events-infra/src/test-setup.ts",
+      "sha": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+      "type": "blob"
+    },
+    {
+      "path": "packages/domain-events-infra/tsconfig.json",
+      "sha": "8d2588d39c251ad828fbfb49565538fa28e76992",
+      "type": "blob"
+    }
+  ],
+  "licenseSha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+}

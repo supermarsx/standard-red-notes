@@ -1,0 +1,112 @@
+{
+  "repository": "https://github.com/standardnotes/server",
+  "revision": "a9646f0f9ccb190050292774f6ba47a785969963",
+  "upstreamVersion": "1.8.3",
+  "sourceBlobs": [
+    {
+      "path": "packages/predicates/.eslintignore",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1521c8b7652b1eec8ed4fe50877aae880c758ee3",
+      "size": 5,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/1521c8b7652b1eec8ed4fe50877aae880c758ee3"
+    },
+    {
+      "path": "packages/predicates/.eslintrc",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "697bc808d0bf6b7120988457389c1ce9e12e0415",
+      "size": 142,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/697bc808d0bf6b7120988457389c1ce9e12e0415"
+    },
+    {
+      "path": "packages/predicates/CHANGELOG.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "64c30ac048697f251f2cb38080165431965a5f10",
+      "size": 11305,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/64c30ac048697f251f2cb38080165431965a5f10"
+    },
+    {
+      "path": "packages/predicates/jest.config.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1821285dad39fd2194a2735439d7e6c31331a38d",
+      "size": 247,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/1821285dad39fd2194a2735439d7e6c31331a38d"
+    },
+    {
+      "path": "packages/predicates/linter.tsconfig.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c1a7d22c5a15e5043eb3e701255fa6200066324b",
+      "size": 58,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/c1a7d22c5a15e5043eb3e701255fa6200066324b"
+    },
+    {
+      "path": "packages/predicates/package.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "bbfa8f0cbad4a9c721e1bd62165e7292024078fa",
+      "size": 978,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/bbfa8f0cbad4a9c721e1bd62165e7292024078fa"
+    },
+    {
+      "path": "packages/predicates/src/Domain/Predicate/Predicate.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d67d73d3cfc9ef582cf423f2698a3d7f978ab993",
+      "size": 207,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/d67d73d3cfc9ef582cf423f2698a3d7f978ab993"
+    },
+    {
+      "path": "packages/predicates/src/Domain/Predicate/PredicateAuthority.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4f4ea85d9ebc3c4a30a7c7bd9ee9b39bb01d4405",
+      "size": 88,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/4f4ea85d9ebc3c4a30a7c7bd9ee9b39bb01d4405"
+    },
+    {
+      "path": "packages/predicates/src/Domain/Predicate/PredicateName.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6b72b7e867ffd79856b43f7f8ee111aa752229cf",
+      "size": 131,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/6b72b7e867ffd79856b43f7f8ee111aa752229cf"
+    },
+    {
+      "path": "packages/predicates/src/Domain/Predicate/PredicateVerificationResult.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3319f15f84bb7e4f2557c39aafe3125f2afc98f6",
+      "size": 142,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/3319f15f84bb7e4f2557c39aafe3125f2afc98f6"
+    },
+    {
+      "path": "packages/predicates/src/Domain/index.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "58f584141366f654d4f4c8bceb6ffdd7722c73db",
+      "size": 183,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/58f584141366f654d4f4c8bceb6ffdd7722c73db"
+    },
+    {
+      "path": "packages/predicates/src/index.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "920deacdb32a1f89ed2cb0a115ba4dab231a96db",
+      "size": 25,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/920deacdb32a1f89ed2cb0a115ba4dab231a96db"
+    },
+    {
+      "path": "packages/predicates/tsconfig.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8d2588d39c251ad828fbfb49565538fa28e76992",
+      "size": 169,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/8d2588d39c251ad828fbfb49565538fa28e76992"
+    }
+  ],
+  "licenseSha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+}

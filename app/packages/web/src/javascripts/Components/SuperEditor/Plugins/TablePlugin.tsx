@@ -55,21 +55,30 @@ export function TableWidgetLayoutPlugin(): null {
   const [editor] = useLexicalComposerContext()
 
   useEffect(() => {
-    return editor.registerMutationListener(TableNode, (mutations) => {
+    const applyTables = (mutations: Map<string, string>) => {
       editor.getEditorState().read(() => {
+        const visited = new Set<string>()
         for (const [nodeKey, mutation] of mutations) {
           if (mutation === 'destroyed') {
             continue
           }
-          const element = editor.getElementByKey(nodeKey)
-          markTableWidgetLayout(element)
           const node = $getNodeByKey(nodeKey)
-          if ($isTableNode(node)) {
-            applyResolvedTableLayoutToDom(element, $resolveTableLayout(node))
+          const table = $isTableNode(node) ? node : node?.getParent()
+          if ($isTableNode(table) && !visited.has(table.getKey())) {
+            visited.add(table.getKey())
+            const element = editor.getElementByKey(table.getKey())
+            markTableWidgetLayout(element)
+            applyResolvedTableLayoutToDom(element, $resolveTableLayout(table))
           }
         }
       })
-    })
+    }
+    return mergeRegister(
+      editor.registerMutationListener(TableNode, applyTables),
+      // Adding/removing cells dirties their row without necessarily mutating
+      // the table node itself. Re-project the merge-aware column count then.
+      editor.registerMutationListener(TableRowNode, applyTables),
+    )
   }, [editor])
 
   return null

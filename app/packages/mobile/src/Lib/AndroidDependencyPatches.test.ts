@@ -54,13 +54,13 @@ describe('Android Gradle dependency patches', () => {
 
   it('keeps react-native-iap lint running around its incompatible Compose detector', () => {
     const descriptor = mobileManifest.devDependencies['react-native-iap']
-    const patchFile = 'react-native-iap-npm-15.5.0-f9478cfd8f.patch'
+    const patchFile = 'react-native-iap-npm-17.1.0-compose-lint.patch'
     const patch = readFileSync(resolve(appRoot, '.yarn/patches', patchFile), 'utf8')
 
-    expect(descriptor).toBe(`patch:react-native-iap@npm%3A15.5.0#~/.yarn/patches/${patchFile}`)
+    expect(descriptor).toBe(`patch:react-native-iap@npm%3A17.1.0#~/.yarn/patches/${patchFile}`)
     expect(lockfile).toContain(descriptor)
     expect(lockfile).toContain('"react-native-iap@patch:')
-    expect(patch).toContain('disable "CoroutineCreationDuringComposition"')
+    expect(patch).toContain('disable += "CoroutineCreationDuringComposition"')
     expect(patch).not.toContain('abortOnError false')
   })
 })

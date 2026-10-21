@@ -199,7 +199,7 @@ export class StyledParagraphNode extends ParagraphNode {
   }
 
   static importDOM(): DOMConversionMap | null {
-    return withBlockStyleImport(ParagraphNode.importDOM())
+    return withBlockStyleImport(ParagraphNode.prototype.$config().paragraph?.importDOM ?? null)
   }
 
   exportDOM(editor: LexicalEditor): DOMExportOutput {
@@ -246,7 +246,7 @@ export class StyledHeadingNode extends HeadingNode {
   }
 
   static importDOM(): DOMConversionMap | null {
-    return withBlockStyleImport(HeadingNode.importDOM())
+    return withBlockStyleImport(HeadingNode.prototype.$config().heading?.importDOM ?? null)
   }
 
   exportDOM(editor: LexicalEditor): DOMExportOutput {
@@ -289,7 +289,7 @@ export class StyledQuoteNode extends QuoteNode {
   }
 
   static importDOM(): DOMConversionMap | null {
-    return withBlockStyleImport(QuoteNode.importDOM())
+    return withBlockStyleImport(QuoteNode.prototype.$config().quote?.importDOM ?? null)
   }
 
   exportDOM(editor: LexicalEditor): DOMExportOutput {

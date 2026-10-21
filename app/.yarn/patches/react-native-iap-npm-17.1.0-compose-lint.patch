@@ -1,0 +1,13 @@
+diff --git a/android/build.gradle b/android/build.gradle
+--- a/android/build.gradle
++++ b/android/build.gradle
+@@ -223,6 +223,9 @@
+   
+   lint {
+     disable += "GradleCompatible"
++    // Preserve the narrow workaround for Compose lint metadata parsing on Kotlin 2.2.
++    // Keep all other lint checks enabled.
++    disable += "CoroutineCreationDuringComposition"
+   }
+ }
+ 

@@ -1,15 +1,17 @@
 {
   "compilerOptions": {
-    "rootDir": "src",
+    "rootDir": "..",
     "outDir": "dist",
-    "target": "es2015",
-    "module": "es2015",
-    "moduleResolution": "node",
+    "target": "es2022",
+    "lib": ["es2022", "dom", "dom.iterable"],
+    "types": ["node", "wicg-file-system-access"],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noEmitOnError": true,
     "baseUrl": ".",
+    "paths": { "@Lib/*": ["../../snjs/dist/@types/*"] },
     "ignoreDeprecations": "6.0"
   },
-  "exclude": [
-    "dist",
-    "node_modules"
-  ]
+  "exclude": ["dist", "node_modules"]
 }

@@ -72,6 +72,7 @@ RUN npm install --global corepack@0.35.0 \
 # is reused until a manifest or the lockfile actually changes.
 COPY package.json yarn.lock .yarnrc.yml babel.config.js ./
 COPY .yarn/ .yarn/
+COPY vendor/ vendor/
 COPY packages/api/package.json packages/api/
 COPY packages/clipper/package.json packages/clipper/
 COPY packages/desktop/package.json packages/desktop/

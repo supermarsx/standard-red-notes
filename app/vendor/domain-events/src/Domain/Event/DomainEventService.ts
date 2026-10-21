@@ -1,0 +1,16 @@
+export enum DomainEventService {
+  AdminPanel = 'admin-panel',
+  Auth = 'auth',
+  SyncingServer = 'syncing-server',
+  Payments = 'payments',
+  ExtensionsServer = 'extensions-server',
+  Listed = 'listed',
+  ApiGateway = 'api-gateway',
+  Files = 'files',
+  Scheduler = 'scheduler',
+  Analytics = 'analytics',
+  Revisions = 'revisions',
+  Email = 'email',
+  Settings = 'settings',
+  SES = 'ses',
+}

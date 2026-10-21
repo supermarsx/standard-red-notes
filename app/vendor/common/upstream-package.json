@@ -1,0 +1,41 @@
+{
+  "name": "@standardnotes/common",
+  "version": "1.52.5",
+  "engines": {
+    "node": ">=18.0.0 <21.0.0"
+  },
+  "description": "Common types and utilities for Standard Notes projects",
+  "main": "dist/src/index.js",
+  "author": "Standard Notes",
+  "types": "dist/src/index.d.ts",
+  "files": [
+    "dist/src/**/*.js",
+    "dist/src/**/*.d.ts"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "repository": {
+    "type": "git",
+    "url": "git@github.com:standardnotes/server.git",
+    "directory": "packages/common"
+  },
+  "license": "AGPL-3.0-or-later",
+  "scripts": {
+    "clean": "rm -fr dist",
+    "build": "tsc --build",
+    "lint": "eslint . --ext .ts",
+    "test": "jest --coverage --no-cache --maxWorkers=2"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.1",
+    "@types/node": "^20.5.7",
+    "jest": "^29.5.0",
+    "ts-jest": "^29.1.0",
+    "typescript": "^5.0.4"
+  },
+  "dependencies": {
+    "reflect-metadata": "^0.2.1"
+  }
+}

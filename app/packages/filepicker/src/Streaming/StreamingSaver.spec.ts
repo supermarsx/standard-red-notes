@@ -69,6 +69,25 @@ describe('StreamingFileSaver', () => {
   })
 
   describe('pushBytes', () => {
+    it('writes an owned snapshot of a shared-buffer subrange', async () => {
+      const writable = createWritable()
+      anyWindow().showSaveFilePicker = jest
+        .fn()
+        .mockResolvedValue({ createWritable: jest.fn().mockResolvedValue(writable) })
+      const saver = new StreamingFileSaver('note.txt')
+      await saver.selectFileToSaveTo()
+      const original = new Uint8Array(new SharedArrayBuffer(5))
+      original.set([99, 1, 2, 3, 88])
+      const selected = original.subarray(1, 4)
+
+      await saver.pushBytes(selected)
+      const written = writable.write.mock.calls[0][0] as Uint8Array
+      expect(written.buffer).toBeInstanceOf(ArrayBuffer)
+      expect(Array.from(written)).toEqual([1, 2, 3])
+      selected.fill(0)
+      expect(Array.from(written)).toEqual([1, 2, 3])
+    })
+
     it('should throw before a destination file has been selected', async () => {
       await expect(new StreamingFileSaver('note.txt').pushBytes(new Uint8Array([1]))).rejects.toThrow(
         'Must call selectFileToSaveTo first',

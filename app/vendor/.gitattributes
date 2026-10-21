@@ -1,0 +1,2 @@
+# Preserve upstream Git blob bytes and generated artifact bytes on every platform.
+* -text

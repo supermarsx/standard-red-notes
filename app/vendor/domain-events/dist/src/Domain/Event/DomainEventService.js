@@ -1,0 +1,20 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.DomainEventService = void 0;
+var DomainEventService;
+(function (DomainEventService) {
+    DomainEventService["AdminPanel"] = "admin-panel";
+    DomainEventService["Auth"] = "auth";
+    DomainEventService["SyncingServer"] = "syncing-server";
+    DomainEventService["Payments"] = "payments";
+    DomainEventService["ExtensionsServer"] = "extensions-server";
+    DomainEventService["Listed"] = "listed";
+    DomainEventService["ApiGateway"] = "api-gateway";
+    DomainEventService["Files"] = "files";
+    DomainEventService["Scheduler"] = "scheduler";
+    DomainEventService["Analytics"] = "analytics";
+    DomainEventService["Revisions"] = "revisions";
+    DomainEventService["Email"] = "email";
+    DomainEventService["Settings"] = "settings";
+    DomainEventService["SES"] = "ses";
+})(DomainEventService || (exports.DomainEventService = DomainEventService = {}));

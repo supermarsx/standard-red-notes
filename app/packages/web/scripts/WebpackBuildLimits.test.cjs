@@ -73,10 +73,14 @@ test('Node build contracts have their own mandatory runner without excluding app
     )
   assert.equal(ignored('scripts/GuardTextSizeAdjust.test.cjs'), true)
   assert.equal(ignored('scripts/WebpackBuildLimits.test.cjs'), true)
+  assert.equal(ignored('scripts/CssAssetExtraction.test.cjs'), true)
   assert.equal(ignored('src/javascripts/example.spec.tsx'), false)
   assert.equal(ignored('src/javascripts/example.test.ts'), false)
   assert.equal(scripts['lint:css-compat'], 'node --test scripts/GuardTextSizeAdjust.test.cjs')
-  assert.equal(scripts['lint:build-config'], 'node --test scripts/WebpackBuildLimits.test.cjs')
+  assert.equal(
+    scripts['lint:build-config'],
+    'node --test scripts/WebpackBuildLimits.test.cjs scripts/CssAssetExtraction.test.cjs',
+  )
   assert.ok(scripts.lint.split(' && ').includes('yarn lint:css-compat'))
   assert.ok(scripts.lint.split(' && ').includes('yarn lint:build-config'))
 })

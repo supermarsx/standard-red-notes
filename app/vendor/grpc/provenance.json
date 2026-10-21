@@ -1,0 +1,136 @@
+{
+  "repository": "https://github.com/standardnotes/server",
+  "revision": "a9646f0f9ccb190050292774f6ba47a785969963",
+  "upstreamVersion": "1.4.3",
+  "sourceBlobs": [
+    {
+      "path": "packages/grpc/CHANGELOG.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ed6ead5c0c4e142062780a5dd5c46e400a58f9c0",
+      "size": 2605,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/ed6ead5c0c4e142062780a5dd5c46e400a58f9c0"
+    },
+    {
+      "path": "packages/grpc/lib/auth_grpc_pb.d.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b2f58e58d7206ecf549c583812e43188c8ab7648",
+      "size": 4633,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/b2f58e58d7206ecf549c583812e43188c8ab7648"
+    },
+    {
+      "path": "packages/grpc/lib/auth_grpc_pb.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2bc408b81c55d1582985ba954ed0413fb11aacf9",
+      "size": 2972,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/2bc408b81c55d1582985ba954ed0413fb11aacf9"
+    },
+    {
+      "path": "packages/grpc/lib/auth_pb.d.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "57f2e9610461f0965db7b0195f7a1aae7288ac74",
+      "size": 5544,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/57f2e9610461f0965db7b0195f7a1aae7288ac74"
+    },
+    {
+      "path": "packages/grpc/lib/auth_pb.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "fb49ebe06fe26e68bc877785fbfae8b783720e71",
+      "size": 28357,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/fb49ebe06fe26e68bc877785fbfae8b783720e71"
+    },
+    {
+      "path": "packages/grpc/lib/index.d.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a2d27c17bb9ba56600b9c482bef287ffbb75260d",
+      "size": 114,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/a2d27c17bb9ba56600b9c482bef287ffbb75260d"
+    },
+    {
+      "path": "packages/grpc/lib/index.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "69a866f7ca8e00cf369c9e4716c5885531790640",
+      "size": 947,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/69a866f7ca8e00cf369c9e4716c5885531790640"
+    },
+    {
+      "path": "packages/grpc/lib/sync_grpc_pb.d.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a4bf350e7f897ec2d1735099508aee862f4b44f0",
+      "size": 2225,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/a4bf350e7f897ec2d1735099508aee862f4b44f0"
+    },
+    {
+      "path": "packages/grpc/lib/sync_grpc_pb.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f51892f933ae8c42d8653b38230885ef020e5b7c",
+      "size": 1339,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/f51892f933ae8c42d8653b38230885ef020e5b7c"
+    },
+    {
+      "path": "packages/grpc/lib/sync_pb.d.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4a2318551e76a1d920afcc2552b01a1421d9ae6a",
+      "size": 27330,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/4a2318551e76a1d920afcc2552b01a1421d9ae6a"
+    },
+    {
+      "path": "packages/grpc/lib/sync_pb.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "cad26b8db71d5c85978e9981655982774ec5cd68",
+      "size": 154980,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/cad26b8db71d5c85978e9981655982774ec5cd68"
+    },
+    {
+      "path": "packages/grpc/package.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7db28003e17c87f67eb7b3671c06cbdd3bd3d77a",
+      "size": 870,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/7db28003e17c87f67eb7b3671c06cbdd3bd3d77a"
+    },
+    {
+      "path": "packages/grpc/proto/auth.proto",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ef36e6f1c3a100466c4df43481de060d15e5b0dd",
+      "size": 663,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/ef36e6f1c3a100466c4df43481de060d15e5b0dd"
+    },
+    {
+      "path": "packages/grpc/proto/sync.proto",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f0432694be1b4eb8b80dd14b2b1abeb992f2592c",
+      "size": 4115,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/f0432694be1b4eb8b80dd14b2b1abeb992f2592c"
+    },
+    {
+      "path": "packages/grpc/scripts/build-protos.sh",
+      "mode": "100755",
+      "type": "blob",
+      "sha": "2828fcf5672b3b72beb694a123536448f2f070b1",
+      "size": 655,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/2828fcf5672b3b72beb694a123536448f2f070b1"
+    },
+    {
+      "path": "packages/grpc/tsconfig.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "622635c02e58b4e0c6654955d95855158a9dce68",
+      "size": 150,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/622635c02e58b4e0c6654955d95855158a9dce68"
+    }
+  ],
+  "licenseSha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+}

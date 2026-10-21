@@ -2,13 +2,12 @@
  * Standard Red Notes: normalise a markdown document's list indentation before it
  * is handed to `@lexical/markdown`.
  *
- * `@lexical/markdown` hard-codes `LIST_INDENT_SIZE = 4` and reads a row's level
- * as `floor(leadingSpaces / 4)` plus one level per leading TAB. Two-space
- * nesting is what most editors and generators emit, and under that rule it
- * HALF-FLATTENS: levels `0,1,2,3` arrive as `0,0,1,1`. Three-space nesting
- * collapses almost entirely. That constant lives in `node_modules`, so the fix
- * belongs on the way in: detect the document's OWN indent unit and restate every
- * list row's indentation in the units the transformer understands.
+ * Older `@lexical/markdown` imports used a fixed four-space indent and
+ * half-flattened two-space nesting: levels `0,1,2,3` arrived as `0,0,1,1`.
+ * Lexical 0.52 tracks source columns during import and handles that input
+ * directly. This normalizer retains the app's established treatment of mixed
+ * and ragged indentation, restating the document's own unit in the four-space
+ * units Lexical still uses for export and editing shortcuts.
  *
  * What it does, and does not, touch:
  *
@@ -37,8 +36,8 @@
  */
 
 /**
- * The indent size `@lexical/markdown` assumes per nesting level. Mirrored rather
- * than imported: the constant is private to that package.
+ * The indent size `@lexical/markdown` uses for export and editing shortcuts.
+ * Mirrored rather than imported: the constant is private to that package.
  */
 export const MARKDOWN_LIST_INDENT_SIZE = 4
 

@@ -48,6 +48,7 @@ const EXPECTED_CHECKS = [
   'the three keys the app locks are on the list it hands mermaid',
   'a diagram that sets themeCSS, fontFamily or htmlLabels is drawn exactly as the same diagram without it',
   'by the same comparison, a key the app does NOT lock changes the drawing',
+  'the app defaults to dagre without overriding a diagram that explicitly chooses ELK',
   'still true of this mermaid: it is the lock that does it — off the list, each of the three changes the drawing',
   'the lock covers a locked name at every depth, and leaves the other font options beside it alone',
   'the names the app hands mermaid as locked are exactly these, for this mermaid',
@@ -153,7 +154,7 @@ describe('the installed mermaid, asked what a diagram’s own configuration mean
     expect(counts.unlockedDrawings).toBeGreaterThanOrEqual(5)
     // Every name mermaid gives a font: the exact set is pinned inside the
     // script; these are the floors under what it then tried.
-    expect(counts.lockedNames).toBe(35)
+    expect(counts.lockedNames).toBe(36)
     expect(counts.fontFamilyPaths).toBeGreaterThanOrEqual(31)
     expect(counts.fontFamilyRefusals).toBeGreaterThanOrEqual(62)
     expect(counts.fontFamilyOpenWithoutRule).toBeGreaterThanOrEqual(20)

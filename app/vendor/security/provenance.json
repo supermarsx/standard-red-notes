@@ -1,0 +1,240 @@
+{
+  "repository": "https://github.com/standardnotes/server",
+  "revision": "a9646f0f9ccb190050292774f6ba47a785969963",
+  "upstreamVersion": "1.17.5",
+  "sourceBlobs": [
+    {
+      "path": "packages/security/.eslintignore",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1521c8b7652b1eec8ed4fe50877aae880c758ee3",
+      "size": 5,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/1521c8b7652b1eec8ed4fe50877aae880c758ee3"
+    },
+    {
+      "path": "packages/security/.eslintrc",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "697bc808d0bf6b7120988457389c1ce9e12e0415",
+      "size": 142,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/697bc808d0bf6b7120988457389c1ce9e12e0415"
+    },
+    {
+      "path": "packages/security/CHANGELOG.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3775216242f6de249bd5fef559cafc9d3106319b",
+      "size": 35221,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/3775216242f6de249bd5fef559cafc9d3106319b"
+    },
+    {
+      "path": "packages/security/jest.config.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "09dfc80dbd0240f6e4a708a5bbda28315f15bd6b",
+      "size": 245,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/09dfc80dbd0240f6e4a708a5bbda28315f15bd6b"
+    },
+    {
+      "path": "packages/security/linter.tsconfig.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c1a7d22c5a15e5043eb3e701255fa6200066324b",
+      "size": 58,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/c1a7d22c5a15e5043eb3e701255fa6200066324b"
+    },
+    {
+      "path": "packages/security/package.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0d2db6af7e26137e05ed8b18b8ee7afdddac53b2",
+      "size": 1077,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/0d2db6af7e26137e05ed8b18b8ee7afdddac53b2"
+    },
+    {
+      "path": "packages/security/src/Domain/Decoder/TokenDecoder.spec.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7a6039225c65a62ba60aed219bba6992b59b5028",
+      "size": 1242,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/7a6039225c65a62ba60aed219bba6992b59b5028"
+    },
+    {
+      "path": "packages/security/src/Domain/Decoder/TokenDecoder.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "97619d8695f23a8deb77762d4a5ecc98867f988d",
+      "size": 417,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/97619d8695f23a8deb77762d4a5ecc98867f988d"
+    },
+    {
+      "path": "packages/security/src/Domain/Decoder/TokenDecoderInterface.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "33372bb6e190ee24acf21cc38520c8dfef2df027",
+      "size": 90,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/33372bb6e190ee24acf21cc38520c8dfef2df027"
+    },
+    {
+      "path": "packages/security/src/Domain/Encoder/TokenEncoder.spec.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a2c51d325e0ac4c707292c4fd41089af342fbddf",
+      "size": 870,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/a2c51d325e0ac4c707292c4fd41089af342fbddf"
+    },
+    {
+      "path": "packages/security/src/Domain/Encoder/TokenEncoder.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7dcebf0f8ed688c0f8b638c9497b0e80027c6639",
+      "size": 529,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/7dcebf0f8ed688c0f8b638c9497b0e80027c6639"
+    },
+    {
+      "path": "packages/security/src/Domain/Encoder/TokenEncoderInterface.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d7f17947c38da5ff847da5f266db8a70d3a5dca7",
+      "size": 136,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/d7f17947c38da5ff847da5f266db8a70d3a5dca7"
+    },
+    {
+      "path": "packages/security/src/Domain/Role/Role.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1e766197a8e407c408d50b28554d8c9376fb7b9a",
+      "size": 53,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/1e766197a8e407c408d50b28554d8c9376fb7b9a"
+    },
+    {
+      "path": "packages/security/src/Domain/Selection/DeterministicSelector.spec.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "fb039d3769d23c974de6e3b44fb0a48a29260bac",
+      "size": 1184,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/fb039d3769d23c974de6e3b44fb0a48a29260bac"
+    },
+    {
+      "path": "packages/security/src/Domain/Selection/DeterministicSelector.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "48589f12f98aa6d3021ed19e84a70975f1f9825b",
+      "size": 438,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/48589f12f98aa6d3021ed19e84a70975f1f9825b"
+    },
+    {
+      "path": "packages/security/src/Domain/Selection/SelectorInterface.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "272c08b6271b0bc3a9caf8bf2b941943aaf0f1ad",
+      "size": 90,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/272c08b6271b0bc3a9caf8bf2b941943aaf0f1ad"
+    },
+    {
+      "path": "packages/security/src/Domain/Subscription/Subscription.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e749413a965438693d6bd0adb759527dbb292fd3",
+      "size": 128,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/e749413a965438693d6bd0adb759527dbb292fd3"
+    },
+    {
+      "path": "packages/security/src/Domain/Token/CrossServiceTokenData.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f4df08972ee9553eb429f498ebf7ef836e65b7f1",
+      "size": 600,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/f4df08972ee9553eb429f498ebf7ef836e65b7f1"
+    },
+    {
+      "path": "packages/security/src/Domain/Token/OfflineFeaturesTokenData.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6535ade8bdd5248917b50f84647fad496ebf5394",
+      "size": 88,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/6535ade8bdd5248917b50f84647fad496ebf5394"
+    },
+    {
+      "path": "packages/security/src/Domain/Token/OfflineUserTokenData.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f6174f46e0d0333fba25e9348e56895f2a59d7af",
+      "size": 83,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/f6174f46e0d0333fba25e9348e56895f2a59d7af"
+    },
+    {
+      "path": "packages/security/src/Domain/Token/SessionTokenData.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "849dc9f6407f072cddda83463b400157a2851a2b",
+      "size": 55,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/849dc9f6407f072cddda83463b400157a2851a2b"
+    },
+    {
+      "path": "packages/security/src/Domain/Token/SharedVaultMoveType.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "07b24b13d24d9791977a29601952bb00779f99af",
+      "size": 115,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/07b24b13d24d9791977a29601952bb00779f99af"
+    },
+    {
+      "path": "packages/security/src/Domain/Token/SharedVaultValetTokenData.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "db5358f746380ca1277615a67ec7768fefc9d9f3",
+      "size": 571,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/db5358f746380ca1277615a67ec7768fefc9d9f3"
+    },
+    {
+      "path": "packages/security/src/Domain/Token/ValetTokenData.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6178a0874bbe39452b32f0a224844aa1658c6cd6",
+      "size": 384,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/6178a0874bbe39452b32f0a224844aa1658c6cd6"
+    },
+    {
+      "path": "packages/security/src/Domain/Token/ValetTokenOperation.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6136ce7bd6c441a44568e0c5c9798470aaf38dab",
+      "size": 110,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/6136ce7bd6c441a44568e0c5c9798470aaf38dab"
+    },
+    {
+      "path": "packages/security/src/Domain/Token/WebSocketConnectionToken.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2803476d1aff708f3da4f9c558d085dcdaf74d45",
+      "size": 88,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/2803476d1aff708f3da4f9c558d085dcdaf74d45"
+    },
+    {
+      "path": "packages/security/src/Domain/index.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "22ac79881e8c39f0a4b37b663d81ee2c0591c451",
+      "size": 749,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/22ac79881e8c39f0a4b37b663d81ee2c0591c451"
+    },
+    {
+      "path": "packages/security/src/index.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "920deacdb32a1f89ed2cb0a115ba4dab231a96db",
+      "size": 25,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/920deacdb32a1f89ed2cb0a115ba4dab231a96db"
+    },
+    {
+      "path": "packages/security/tsconfig.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8d2588d39c251ad828fbfb49565538fa28e76992",
+      "size": 169,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/8d2588d39c251ad828fbfb49565538fa28e76992"
+    }
+  ],
+  "licenseSha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+}

@@ -1,14 +1,6 @@
 import { createHeadlessEditor } from '@lexical/headless'
 import { FileItem, PrefKey, PrefValue, SuperConverterServiceInterface } from '@standardnotes/snjs'
-import {
-  $createParagraphNode,
-  $getNodeByKey,
-  $getRoot,
-  $insertNodes,
-  LexicalEditor,
-  LexicalNode,
-  SerializedLexicalNode,
-} from 'lexical'
+import { $createParagraphNode, $getNodeByKey, $getRoot, $insertNodes, LexicalEditor, LexicalNode } from 'lexical'
 import BlocksEditorTheme from '../Lexical/Theme/Theme'
 import { BlockEditorNodes, SuperExportNodes } from '../Lexical/Nodes/AllNodes'
 import { MarkdownTransformers } from '../MarkdownTransformers'
@@ -22,7 +14,7 @@ import { $convertToMarkdownString } from '../Lexical/Utils/MarkdownExport'
 import { parseFileName } from '@standardnotes/utils'
 import { $dfs } from '@lexical/utils'
 import { $isFileNode } from '../Plugins/EncryptedFilePlugin/Nodes/FileUtils'
-import { $generateNodesFromSerializedNodes, $insertGeneratedNodes } from '@lexical/clipboard'
+import { $generateNodesFromSerializedNodes, $insertGeneratedNodes, BaseSerializedNode } from '@lexical/clipboard'
 import type { PageLayoutOptions } from '../Lexical/Utils/DocExport/PageLayoutOptions'
 import { $projectChecklistDueDatesForPortableExport } from '../Checklist/ChecklistPortableExport'
 import { $generatePlainTextFromRoot } from '../Lexical/Utils/PlainTextExport'
@@ -391,7 +383,7 @@ export class HeadlessSuperConverter implements SuperConverterServiceInterface {
    * Lexical nodes from the serialized ones, inserting them into an empty editor and then exporting the
    * editor state of that as a JSON, which can then be used to create a new note.
    */
-  getStringifiedJSONFromSerializedNodes(serializedNodes: SerializedLexicalNode[]) {
+  getStringifiedJSONFromSerializedNodes(serializedNodes: BaseSerializedNode[]) {
     const exportEditor = this.createExportEditor()
     exportEditor.update(
       () => {

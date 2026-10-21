@@ -505,6 +505,63 @@ describe('TableWidgetLayoutPlugin projects the policy onto the real table elemen
     expect(tableElement().style.getPropertyValue(TABLE_FIT_WIDTH_PROPERTY)).toBe('')
   })
 
+  it('restores native resized widths after policy changes and recreates columns after a structural edit', async () => {
+    await mountEditor()
+    await act(async () => {
+      seedTable(editor)
+      mutateTable(editor, (table) => table.setColWidths([120, 180, 240]))
+    })
+    const widths = () =>
+      Array.from(tableElement().querySelectorAll(':scope > colgroup > col')).map(
+        (col) => (col as HTMLElement).style.width,
+      )
+    await act(async () => {
+      mutateTable(editor, (table) => {
+        $setTableWidthMethod(table, 'fixed')
+        $setTableColumnWidthPolicy(table, 1, makeColumnWidthPolicy('percent', 40))
+      })
+    })
+    expect(widths()).toEqual(['120px', '40%', '240px'])
+    await act(async () => {
+      mutateTable(editor, (table) => table.setColWidths([140, 190, 260]))
+    })
+    expect(widths()).toEqual(['140px', '40%', '260px'])
+    await act(async () => {
+      mutateTable(editor, (table) => $setTableWidthMethod(table, 'equal'))
+    })
+    expect(widths()).toEqual(['', '', ''])
+    await act(async () => {
+      mutateTable(editor, (table) => {
+        $setTableWidthMethod(table, 'fixed')
+        $setTableColumnWidthPolicy(table, 1, makeColumnWidthPolicy('auto'))
+      })
+    })
+    expect(widths()).toEqual(['140px', '190px', '260px'])
+    await act(async () => {
+      mutateTable(editor, (table) => {
+        table.setColWidths(undefined)
+        for (const row of table.getChildren()) {
+          if ($isTableRowNode(row)) {
+            row.getLastChild()?.remove()
+          }
+        }
+      })
+    })
+    expect(widths()).toEqual(['', ''])
+    expect(tableElement().querySelectorAll(':scope > colgroup')).toHaveLength(1)
+    await act(async () => {
+      mutateTable(editor, (table) => {
+        for (const row of table.getChildren()) {
+          if ($isTableRowNode(row)) {
+            row.append(new TableCellNode())
+          }
+        }
+      })
+    })
+    expect(widths()).toEqual(['', '', ''])
+    expect(tableElement().querySelectorAll(':scope > colgroup')).toHaveLength(1)
+  })
+
   it('never fits a table whose columns it cannot account for in px', async () => {
     await mountEditor()
     await act(async () => {

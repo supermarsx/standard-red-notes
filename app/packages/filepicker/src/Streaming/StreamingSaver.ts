@@ -52,7 +52,7 @@ export class StreamingFileSaver {
       throw Error('Must call selectFileToSaveTo first')
     }
     this.log('Writing chunk to disk of size', bytes.length)
-    await this.writableStream.write(bytes)
+    await this.writableStream.write(new Uint8Array(bytes))
   }
 
   async finish(): Promise<void> {

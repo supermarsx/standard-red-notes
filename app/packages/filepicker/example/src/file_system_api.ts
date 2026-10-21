@@ -25,18 +25,24 @@ export class FileSystemApi {
   }
 
   uploadFiles = async (): Promise<void> => {
-    const snFiles = []
+    const snFiles: FileItem[] = []
     const selectedFiles = await StreamingFileReader.selectFiles()
     for (const file of selectedFiles) {
-      const operation = await this.application.files.beginNewFileUpload()
+      const operation = await this.application.files.beginNewFileUpload(file.size)
       if (operation instanceof ClientDisplayableError) {
         continue
       }
-      const fileResult = await StreamingFileReader.readFile(file, 2_000_000, async (chunk, index, isLast) => {
-        await this.application.files.pushBytesForUpload(operation, chunk, index, isLast)
+      const fileResult = await StreamingFileReader.readFile(file, 2_000_000, async ({ data, index, isLast }) => {
+        const failure = await this.application.files.pushBytesForUpload(operation, data, index, isLast)
+        if (failure) {
+          throw new Error(failure.text)
+        }
       })
 
-      const snFile = await this.application.files.finishUpload(operation, fileResult)
+      const snFile = await this.application.files.finishUpload(operation, fileResult, crypto.randomUUID())
+      if (snFile instanceof ClientDisplayableError) {
+        throw new Error(snFile.text)
+      }
 
       snFiles.push(snFile)
     }
@@ -51,13 +57,18 @@ export class FileSystemApi {
       console.log('Downloading file', snFile.remoteIdentifier)
 
       const saver = new StreamingFileSaver(snFile.name)
-      await saver.selectFileToSaveTo()
+      if (!(await saver.selectFileToSaveTo())) {
+        continue
+      }
       saver.loggingEnabled = true
 
-      await this.application.files.downloadFile(snFile, async (decryptedBytes: Uint8Array) => {
+      const failure = await this.application.files.downloadFile(snFile, async (decryptedBytes: Uint8Array) => {
         console.log(`Pushing ${decryptedBytes.length} decrypted bytes to disk`)
         await saver.pushBytes(decryptedBytes)
       })
+      if (failure) {
+        throw new Error(failure.text)
+      }
 
       console.log('Closing file saver reader')
       await saver.finish()

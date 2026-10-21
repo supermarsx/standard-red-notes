@@ -40,6 +40,7 @@ const collectCoverage = forced === '1' ? true : forced === '0' ? false : !hasTes
 module.exports = {
   ...base,
   transform: {
+    ...base.transform,
     '^.+\\.tsx?$': ['ts-jest', { tsconfig: 'tsconfig.json' }],
   },
   collectCoverage,

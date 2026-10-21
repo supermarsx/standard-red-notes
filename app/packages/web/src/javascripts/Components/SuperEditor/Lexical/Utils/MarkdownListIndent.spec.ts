@@ -6,8 +6,9 @@
  * The unit tests pin the rewritten text, and the import tests run the real
  * `@lexical/markdown` conversion and read the DEPTH of each row out of the
  * resulting Lexical tree — because the defect was never visible in the markdown,
- * only in the tree it produced: with `LIST_INDENT_SIZE = 4` hard-coded in
- * `node_modules`, two-space input arrived as `0,0,1,1`.
+ * only in the tree it produced: older Lexical imports treated two-space input
+ * as `0,0,1,1`. Lexical 0.52 also preserves those levels without normalization;
+ * the compatibility check below pins both paths against the intended tree.
  *
  * Depth is read structurally, counting the nested `list` nodes above a row, and
  * Lexical's text-less nesting WRAPPER list items are skipped — they are
@@ -212,12 +213,12 @@ describe('markdown import depth, through the real transformer', () => {
     ])
   })
 
-  it('half-flattens without the normalisation, which is the defect', () => {
-    // The same input straight into the transformer: `0,1,2,3` became `0,0,1,1`.
-    // Asserted against the un-normalised path so the fix is measured, not
-    // compared with itself.
+  it('preserves the upstream two-space import fix through normalisation', () => {
+    // Lexical 0.52 tracks source columns instead of flooring every indentation
+    // to four spaces. Both the direct and normalized paths must preserve the
+    // complete rows, including their checkbox state, independently.
     const twoSpace = ['- [ ] a', '  - [x] b', '    - [ ] c', '      - [x] d', ''].join('\n')
-    expect(convertedRows(twoSpace).map((row) => row.depth)).toEqual([0, 0, 1, 1])
-    expect(importRows(twoSpace).map((row) => row.depth)).toEqual([0, 1, 2, 3])
+    expect(convertedRows(twoSpace)).toEqual(FOUR_LEVELS)
+    expect(importRows(twoSpace)).toEqual(FOUR_LEVELS)
   })
 })

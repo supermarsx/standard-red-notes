@@ -75,6 +75,7 @@ module.exports = {
     '/node_modules/',
     '<rootDir>/scripts/GuardTextSizeAdjust\\.test\\.cjs$',
     '<rootDir>/scripts/WebpackBuildLimits\\.test\\.cjs$',
+    '<rootDir>/scripts/CssAssetExtraction\\.test\\.cjs$',
   ],
   restoreMocks: true,
   clearMocks: true,
@@ -119,10 +120,12 @@ module.exports = {
     __SRN_BUILD_REVISION__: '',
   },
   transform: {
-    '^.+\\.(ts|tsx|js|jsx)?$': 'ts-jest',
+    '^.+\\.(ts|tsx)$': 'ts-jest',
+    '^.+\\.(js|jsx)$': '<rootDir>/../../jest.javascript-transformer.cjs',
     '\\.svg$': 'svg-jest',
   },
-  transformIgnorePatterns: ['node_modules/(?!(react-error-boundary)/)'],
+  // Lexical 0.52 and UUID 14 publish ESM; compile their real runtimes for CommonJS Jest.
+  transformIgnorePatterns: ['node_modules/(?!(react-error-boundary|lexical|@lexical|@preact/signals-core|uuid)/)'],
   testEnvironment: 'jsdom',
   setupFiles: ['<rootDir>/src/javascripts/__mocks__/browserMediaQueries.js'],
 }

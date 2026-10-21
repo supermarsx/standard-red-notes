@@ -4,6 +4,7 @@ const base = require('../../common.jest.json')
 module.exports = {
   ...base,
   transform: {
+    ...base.transform,
     '^.+\\.tsx?$': ['ts-jest', { tsconfig: 'tsconfig.json' }],
   },
   // Enforced gate (this was previously `{}`, which disabled the inherited threshold entirely

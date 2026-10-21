@@ -80,6 +80,35 @@ describe('MobileDevice runtime reset', () => {
     return { clearRawKeychainValue, databases, device, keyValueStore }
   }
 
+  it.each([null, undefined, 'unrecognized', 'unknown'])(
+    'normalizes unavailable app state %s for the bridge',
+    async (state) => {
+      const { AppState } = jest.requireMock('react-native')
+      const previousState = AppState.currentState
+      try {
+        AppState.currentState = state
+        await expect(createDevice().device.getAppState()).resolves.toBe('unknown')
+      } finally {
+        AppState.currentState = previousState
+      }
+    },
+  )
+
+  it('updates Android status-bar foreground without the removed background setter', () => {
+    const { Platform, StatusBar } = jest.requireMock('react-native')
+    const { device } = createDevice()
+    const previousPlatform = Platform.OS
+    Platform.OS = 'android'
+    try {
+      device.handleThemeSchemeChange(true, '#101010')
+      expect(StatusBar.setBarStyle).toHaveBeenCalledWith('light-content', true)
+      device.handleThemeSchemeChange(false, '#ffffff')
+      expect(StatusBar.setBarStyle).toHaveBeenLastCalledWith('dark-content', true)
+    } finally {
+      Platform.OS = previousPlatform
+    }
+  })
+
   it('erases supplied and cached workspace databases before raw storage and keychain', async () => {
     const events: string[] = []
     const rawValues = new Map([

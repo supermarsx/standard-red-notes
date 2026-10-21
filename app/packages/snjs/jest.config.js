@@ -8,6 +8,7 @@ module.exports = {
     '@Services/(.*)': '<rootDir>/lib/Services/$1',
   },
   transform: {
+    ...base.transform,
     '^.+\\.tsx?$': [
       'ts-jest',
       { tsconfig: './lib/tsconfig.json', isolatedModules: true, babelConfig: 'babel.config.js' },

@@ -1,0 +1,12 @@
+diff --git a/dist/src/Domain/Core/UniqueEntityId.js b/dist/src/Domain/Core/UniqueEntityId.js
+--- a/dist/src/Domain/Core/UniqueEntityId.js
++++ b/dist/src/Domain/Core/UniqueEntityId.js
+@@ -5,1 +5,1 @@
+-// Uses Node's built-in randomUUID so that consumers don't inherit a uuid dependency
++// Keep the shared domain package usable in browser and React Native consumers.
+@@ -6,1 +6,1 @@
+-const node_crypto_1 = require("node:crypto");
++const uuid_1 = require("uuid");
+@@ -10,1 +10,1 @@
+-        super(id ? id : (0, node_crypto_1.randomUUID)());
++        super(id ? id : (0, uuid_1.v4)());

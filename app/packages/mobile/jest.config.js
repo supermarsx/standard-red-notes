@@ -1,11 +1,15 @@
+const base = require('../../common.jest.json')
+
 module.exports = {
   clearMocks: true,
   resetMocks: true,
   testEnvironment: 'node',
   testMatch: ['<rootDir>/src/**/*.test.ts'],
   transform: {
+    ...base.transform,
     '^.+\\.tsx?$': 'babel-jest',
   },
+  transformIgnorePatterns: base.transformIgnorePatterns,
   // Without this the denominator is only the files some test happens to import, so a source file
   // with no test at all is counted as neither covered nor uncovered and the floors below would
   // measure a subset. Naming the sources explicitly makes the denominator the whole of src, which

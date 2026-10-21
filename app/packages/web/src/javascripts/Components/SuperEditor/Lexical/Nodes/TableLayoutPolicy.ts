@@ -34,7 +34,15 @@
  * used by this module: `superTableFilter` (TableNode) and `superColumnFilter`
  * (TableCellNode).
  */
-import { $getState, $setState, createState, DOMExportOutput, LexicalEditor, LexicalNode } from 'lexical'
+import {
+  $getState,
+  $setState,
+  createState,
+  DOMExportOutput,
+  LexicalEditor,
+  LexicalNode,
+  setDOMUnmanaged,
+} from 'lexical'
 import { $computeTableMapSkipCellCheck, $isTableNode, TableCellNode, TableNode } from '@lexical/table'
 
 /* ------------------------------------------------------------- width methods */
@@ -564,6 +572,8 @@ export const TABLE_FIT_ATTRIBUTE = 'data-super-table-fit'
  */
 export const TABLE_FIT_WIDTH_PROPERTY = '--super-table-fit-width'
 
+const columnWidthOverrides = new WeakMap<HTMLElement, string>()
+
 /**
  * Apply a resolved layout to an already-rendered table.
  *
@@ -577,11 +587,9 @@ export const TABLE_FIT_WIDTH_PROPERTY = '--super-table-fit-width'
  * space stays part of the block (and so the wrapper is still the scroll port when
  * the declared widths overflow it).
  *
- * Per-column widths are written to the `<col>` elements of Lexical's own
- * (DOM-unmanaged) `<colgroup>` — the correct HTML mechanism, honoured under both
- * `table-layout: auto` and `fixed`, and already carried through `exportDOM`.
- * Columns left on `auto` are not touched, so a width the user dragged with the
- * column resizer (Lexical's `colWidths`) still applies there.
+ * Per-column widths use a DOM-unmanaged `<colgroup>`, supplied by Lexical when
+ * native widths exist or created here otherwise. This also serves HTML export.
+ * Native resizer widths are preserved and restored when a policy returns to auto.
  */
 export const applyResolvedTableLayoutToDom = (element: HTMLElement | null, layout: ResolvedTableLayout): void => {
   if (element === null) {
@@ -609,15 +617,40 @@ export const applyResolvedTableLayoutToDom = (element: HTMLElement | null, layou
     tableElement.setAttribute(TABLE_FIT_ATTRIBUTE, 'columns')
     tableElement.style.setProperty(TABLE_FIT_WIDTH_PROPERTY, layout.columnsFitWidth)
   }
+  // Lexical 0.52 omits its colgroup until native pixel widths are assigned.
+  // Our NodeState policies also need columns (including percentage widths),
+  // without introducing fake pixel widths into the synced table model.
+  let colgroup = tableElement.querySelector<HTMLTableColElement>(':scope > colgroup')
+  if (colgroup === null && layout.columnWidths.length > 0) {
+    colgroup = tableElement.ownerDocument.createElement('colgroup')
+    setDOMUnmanaged(colgroup)
+    tableElement.insertBefore(colgroup, tableElement.firstChild)
+  }
+  if (colgroup !== null) {
+    while (colgroup.children.length < layout.columnWidths.length) {
+      colgroup.append(tableElement.ownerDocument.createElement('col'))
+    }
+    while (colgroup.children.length > layout.columnWidths.length) {
+      colgroup.lastElementChild?.remove()
+    }
+  }
   const cols = tableElement.querySelectorAll(':scope > colgroup > col')
   for (let index = 0; index < cols.length; index++) {
     const col = cols[index]
     if (!(col instanceof HTMLElement)) {
       continue
     }
-    const width = layout.columnWidths[index]
+    const width = layout.method === 'equal' ? '' : layout.columnWidths[index]
     if (width === null || width === undefined) {
+      const previous = columnWidthOverrides.get(col)
+      if (previous !== undefined) {
+        col.style.width = previous
+        columnWidthOverrides.delete(col)
+      }
       continue
+    }
+    if (!columnWidthOverrides.has(col)) {
+      columnWidthOverrides.set(col, col.style.width)
     }
     col.style.width = width
   }

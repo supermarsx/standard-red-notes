@@ -10,6 +10,7 @@
   },
   "license": "AGPL-3.0",
   "resolutions": {
+    "launch-editor": "2.14.2",
     "uuid@npm:^8.3.2": "11.1.1"
   },
   "scripts": {
@@ -25,16 +26,17 @@
     "@babel/core": "^8.0.7",
     "@babel/preset-env": "^8.0.7",
     "@babel/preset-typescript": "^8.0.7",
+    "@types/node": "^26.6.5",
     "@types/wicg-file-system-access": "^2023.10.7",
     "babel-loader": "^10.1.1",
-    "eslint": "^10.12.0",
+    "eslint": "^10.13.0",
     "html-webpack-plugin": "^5.6.8",
     "ts-loader": "^9.6.2",
     "typescript": "6.0.3",
-    "typescript-eslint": "8.71.0",
-    "webpack": "^5.108.4",
+    "typescript-eslint": "8.72.0",
+    "webpack": "^5.112.0",
     "webpack-cli": "^7.2.3",
-    "webpack-dev-server": "^5.2.6"
+    "webpack-dev-server": "^6.1.0"
   },
   "dependencies": {
     "@standardnotes/sncrypto-web": "^1.14.11",

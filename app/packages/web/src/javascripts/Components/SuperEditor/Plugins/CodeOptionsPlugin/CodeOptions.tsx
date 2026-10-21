@@ -2,7 +2,12 @@ import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext
 import { $findMatchingParent, mergeRegister } from '@lexical/utils'
 import { $getNodeByKey, $getSelection, $isRangeSelection, $isRootOrShadowRoot, NodeKey } from 'lexical'
 import { useCallback, useEffect, useState } from 'react'
-import { $isCodeNode, CODE_LANGUAGE_MAP, CODE_LANGUAGE_FRIENDLY_NAME_MAP, normalizeCodeLang } from '@lexical/code'
+import { $isCodeNode } from '@lexical/code'
+import {
+  CODE_LANGUAGE_MAP,
+  CODE_LANGUAGE_FRIENDLY_NAME_MAP,
+  normalizeCodeLanguage as normalizeCodeLang,
+} from '@lexical/code-prism'
 import Dropdown from '@/Components/Dropdown/Dropdown'
 
 function getCodeLanguageOptions(): [string, string][] {

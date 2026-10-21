@@ -1,13 +1,13 @@
 import fs from 'fs'
 import path from 'path'
 
-const FIXED_PDFJS_VERSION = '6.2.108'
+const FIXED_PDFJS_VERSION = '6.4.299'
 const PDFJS_RUNTIME_IMPORT = 'pdfjs-dist/legacy/build/pdf.mjs'
 const PDFJS_WORKER_IMPORT = 'pdfjs-dist/legacy/build/pdf.worker.min.mjs'
 const pdfjsPackageRoot = path.dirname(require.resolve('pdfjs-dist/package.json'))
 
 describe('PDF.js preview package contract', () => {
-  it('pins the first release that fixes malicious-PDF JavaScript execution', () => {
+  it('pins the reviewed patched release in both the manifest and installed runtime', () => {
     const webPackage = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../../../package.json'), 'utf8')) as {
       dependencies: Record<string, string>
     }

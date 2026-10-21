@@ -1,0 +1,30 @@
+import { TimerInterface } from './TimerInterface';
+import { TimeStructure } from './TimeStructure';
+export declare class Timer implements TimerInterface {
+    constructor();
+    sleep(milliseconds: number): Promise<void>;
+    getUTCDateNSecondsAhead(n: number): Date;
+    getUTCDateNMinutesAgo(n: number): Date;
+    convertMicrosecondsToTimeStructure(microseconds: number): TimeStructure;
+    formatDate(date: Date, format: string): string;
+    convertDateToMilliseconds(date: Date): number;
+    convertDateToMicroseconds(date: Date): number;
+    convertMicrosecondsToSeconds(microseconds: number): number;
+    getTimestampInMicroseconds(): number;
+    getTimestampInSeconds(): number;
+    getUTCDate(): Date;
+    getUTCDateNDaysAgo(n: number): Date;
+    getUTCDateNDaysAhead(n: number): Date;
+    getUTCDateNHoursAgo(n: number): Date;
+    getUTCDateNHoursAhead(n: number): Date;
+    convertStringDateToDate(date: string): Date;
+    convertDateToISOString(date: Date): string;
+    convertDateToFormattedString(date: Date, format: string): string;
+    dateWasNDaysAgo(date: Date): number;
+    convertStringDateToMicroseconds(date: string): number;
+    convertStringDateToMilliseconds(date: string): number;
+    convertStringDateToSeconds(date: string): number;
+    convertMicrosecondsToMilliseconds(microseconds: number): number;
+    convertMicrosecondsToStringDate(microseconds: number): string;
+    convertMicrosecondsToDate(microseconds: number): Date;
+}

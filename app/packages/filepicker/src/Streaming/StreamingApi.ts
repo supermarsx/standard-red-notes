@@ -49,7 +49,7 @@ export class StreamingFileApi implements FileSystemApi {
   }
 
   async saveBytes(file: WebFileHandleReadWrite, bytes: Uint8Array): Promise<'success' | 'failed'> {
-    await file.writableStream.write(bytes)
+    await file.writableStream.write(new Uint8Array(bytes))
 
     return 'success'
   }

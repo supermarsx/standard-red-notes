@@ -2,7 +2,17 @@
 
 import { ApplicationEvent, ReactNativeToWebEvent } from '@standardnotes/snjs'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AppState, Button, Dimensions, Keyboard, KeyboardEvent, Platform, Text, View } from 'react-native'
+import {
+  AppState,
+  Button,
+  Dimensions,
+  DimensionsPayload,
+  Keyboard,
+  KeyboardEvent,
+  Platform,
+  Text,
+  View,
+} from 'react-native'
 import { MainBundlePath } from 'react-native-fs'
 import VersionInfo from 'react-native-version-info'
 import { WebView, WebViewMessageEvent } from 'react-native-webview'
@@ -177,8 +187,8 @@ const MobileWebAppContents = ({ destroyAndReload }: { destroyAndReload: () => vo
       return
     }
 
-    const dimensionsListener = Dimensions.addEventListener('change', ({ window }) => {
-      applyDynamicTypeFontScale(window.fontScale)
+    const dimensionsListener = Dimensions.addEventListener('change', ({ window }: DimensionsPayload) => {
+      applyDynamicTypeFontScale(window?.fontScale)
     })
 
     const appStateListener = AppState.addEventListener('change', (state) => {

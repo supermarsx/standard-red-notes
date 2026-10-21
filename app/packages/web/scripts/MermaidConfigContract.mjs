@@ -981,7 +981,15 @@ const drawWithSecure = async (text, secure) => {
 }
 
 const DRAWN_KINDS = {
-  flowchart: FLOW,
+  // A straight two-node edge renders identically under linear and basis curves.
+  // Branch and rejoin so the curve control exercises actual bends.
+  flowchart: lines(
+    'flowchart LR',
+    '  A[Alpha] -->|feeds| B[Beta]',
+    '  A --> C[Gamma]',
+    '  B --> D[Delta]',
+    '  C --> D',
+  ),
   state: Fixtures.MERMAID_SAMPLE_DIAGRAMS.state,
   pie: Fixtures.MERMAID_SAMPLE_DIAGRAMS.pie,
 }
@@ -1098,6 +1106,16 @@ await check('by the same comparison, a key the app does NOT lock changes the dra
   return unlocked.map(([kind, name]) => `${name} (${kind})`).join(', ')
 })
 
+await check('the app defaults to dagre without overriding a diagram that explicitly chooses ELK', async () => {
+  const body = DRAWN_KINDS.flowchart
+  const defaultDrawing = await draw(body)
+  assert(defaultDrawing === (await draw(`---\nconfig:\n  layout: dagre\n---\n${body}`)), 'the app default is not dagre')
+  const elkDrawing = await draw(`---\nconfig:\n  layout: elk\n---\n${body}`)
+  assert(elkDrawing !== defaultDrawing, 'the diagram explicit ELK layout was overridden')
+  assert(api.getConfig().layout === 'elk', 'the renderer did not receive the diagram ELK layout')
+  return 'default and explicit dagre match; explicit ELK reaches the renderer and draws differently'
+})
+
 await check(
   'still true of this mermaid: it is the lock that does it — off the list, each of the three changes the drawing',
   async () => {
@@ -1199,6 +1217,7 @@ const PINNED_LOCKED_NAMES = [
   'messageFontFamily',
   'taskFontFamily',
   'titleFontFamily',
+  'usecaseFontFamily',
   // …and C4
   'personFontFamily',
   'external_personFontFamily',

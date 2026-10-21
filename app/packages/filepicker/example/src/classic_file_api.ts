@@ -1,4 +1,4 @@
-import { SNApplication, ContentType, FileItem, ClientDisplayableError } from '../../../snjs'
+import { SNApplication, FileItem, ClientDisplayableError } from '../../../snjs'
 import { ClassicFileReader, ClassicFileSaver } from '../../../filepicker'
 
 export class ClassicFileApi {
@@ -17,37 +17,40 @@ export class ClassicFileApi {
   async openFilePicker(): Promise<void> {
     const files = await ClassicFileReader.selectFiles()
     for (const file of files) {
-      const operation = await this.application.files.beginNewFileUpload()
+      const operation = await this.application.files.beginNewFileUpload(file.size)
       if (operation instanceof ClientDisplayableError) {
         continue
       }
-      const fileResult = await ClassicFileReader.readFile(file, 2_000_000, async (chunk, index, isLast) => {
-        await this.application.files.pushBytesForUpload(operation, chunk, index, isLast)
+      const fileResult = await ClassicFileReader.readFile(file, 2_000_000, async ({ data, index, isLast }) => {
+        const failure = await this.application.files.pushBytesForUpload(operation, data, index, isLast)
+        if (failure) {
+          throw new Error(failure.text)
+        }
       })
-      const snFile = await this.application.files.finishUpload(operation, fileResult)
+      const snFile = await this.application.files.finishUpload(operation, fileResult, crypto.randomUUID())
 
       if (snFile instanceof ClientDisplayableError) {
         return
       }
 
-      const bytes = await this.downloadFileBytes(snFile.remoteIdentifier)
+      const bytes = await this.downloadFileBytes(snFile)
 
-      new ClassicFileSaver().saveFile(`${snFile.name}.${snFile.ext}`, bytes)
+      new ClassicFileSaver().saveFile(snFile.name, bytes)
     }
   }
 
-  downloadFileBytes = async (remoteIdentifier: string): Promise<Uint8Array> => {
-    console.log('Downloading file', remoteIdentifier)
-    const file = this.application['itemManager']
-      .getItems(ContentType.TYPES.File)
-      .find((file: FileItem) => file.remoteIdentifier === remoteIdentifier)
+  downloadFileBytes = async (file: FileItem): Promise<Uint8Array> => {
+    console.log('Downloading file')
 
     let receivedBytes = new Uint8Array()
 
-    await this.application.files.downloadFile(file, async (decryptedBytes: Uint8Array) => {
+    const failure = await this.application.files.downloadFile(file, async (decryptedBytes: Uint8Array) => {
       console.log(`Downloaded ${decryptedBytes.length} bytes`)
       receivedBytes = new Uint8Array([...receivedBytes, ...decryptedBytes])
     })
+    if (failure) {
+      throw new Error(failure.text)
+    }
 
     console.log('Successfully downloaded and decrypted file!')
 

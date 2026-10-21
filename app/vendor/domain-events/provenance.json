@@ -1,0 +1,1200 @@
+{
+  "repository": "https://github.com/standardnotes/server",
+  "revision": "a9646f0f9ccb190050292774f6ba47a785969963",
+  "upstreamVersion": "2.141.2",
+  "sourceBlobs": [
+    {
+      "path": "packages/domain-events/.eslintignore",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1521c8b7652b1eec8ed4fe50877aae880c758ee3",
+      "size": 5,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/1521c8b7652b1eec8ed4fe50877aae880c758ee3"
+    },
+    {
+      "path": "packages/domain-events/.eslintrc",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "697bc808d0bf6b7120988457389c1ce9e12e0415",
+      "size": 142,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/697bc808d0bf6b7120988457389c1ce9e12e0415"
+    },
+    {
+      "path": "packages/domain-events/CHANGELOG.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "da584adca75631c7d88877ad9ea998d2038670d3",
+      "size": 108888,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/da584adca75631c7d88877ad9ea998d2038670d3"
+    },
+    {
+      "path": "packages/domain-events/jest.config.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "09dfc80dbd0240f6e4a708a5bbda28315f15bd6b",
+      "size": 245,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/09dfc80dbd0240f6e4a708a5bbda28315f15bd6b"
+    },
+    {
+      "path": "packages/domain-events/linter.tsconfig.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c1a7d22c5a15e5043eb3e701255fa6200066324b",
+      "size": 58,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/c1a7d22c5a15e5043eb3e701255fa6200066324b"
+    },
+    {
+      "path": "packages/domain-events/package.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "37b6321ea537ad78233dd85c84114d1f73fc2c3e",
+      "size": 1021,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/37b6321ea537ad78233dd85c84114d1f73fc2c3e"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/AccountDeletionRequestedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "febe4fb88da8c5f8e19a19db5016584960ee0430",
+      "size": 322,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/febe4fb88da8c5f8e19a19db5016584960ee0430"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/AccountDeletionRequestedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "818e6d0bf5e6dc8f5dffe71b63534b2975b6bf4b",
+      "size": 263,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/818e6d0bf5e6dc8f5dffe71b63534b2975b6bf4b"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/AccountDeletionVerificationPassedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "be1d9527cceb242d0420cd13d8c4434b7aa07515",
+      "size": 368,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/be1d9527cceb242d0420cd13d8c4434b7aa07515"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/AccountDeletionVerificationPassedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "5b5a9c5b1b1e41dccb25a526120840072063de26",
+      "size": 102,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/5b5a9c5b1b1e41dccb25a526120840072063de26"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/AccountDeletionVerificationRequestedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "23a3946f4088ee6c3bb7686a157e7f27312cd43f",
+      "size": 383,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/23a3946f4088ee6c3bb7686a157e7f27312cd43f"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/AccountDeletionVerificationRequestedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1d0213f7278c1c6cde1c7d1b7cf9c3c9b2e17bce",
+      "size": 105,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/1d0213f7278c1c6cde1c7d1b7cf9c3c9b2e17bce"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/ContentSizesFixRequestedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4b6c4e665a037fb4a4b53ea29f1edab018a92b7a",
+      "size": 323,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/4b6c4e665a037fb4a4b53ea29f1edab018a92b7a"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/ContentSizesFixRequestedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8a251ed4bebc7311fe37828c04a8270b3bd38888",
+      "size": 77,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/8a251ed4bebc7311fe37828c04a8270b3bd38888"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/DiscountApplyRequestedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4b2722d978a392685c844dd06ed2ee7ae255ccd4",
+      "size": 312,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/4b2722d978a392685c844dd06ed2ee7ae255ccd4"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/DiscountApplyRequestedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "52d43907ba158d8ea62f97e2f00f008abf66375b",
+      "size": 99,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/52d43907ba158d8ea62f97e2f00f008abf66375b"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/DiscountWithdrawRequestedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4970dc284d0d424cc4512b8b4a1375dc110bd8c8",
+      "size": 327,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/4970dc284d0d424cc4512b8b4a1375dc110bd8c8"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/DiscountWithdrawRequestedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "248742b358231514f4557a8ffdd86c3675e884b4",
+      "size": 102,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/248742b358231514f4557a8ffdd86c3675e884b4"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/DomainEventInterface.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0732e253abb5a64f51b6d71874ac9fc0bda4b4dc",
+      "size": 349,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/0732e253abb5a64f51b6d71874ac9fc0bda4b4dc"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/DomainEventService.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e18b55e4b751521a17dd53794ea2c6ac39dce876",
+      "size": 395,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/e18b55e4b751521a17dd53794ea2c6ac39dce876"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/DuplicateItemSyncedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "556e96722e62b0762f67b7a2072c50c32166a0f1",
+      "size": 297,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/556e96722e62b0762f67b7a2072c50c32166a0f1"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/DuplicateItemSyncedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b3fa9f231e98e5a6473a1e6d0ec6f34efa0f326e",
+      "size": 91,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/b3fa9f231e98e5a6473a1e6d0ec6f34efa0f326e"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/EmailBackupRequestedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e60676390a988b9041c74fded6ea311ccb77e86e",
+      "size": 302,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/e60676390a988b9041c74fded6ea311ccb77e86e"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/EmailBackupRequestedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "40023180066568eedf4e2998ff036b9014a6ff49",
+      "size": 110,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/40023180066568eedf4e2998ff036b9014a6ff49"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/EmailBouncedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "062ec0deab503c2a042b32c3f7c677bbe93e847f",
+      "size": 261,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/062ec0deab503c2a042b32c3f7c677bbe93e847f"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/EmailBouncedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c0a1cd197f3449b1cb611a332518599b387d668a",
+      "size": 142,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/c0a1cd197f3449b1cb611a332518599b387d668a"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/EmailCampaignSendOutRequestedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "922c971d2d6571e7a6601d09586879b30f2b4873",
+      "size": 349,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/922c971d2d6571e7a6601d09586879b30f2b4873"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/EmailCampaignSendOutRequestedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9f81bc8c300896e791d0d55a69a80fc6a2da97ee",
+      "size": 121,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/9f81bc8c300896e791d0d55a69a80fc6a2da97ee"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/EmailRequestedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "88a30c3e36c82d602a53e10a95e68c255d4b47c7",
+      "size": 271,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/88a30c3e36c82d602a53e10a95e68c255d4b47c7"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/EmailRequestedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d5a9bb997bb749f0e29bc3b159c77ccd58feabdb",
+      "size": 347,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/d5a9bb997bb749f0e29bc3b159c77ccd58feabdb"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/EmailSubscriptionUnsubscribedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "729d9b8e00823e413e3f860c99889998d698aa8a",
+      "size": 347,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/729d9b8e00823e413e3f860c99889998d698aa8a"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/EmailSubscriptionUnsubscribedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e8e7c5d8885102517c1858e6b1a5a809ee3be3e9",
+      "size": 99,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/e8e7c5d8885102517c1858e6b1a5a809ee3be3e9"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/ExitDiscountAppliedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8db8e60d50b6e7fc9482959359d6b5ba7f66881c",
+      "size": 298,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/8db8e60d50b6e7fc9482959359d6b5ba7f66881c"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/ExitDiscountAppliedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7fae2affede9b122ca14ded083ad1539f7e8416a",
+      "size": 96,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/7fae2affede9b122ca14ded083ad1539f7e8416a"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/ExitDiscountApplyRequestedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c1c4c132d597e8df653c52c1931b8a18ecfe1323",
+      "size": 333,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/c1c4c132d597e8df653c52c1931b8a18ecfe1323"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/ExitDiscountApplyRequestedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "5ced4104fb9fb81dfc1e90e7796163014aad9a57",
+      "size": 103,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/5ced4104fb9fb81dfc1e90e7796163014aad9a57"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/ExitDiscountWithdrawRequestedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6a9d4809c8db881f57f0a4fae558a3cafb2e119d",
+      "size": 348,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/6a9d4809c8db881f57f0a4fae558a3cafb2e119d"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/ExitDiscountWithdrawRequestedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "40a75ffcc0a192515201565b0d058b1f6ceeb3ca",
+      "size": 106,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/40a75ffcc0a192515201565b0d058b1f6ceeb3ca"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/ExtensionKeyGrantedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b3e656ace300b7eb80fba2b53604a2ef1e401e4b",
+      "size": 298,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/b3e656ace300b7eb80fba2b53604a2ef1e401e4b"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/ExtensionKeyGrantedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "207a5d9d6a64f252ac98ef50b13c469616ebffb3",
+      "size": 348,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/207a5d9d6a64f252ac98ef50b13c469616ebffb3"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/FileQuotaRecalculatedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c59e6e4e2f54589967c2a26afe6dd13e715f4eb5",
+      "size": 307,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/c59e6e4e2f54589967c2a26afe6dd13e715f4eb5"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/FileQuotaRecalculatedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "73b98db35897a9a6004db6563e1c5ddac5c9c8a1",
+      "size": 102,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/73b98db35897a9a6004db6563e1c5ddac5c9c8a1"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/FileQuotaRecalculationRequestedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a4406ed873d8972b4aa22bd21bbb72b9418da7fe",
+      "size": 358,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/a4406ed873d8972b4aa22bd21bbb72b9418da7fe"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/FileQuotaRecalculationRequestedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1a8826187d2f28ff3b656e832209b9f8cfa51ecd",
+      "size": 84,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/1a8826187d2f28ff3b656e832209b9f8cfa51ecd"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/FileRemovedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3f7ad681d85b727246c4d317c08722ef56a2ff44",
+      "size": 256,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/3f7ad681d85b727246c4d317c08722ef56a2ff44"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/FileRemovedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "42a496ed641788105cb2519f98653b754ee383d3",
+      "size": 125,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/42a496ed641788105cb2519f98653b754ee383d3"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/FileUploadedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6856bf65e255b746c0878455a2bf320d826a9685",
+      "size": 261,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/6856bf65e255b746c0878455a2bf320d826a9685"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/FileUploadedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6180b94998ba7867e8b025741335b3c4c994c990",
+      "size": 126,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/6180b94998ba7867e8b025741335b3c4c994c990"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/ItemDeletedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ca37281bac7e3ab34087f5b8f2100769da5feeb2",
+      "size": 256,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/ca37281bac7e3ab34087f5b8f2100769da5feeb2"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/ItemDeletedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "79fcf0fdb6e524e221f67e6f2cf4fb3a9c47bb6a",
+      "size": 83,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/79fcf0fdb6e524e221f67e6f2cf4fb3a9c47bb6a"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/ItemDumpedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f8cc160837de67da761f42d9c30dc291a9d66597",
+      "size": 251,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/f8cc160837de67da761f42d9c30dc291a9d66597"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/ItemDumpedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7c0164d1df0a696abee85b102b86da834ac1436c",
+      "size": 67,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/7c0164d1df0a696abee85b102b86da834ac1436c"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/ItemRemovedFromSharedVaultEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "21e19023a3d031aeb4372956cd30b15c04399697",
+      "size": 334,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/21e19023a3d031aeb4372956cd30b15c04399697"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/ItemRemovedFromSharedVaultEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "98217721f0d48b6a8800a8d571c63833b846a3b4",
+      "size": 124,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/98217721f0d48b6a8800a8d571c63833b846a3b4"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/ItemRevisionCreationRequestedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6310e1635382d3827068f807f477da2082f75fcf",
+      "size": 348,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/6310e1635382d3827068f807f477da2082f75fcf"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/ItemRevisionCreationRequestedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7854b1dfbcf3de9d1bfe113acf9a7a519f23b596",
+      "size": 82,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/7854b1dfbcf3de9d1bfe113acf9a7a519f23b596"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/ItemsChangedOnServerEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "81f6147e14013fd15a0ed187c53443e575a10677",
+      "size": 303,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/81f6147e14013fd15a0ed187c53443e575a10677"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/ItemsChangedOnServerEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e45a7b75d7530fd1314e1d4b3b88d36fc9ec0b5b",
+      "size": 115,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/e45a7b75d7530fd1314e1d4b3b88d36fc9ec0b5b"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/ListedAccountCreatedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2ab1c77875cc0c13127148821a4eea73b0592b87",
+      "size": 302,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/2ab1c77875cc0c13127148821a4eea73b0592b87"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/ListedAccountCreatedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "149ce940c92f412eac4f4a2e479cb991c6fb394f",
+      "size": 145,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/149ce940c92f412eac4f4a2e479cb991c6fb394f"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/ListedAccountDeletedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d2bb0ad1d4f41ed4926367058510864bb759a9b0",
+      "size": 302,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/d2bb0ad1d4f41ed4926367058510864bb759a9b0"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/ListedAccountDeletedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6218e36562966cc59be1135941ac16677b0d7f35",
+      "size": 145,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/6218e36562966cc59be1135941ac16677b0d7f35"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/ListedAccountRequestedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "103c7e3de8e5d99133954880e0d1f298fb2e9156",
+      "size": 312,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/103c7e3de8e5d99133954880e0d1f298fb2e9156"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/ListedAccountRequestedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c61812c7fa8cbf44d1028f4bc64723de13cd46e4",
+      "size": 95,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/c61812c7fa8cbf44d1028f4bc64723de13cd46e4"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/MessageSentToUserEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "62b07703c56cdb69ee840674a0cce3a97f655733",
+      "size": 289,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/62b07703c56cdb69ee840674a0cce3a97f655733"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/MessageSentToUserEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6f554d7d921d7b44ca6051cad068ba8d10b6dd69",
+      "size": 277,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/6f554d7d921d7b44ca6051cad068ba8d10b6dd69"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/MuteEmailsSettingChangedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "447d27833b3644fc0679729d52fe29a1aed07d00",
+      "size": 324,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/447d27833b3644fc0679729d52fe29a1aed07d00"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/MuteEmailsSettingChangedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6f9cbf4bcbb1dec88cb9586c3856b5b483f97c85",
+      "size": 135,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/6f9cbf4bcbb1dec88cb9586c3856b5b483f97c85"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/NotificationAddedForUserEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "95de7876064239aa25b6fc8bfd199850e8494f0e",
+      "size": 324,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/95de7876064239aa25b6fc8bfd199850e8494f0e"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/NotificationAddedForUserEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0459614d5bc5dadca60db4a024503b0441ecabca",
+      "size": 222,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/0459614d5bc5dadca60db4a024503b0441ecabca"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/PaymentFailedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f8332a7cae00f0c94ba692f8f4711a16c9b63b24",
+      "size": 267,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/f8332a7cae00f0c94ba692f8f4711a16c9b63b24"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/PaymentFailedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f825f0762ffa05a7087e47a2547664865750a271",
+      "size": 67,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/f825f0762ffa05a7087e47a2547664865750a271"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/PaymentSuccessEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "57cd9c88014e174e5012ab922ece18cc9322668c",
+      "size": 272,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/57cd9c88014e174e5012ab922ece18cc9322668c"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/PaymentSuccessEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "75db308d426b7f23371958f59611045761492aa0",
+      "size": 161,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/75db308d426b7f23371958f59611045761492aa0"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/PaymentsAccountDeletedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d3ad950299d1bae2bbdd128b726d83bf17420af2",
+      "size": 313,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/d3ad950299d1bae2bbdd128b726d83bf17420af2"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/PaymentsAccountDeletedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4b641832033cfb53459cc70e3ec79733ba4128aa",
+      "size": 75,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/4b641832033cfb53459cc70e3ec79733ba4128aa"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/PredicateVerificationRequestedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "de10a80c9c007199e641de854b81b62452019f2b",
+      "size": 352,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/de10a80c9c007199e641de854b81b62452019f2b"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/PredicateVerificationRequestedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "be023273367095265e94bb59d110e7b9cbe26948",
+      "size": 142,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/be023273367095265e94bb59d110e7b9cbe26948"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/PredicateVerifiedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1583f92de73d49db5c9148ae8645e7433fcccdb6",
+      "size": 286,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/1583f92de73d49db5c9148ae8645e7433fcccdb6"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/PredicateVerifiedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e684a757a9dbb3b919ea7c839dd20d0a6824bc8d",
+      "size": 217,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/e684a757a9dbb3b919ea7c839dd20d0a6824bc8d"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/RefundProcessedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a94aafade8c659d5ef14773a48ac9b3e013a06fc",
+      "size": 277,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/a94aafade8c659d5ef14773a48ac9b3e013a06fc"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/RefundProcessedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "5f1a4389faea3822f8ce9cf56a933068107aedbb",
+      "size": 86,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/5f1a4389faea3822f8ce9cf56a933068107aedbb"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/RevisionsCopyRequestedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "145478ea44a2d73ba98cef0f01ba67db6f21cb4f",
+      "size": 312,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/145478ea44a2d73ba98cef0f01ba67db6f21cb4f"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/RevisionsCopyRequestedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "09efb74f787adc0fce37e6010349e0b50bb3ec23",
+      "size": 105,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/09efb74f787adc0fce37e6010349e0b50bb3ec23"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/SessionCreatedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "db6c2ba2c3bf7725af71caf87d1ce3abdfb7b5b7",
+      "size": 271,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/db6c2ba2c3bf7725af71caf87d1ce3abdfb7b5b7"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/SessionCreatedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "40a8f389eb7422eab748b41fefaa5c8f908592c7",
+      "size": 67,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/40a8f389eb7422eab748b41fefaa5c8f908592c7"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/SessionRefreshedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "bd78d60f4f01989c45aaea2982f000adc1b3d402",
+      "size": 281,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/bd78d60f4f01989c45aaea2982f000adc1b3d402"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/SessionRefreshedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3e43869142c3a4afe5c529f010fd9c735a181b48",
+      "size": 69,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/3e43869142c3a4afe5c529f010fd9c735a181b48"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/SharedSubscriptionInvitationCanceledEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "41578e157ea6079448aa49137d94ad1672825868",
+      "size": 384,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/41578e157ea6079448aa49137d94ad1672825868"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/SharedSubscriptionInvitationCanceledEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "5cd00f2aba6e03b18c3970c1c800e94798e6ffab",
+      "size": 281,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/5cd00f2aba6e03b18c3970c1c800e94798e6ffab"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/SharedSubscriptionInvitationCreatedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "5e1c34cd5de399d886d34cd2b0290da7e82f8d75",
+      "size": 379,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/5e1c34cd5de399d886d34cd2b0290da7e82f8d75"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/SharedSubscriptionInvitationCreatedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "fd231224029bae2726d1ef8b4a2d9f38827446ab",
+      "size": 246,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/fd231224029bae2726d1ef8b4a2d9f38827446ab"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/SharedVaultFileMovedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ce2ecd3e7ea0ad0ce55d928f721ea13fea0d04f5",
+      "size": 303,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/ce2ecd3e7ea0ad0ce55d928f721ea13fea0d04f5"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/SharedVaultFileMovedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f88a8156a4d5493cea4f36e441f1f97537f7524b",
+      "size": 266,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/f88a8156a4d5493cea4f36e441f1f97537f7524b"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/SharedVaultFileRemovedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b167d456d0ebf58fb1f33738b6cb6201daab2eda",
+      "size": 313,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/b167d456d0ebf58fb1f33738b6cb6201daab2eda"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/SharedVaultFileRemovedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8c2cd708ced538eb647d4b19ebb7e3aacec56a34",
+      "size": 168,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/8c2cd708ced538eb647d4b19ebb7e3aacec56a34"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/SharedVaultFileUploadedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "acff7213ee04c3fd3856cad7a102dd233a650726",
+      "size": 318,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/acff7213ee04c3fd3856cad7a102dd233a650726"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/SharedVaultFileUploadedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2da0a20185b4df9cdc2b2f9af42e05fb68bfdd4b",
+      "size": 169,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/2da0a20185b4df9cdc2b2f9af42e05fb68bfdd4b"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/SharedVaultRemovedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6006b5fcde48b04fd67e976419c10a8d6ae8b0e3",
+      "size": 292,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/6006b5fcde48b04fd67e976419c10a8d6ae8b0e3"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/SharedVaultRemovedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f8bee7f4b37886053e451056d784d903c7066d96",
+      "size": 103,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/f8bee7f4b37886053e451056d784d903c7066d96"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/StatisticPersistenceRequestedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c78299fa6f49cd5608971cfdcc265058b7ccfd4b",
+      "size": 348,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/c78299fa6f49cd5608971cfdcc265058b7ccfd4b"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/StatisticPersistenceRequestedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c4515ee988639024b4b28cbb3e101cb635b711be",
+      "size": 125,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/c4515ee988639024b4b28cbb3e101cb635b711be"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/SubscriptionCancelledEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e188a23bea26341c526f74b0ff4d5776de640f6f",
+      "size": 307,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/e188a23bea26341c526f74b0ff4d5776de640f6f"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/SubscriptionCancelledEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c939c275cf97d040c6fd81fe9e40cb67b9d55aea",
+      "size": 389,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/c939c275cf97d040c6fd81fe9e40cb67b9d55aea"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/SubscriptionExpiredEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8fa35f24d19a502c2ddd5488a6334c388d4a22b5",
+      "size": 297,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/8fa35f24d19a502c2ddd5488a6334c388d4a22b5"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/SubscriptionExpiredEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "50523cc6549960bd50e93a7d5d7765802acb79ba",
+      "size": 292,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/50523cc6549960bd50e93a7d5d7765802acb79ba"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/SubscriptionPurchasedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9f359fd793700a44bc46d5327042475a840249a9",
+      "size": 307,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/9f359fd793700a44bc46d5327042475a840249a9"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/SubscriptionPurchasedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "20c28bcc214115ca80fe9cdb9d849a6b55f4dc73",
+      "size": 403,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/20c28bcc214115ca80fe9cdb9d849a6b55f4dc73"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/SubscriptionReactivatedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "60d84231751dee4f7a9b1e6d8de99617a13a2fe4",
+      "size": 317,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/60d84231751dee4f7a9b1e6d8de99617a13a2fe4"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/SubscriptionReactivatedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c358a4b90c0836295b9fddd3170f335efedda3a7",
+      "size": 231,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/c358a4b90c0836295b9fddd3170f335efedda3a7"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/SubscriptionReassignedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "cab0cd9a9e07b32913d2cd4ac629fb1ded05c73f",
+      "size": 312,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/cab0cd9a9e07b32913d2cd4ac629fb1ded05c73f"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/SubscriptionReassignedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ef87878a68d05650f05fb280738d363fe4c1ddd9",
+      "size": 222,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/ef87878a68d05650f05fb280738d363fe4c1ddd9"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/SubscriptionRefundedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "73d5a6ae6726e1d89ad0d6dd0ccca1492db89b0d",
+      "size": 302,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/73d5a6ae6726e1d89ad0d6dd0ccca1492db89b0d"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/SubscriptionRefundedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8deecc8e6e124bb360c3aff3eaa81e15364bbb47",
+      "size": 293,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/8deecc8e6e124bb360c3aff3eaa81e15364bbb47"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/SubscriptionRenewedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0b85d27757b59f7274b6c0d6f11b3df88cb2effe",
+      "size": 297,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/0b85d27757b59f7274b6c0d6f11b3df88cb2effe"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/SubscriptionRenewedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6a55cfd329e2acedff9be024188d72f13a6e5711",
+      "size": 243,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/6a55cfd329e2acedff9be024188d72f13a6e5711"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/SubscriptionRevertRequestedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8ebab015c66b75da9b5d206771acc0feba55c333",
+      "size": 338,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/8ebab015c66b75da9b5d206771acc0feba55c333"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/SubscriptionRevertRequestedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f231a8d59fe5b99dca92cae6da340a1c79b40fa9",
+      "size": 81,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/f231a8d59fe5b99dca92cae6da340a1c79b40fa9"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/SubscriptionStateFetchedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "52f4746c0d15ebe3b42c3a8c5f476f80add8d7cb",
+      "size": 323,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/52f4746c0d15ebe3b42c3a8c5f476f80add8d7cb"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/SubscriptionStateFetchedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0d052781905e4a7306b6012ba5f346f330e415bb",
+      "size": 275,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/0d052781905e4a7306b6012ba5f346f330e415bb"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/SubscriptionStateRequestedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "30397d0514104aa19e4553ae58aaf26884771712",
+      "size": 333,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/30397d0514104aa19e4553ae58aaf26884771712"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/SubscriptionStateRequestedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8e8fdf807beb011baca83ff04540700717ab67bd",
+      "size": 80,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/8e8fdf807beb011baca83ff04540700717ab67bd"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/SubscriptionSyncRequestedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "cc4f8c6edd8cadbf0ea7771538f45d08c139570b",
+      "size": 328,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/cc4f8c6edd8cadbf0ea7771538f45d08c139570b"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/SubscriptionSyncRequestedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "064d697681d09ef336d95215930b36a0ed7561b5",
+      "size": 276,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/064d697681d09ef336d95215930b36a0ed7561b5"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/UserAddedToSharedVaultEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "114e86e4b72ef940a0c39f4ef75421f94b4886ca",
+      "size": 314,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/114e86e4b72ef940a0c39f4ef75421f94b4886ca"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/UserAddedToSharedVaultEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "171c6f2da22a7c6edb0f692a3f71a728a5b765f2",
+      "size": 162,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/171c6f2da22a7c6edb0f692a3f71a728a5b765f2"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/UserDesignatedAsSurvivorInSharedVaultEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f0cdcbcf120e6e85c7ac10000b59c38f9805e904",
+      "size": 391,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/f0cdcbcf120e6e85c7ac10000b59c38f9805e904"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/UserDesignatedAsSurvivorInSharedVaultEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "960d5c137672a80749a157d30d6271bedb352d93",
+      "size": 136,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/960d5c137672a80749a157d30d6271bedb352d93"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/UserDisabledSessionUserAgentLoggingEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "daf91adf65343a8e2176ab033dd2b3bc347ca81d",
+      "size": 380,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/daf91adf65343a8e2176ab033dd2b3bc347ca81d"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/UserDisabledSessionUserAgentLoggingEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7f34b4b988efe1cdc970544993ad53e5de4c4921",
+      "size": 104,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/7f34b4b988efe1cdc970544993ad53e5de4c4921"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/UserEmailChangedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8d07434432889062224a31e40afcf198e9f90b26",
+      "size": 282,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/8d07434432889062224a31e40afcf198e9f90b26"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/UserEmailChangedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d359438f9cadea3b044b618bc9a0bdad56cdd61d",
+      "size": 107,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/d359438f9cadea3b044b618bc9a0bdad56cdd61d"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/UserInvitedToSharedVaultEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "83893683ac0037c85948a2322c501508310f90ed",
+      "size": 325,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/83893683ac0037c85948a2322c501508310f90ed"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/UserInvitedToSharedVaultEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "274b827503967d2955221460ddfcd6979c7714d2",
+      "size": 286,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/274b827503967d2955221460ddfcd6979c7714d2"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/UserRegisteredEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a2fc044c75e3adc6ef58f29992813cbaac59b250",
+      "size": 271,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/a2fc044c75e3adc6ef58f29992813cbaac59b250"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/UserRegisteredEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8ac33e582a05d5323f773b7ce3d82bbd1ed1a33c",
+      "size": 109,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/8ac33e582a05d5323f773b7ce3d82bbd1ed1a33c"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/UserRemovedFromSharedVaultEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a28d03dba3db496544c72e9bc5998ec62749a015",
+      "size": 334,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/a28d03dba3db496544c72e9bc5998ec62749a015"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/UserRemovedFromSharedVaultEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9add5fc2bbcdb3aacf18777c3e50486b5b630c51",
+      "size": 105,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/9add5fc2bbcdb3aacf18777c3e50486b5b630c51"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/UserRolesChangedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "be2bee0d40055edec92226886cfdac5df42115d5",
+      "size": 282,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/be2bee0d40055edec92226886cfdac5df42115d5"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/UserRolesChangedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "30c265c387596c77d83fcc207d4ede3a2f354534",
+      "size": 130,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/30c265c387596c77d83fcc207d4ede3a2f354534"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/WebSocketMessageRequestedEvent.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3f4cb8bdc557cbaf07c6f6ef29d9b3f7c701ef8e",
+      "size": 328,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/3f4cb8bdc557cbaf07c6f6ef29d9b3f7c701ef8e"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Event/WebSocketMessageRequestedEventPayload.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "460c51c93d35e590321cb80026d8f9896c9c1eaa",
+      "size": 130,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/460c51c93d35e590321cb80026d8f9896c9c1eaa"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Handler/DomainEventHandlerInterface.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "45a8d41f3d4f13a94517f343848708fdcf14fa0b",
+      "size": 172,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/45a8d41f3d4f13a94517f343848708fdcf14fa0b"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Handler/DomainEventMessageHandlerInterface.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8ee529c80370eca8947a75a3da4d91682aa4b655",
+      "size": 247,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/8ee529c80370eca8947a75a3da4d91682aa4b655"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Publisher/DomainEventPublisherInterface.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "59e595e51e32a9635e19a789f608ce81b9471dc3",
+      "size": 175,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/59e595e51e32a9635e19a789f608ce81b9471dc3"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/Subscriber/DomainEventSubscriberInterface.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "575b5a87d90d46cc932b3fd494576f0c5c17f274",
+      "size": 83,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/575b5a87d90d46cc932b3fd494576f0c5c17f274"
+    },
+    {
+      "path": "packages/domain-events/src/Domain/index.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "864eb4fd163ef67f94161ac05236cb2d009dc360",
+      "size": 7785,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/864eb4fd163ef67f94161ac05236cb2d009dc360"
+    },
+    {
+      "path": "packages/domain-events/src/index.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "920deacdb32a1f89ed2cb0a115ba4dab231a96db",
+      "size": 25,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/920deacdb32a1f89ed2cb0a115ba4dab231a96db"
+    },
+    {
+      "path": "packages/domain-events/tsconfig.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8d2588d39c251ad828fbfb49565538fa28e76992",
+      "size": 169,
+      "url": "https://api.github.com/repos/standardnotes/server/git/blobs/8d2588d39c251ad828fbfb49565538fa28e76992"
+    }
+  ],
+  "licenseSha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+}
