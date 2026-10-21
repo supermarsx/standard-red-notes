@@ -1,6 +1,6 @@
 import { classNames } from '@standardnotes/snjs'
-import { ReactNode, useState, useRef, useEffect } from 'react'
-import { Tooltip, TooltipAnchor, TooltipOptions, TooltipStoreProps, useTooltipStore } from '@ariakit/react'
+import { ReactNode, useState, useRef, useEffect, useId, isValidElement } from 'react'
+import { Tooltip, TooltipAnchor, TooltipOptions, useTooltipStore } from '@ariakit/react'
 import { Slot } from '@radix-ui/react-slot'
 import { MutuallyExclusiveMediaQueryBreakpoints, useMediaQuery } from '@/Hooks/useMediaQuery'
 import { getPositionedPopoverStyles } from '../Popover/GetPositionedPopoverStyles'
@@ -29,12 +29,17 @@ const StyledTooltip = ({
   showOnMobile?: boolean
   showOnHover?: boolean
   interactive?: boolean
-  type?: TooltipStoreProps['type']
+  type?: 'label' | 'description'
   side?: PopoverSide
   documentElement?: HTMLElement
   closeOnClick?: boolean
 } & Partial<TooltipOptions>) => {
   const [forceOpen, setForceOpen] = useState<boolean | undefined>()
+  const labelId = useId()
+  const childProps = isValidElement<{ 'aria-label'?: string; 'aria-labelledby'?: string }>(children)
+    ? children.props
+    : undefined
+  const providesLabel = type === 'label' && !childProps?.['aria-label'] && !childProps?.['aria-labelledby']
 
   const isMobile = useMediaQuery(MutuallyExclusiveMediaQueryBreakpoints.sm)
   const tooltip = useTooltipStore({
@@ -42,7 +47,6 @@ const StyledTooltip = ({
     hideTimeout: 0,
     skipTimeout: 0,
     open: forceOpen,
-    type,
   })
 
   const anchorRef = useRef<HTMLElement>(null)
@@ -105,8 +109,14 @@ const StyledTooltip = ({
 
   return (
     <>
+      {providesLabel && (
+        <div id={labelId} hidden>
+          {label}
+        </div>
+      )}
       <TooltipAnchor
         {...clickProps}
+        aria-labelledby={providesLabel ? labelId : undefined}
         onBlur={() => setForceOpen(undefined)}
         store={tooltip}
         render={<Slot ref={anchorRef} />}
