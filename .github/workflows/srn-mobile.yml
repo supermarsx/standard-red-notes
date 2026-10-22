@@ -127,7 +127,7 @@ jobs:
             *) echo "Unsupported mobile workflow source: $GITHUB_EVENT_NAME $GITHUB_REF" >&2; exit 1 ;;
           esac
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "26"
           package-manager-cache: false
@@ -198,7 +198,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload mobile impact evidence
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: srn-mobile-impact-${{ github.run_id }}
           path: release-impact.json
@@ -288,7 +288,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: app/.nvmrc
           package-manager-cache: false
@@ -373,7 +373,7 @@ jobs:
           grep -Eq '^[0-9a-f]{64}$' release-fingerprint/srn-mobile.fingerprint
 
       - name: Upload mobile release fingerprint
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: srn-mobile-platform-fingerprint
           path: release-fingerprint/srn-mobile.fingerprint
@@ -475,7 +475,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: app/.nvmrc
           package-manager-cache: false
@@ -493,13 +493,13 @@ jobs:
             ${{ runner.os }}-yarn-
 
       - name: Set up Java
-        uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5.5.0
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: zulu
           java-version: "17"
 
       - name: Set up Ruby and Fastlane
-        uses: ruby/setup-ruby@003a5c4d8d6321bd302e38f6f0ec593f77f06600 # v1.319.0
+        uses: ruby/setup-ruby@824c0e29fdfc7d689c191c27acc969d2d04b7dd8 # v1.331.0
         with:
           ruby-version: "3.4.7"
           bundler-cache: true
@@ -678,7 +678,7 @@ jobs:
             > "$stage/standard-red-notes-android-identity.json"
 
       - name: Upload validated Android artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: srn-mobile-platform-android
           path: ${{ runner.temp }}/srn-mobile-android/*
@@ -704,7 +704,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: app/.nvmrc
           package-manager-cache: false
@@ -727,7 +727,7 @@ jobs:
           xcode-version: "26"
 
       - name: Set up Ruby and Fastlane
-        uses: ruby/setup-ruby@003a5c4d8d6321bd302e38f6f0ec593f77f06600 # v1.319.0
+        uses: ruby/setup-ruby@824c0e29fdfc7d689c191c27acc969d2d04b7dd8 # v1.331.0
         with:
           ruby-version: "3.4.7"
           bundler-cache: true
@@ -1007,7 +1007,7 @@ jobs:
             > "$stage/standard-red-notes-ios-identity.json"
 
       - name: Upload validated iOS artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: srn-mobile-platform-ios
           path: ${{ runner.temp }}/srn-mobile-ios/*
@@ -1021,7 +1021,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download both validated platform artifacts and fingerprint
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: srn-mobile-platform-*
           path: validated
@@ -1081,7 +1081,7 @@ jobs:
           sha256sum --check SHA256SUMS.txt
 
       - name: Upload complete pre-publication payload
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: srn-mobile-validated-release
           path: validated/*
@@ -1107,13 +1107,13 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: ruby/setup-ruby@003a5c4d8d6321bd302e38f6f0ec593f77f06600 # v1.319.0
+      - uses: ruby/setup-ruby@824c0e29fdfc7d689c191c27acc969d2d04b7dd8 # v1.331.0
         with:
           ruby-version: "3.4.7"
           bundler-cache: true
           working-directory: app/packages/mobile
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: srn-mobile-validated-release
           path: validated
@@ -1209,7 +1209,7 @@ jobs:
 
       - name: Persist Google Play intent before external mutation
         if: steps.play_preflight.outputs.create_marker == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: srn-mobile-google-play-intent-${{ github.run_id }}
           path: ${{ runner.temp }}/google-play-intent/marker.json
@@ -1282,13 +1282,13 @@ jobs:
         with:
           xcode-version: "26"
 
-      - uses: ruby/setup-ruby@003a5c4d8d6321bd302e38f6f0ec593f77f06600 # v1.319.0
+      - uses: ruby/setup-ruby@824c0e29fdfc7d689c191c27acc969d2d04b7dd8 # v1.331.0
         with:
           ruby-version: "3.4.7"
           bundler-cache: true
           working-directory: app/packages/mobile
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: srn-mobile-validated-release
           path: validated
@@ -1400,7 +1400,7 @@ jobs:
 
       - name: Persist App Store intent before external mutation
         if: steps.ios_preflight.outputs.create_marker == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: srn-mobile-app-store-intent-${{ github.run_id }}
           path: ${{ runner.temp }}/app-store-intent/marker.json
@@ -1481,13 +1481,13 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: ruby/setup-ruby@003a5c4d8d6321bd302e38f6f0ec593f77f06600 # v1.319.0
+      - uses: ruby/setup-ruby@824c0e29fdfc7d689c191c27acc969d2d04b7dd8 # v1.331.0
         with:
           ruby-version: "3.4.7"
           bundler-cache: true
           working-directory: app/packages/mobile
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: srn-mobile-validated-release
           path: validated
@@ -1603,7 +1603,7 @@ jobs:
 
       - name: Persist TestFlight distribution intent before external mutation
         if: steps.distribution_preflight.outputs.create_marker == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: srn-mobile-testflight-distribution-intent-${{ github.run_id }}
           path: ${{ runner.temp }}/testflight-distribution-intent/marker.json
@@ -1669,13 +1669,13 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: ruby/setup-ruby@003a5c4d8d6321bd302e38f6f0ec593f77f06600 # v1.319.0
+      - uses: ruby/setup-ruby@824c0e29fdfc7d689c191c27acc969d2d04b7dd8 # v1.331.0
         with:
           ruby-version: "3.4.7"
           bundler-cache: true
           working-directory: app/packages/mobile
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: srn-mobile-validated-release
           path: validated
@@ -1794,7 +1794,7 @@ jobs:
 
       - name: Persist App Store submission intent before external mutation
         if: steps.submission_preflight.outputs.create_marker == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: srn-mobile-app-store-submission-intent-${{ github.run_id }}
           path: ${{ runner.temp }}/app-store-submission-intent/marker.json
@@ -1847,7 +1847,7 @@ jobs:
       contents: write
     steps:
       - name: Download validated mobile artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: srn-mobile-validated-release
           path: artifacts
