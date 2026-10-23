@@ -299,6 +299,8 @@ export class WebSocketsService extends AbstractService<
   private reconnectAttempts = 0
   private lastReconnectIfClosedDialAt = 0
   private reconnectTimeout?: ReturnType<typeof setTimeout>
+  private handshakeTimeout?: ReturnType<typeof setTimeout>
+  private readonly HANDSHAKE_TIMEOUT_MS = 20_000
   private stableConnectionTimeout?: ReturnType<typeof setTimeout>
   private pongDeadlineTimeout?: ReturnType<typeof setTimeout>
   /**
@@ -589,6 +591,26 @@ export class WebSocketsService extends AbstractService<
         }
       }
 
+      // A suspended browser or interrupted network can leave CONNECTING without
+      // either terminal event. Do not let that socket hold the dial guard forever.
+      this.handshakeTimeout = setTimeout(() => {
+        this.handshakeTimeout = undefined
+        if (generation !== this.dialGeneration || this.webSocket !== webSocket || !this.connecting) {
+          return
+        }
+        this.dialGeneration += 1
+        this.connecting = false
+        this.webSocket = undefined
+        try {
+          webSocket.close(this.HALF_OPEN_CLOSE_CODE, 'WebSocket handshake timed out')
+        } catch {
+          // Some browsers cannot close an interrupted handshake. Detaching it
+          // still fences its eventual callbacks from the replacement socket.
+        }
+        void this.notifyEvent(WebSocketsServiceEvent.WebSocketDidClose)
+        this.scheduleReconnect()
+      }, this.HANDSHAKE_TIMEOUT_MS)
+
       // Deliberately DO NOT clear `connecting` here: the socket is still
       // CONNECTING. It is cleared only once onWebSocketOpen / onWebSocketClose
       // fires, so a concurrent dial during the handshake is coalesced away
@@ -607,6 +629,7 @@ export class WebSocketsService extends AbstractService<
   }
 
   private onWebSocketOpen(): void {
+    this.clearHandshakeTimeout()
     // The dial is now resolved (socket OPEN): release the connecting guard so a
     // later dial can proceed. From here isWebSocketConnectionOpen() coalesces
     // duplicate triggers instead.
@@ -633,6 +656,13 @@ export class WebSocketsService extends AbstractService<
     if (this.reconnectTimeout) {
       clearTimeout(this.reconnectTimeout)
       this.reconnectTimeout = undefined
+    }
+  }
+
+  private clearHandshakeTimeout(): void {
+    if (this.handshakeTimeout !== undefined) {
+      clearTimeout(this.handshakeTimeout)
+      this.handshakeTimeout = undefined
     }
   }
 
@@ -688,6 +718,7 @@ export class WebSocketsService extends AbstractService<
   }
 
   public closeWebSocketConnection(): void {
+    this.clearHandshakeTimeout()
     // An explicit close must cancel any pending reconnect so we don't re-dial a
     // socket the app just asked us to tear down (e.g. on sign-out), and must
     // abandon a dial that is still minting its token.
@@ -1053,6 +1084,7 @@ export class WebSocketsService extends AbstractService<
   }
 
   private onWebSocketClose(event: { code: number }) {
+    this.clearHandshakeTimeout()
     // The dial is resolved (socket CLOSED) on every code path below: release the
     // connecting guard so the next dial (a reconnect, or an explicit restart) can
     // proceed. Leaving it set here would dead-lock the service permanently.

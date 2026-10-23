@@ -739,6 +739,29 @@ describe('webSocketsService', () => {
       expect(setIntervalSpy).toHaveBeenCalledTimes(1)
     })
 
+    it('abandons a silent handshake and reconnects without a page refresh', async () => {
+      jest.spyOn(Math, 'random').mockReturnValue(0.5)
+      const service = createDialService()
+      await service.startWebSocketConnection()
+      const abandoned = FakeWebSocket.instances[0]
+      await jest.advanceTimersByTimeAsync(21_000)
+      expect(FakeWebSocket.instances).toHaveLength(2)
+      const recovered = FakeWebSocket.instances[1]
+      recovered.fireOpen()
+      abandoned.fireOpen()
+      abandoned.fireClose(1006)
+      expect(service.isWebSocketConnectionOpen()).toBe(true)
+      expect(FakeWebSocket.instances).toHaveLength(2)
+    })
+
+    it('cancels the handshake deadline on explicit shutdown', async () => {
+      const service = createDialService()
+      await service.startWebSocketConnection()
+      service.closeWebSocketConnection()
+      await jest.advanceTimersByTimeAsync(60_000)
+      expect(FakeWebSocket.instances).toHaveLength(1)
+    })
+
     it('clears connecting on the failed-token terminal path so a later dial is not dead-locked', async () => {
       const service = createDialService()
 
@@ -1247,7 +1270,7 @@ describe('webSocketsService', () => {
 
       // The abandoned socket's eventual 1006 is ignored.
       ws.fireClose(1006)
-      expect(jest.getTimerCount()).toBe(0)
+      expect(jest.getTimerCount()).toBe(1) // Replacement handshake deadline only.
       expect(sockets()).toHaveLength(2)
     })
 
@@ -1300,7 +1323,7 @@ describe('webSocketsService', () => {
       service.reconnectIfClosed()
       await flush()
       expect(sockets()).toHaveLength(2)
-      expect(jest.getTimerCount()).toBe(0)
+      expect(jest.getTimerCount()).toBe(1) // Backoff replaced by the handshake deadline.
 
       // Attempt counter was reset: the next drop backs off from 1 s again.
       sockets()[1].fireClose(1006)
