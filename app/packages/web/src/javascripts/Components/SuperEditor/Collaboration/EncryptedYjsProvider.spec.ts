@@ -1842,6 +1842,9 @@ describe('EncryptedYjsProvider convergence', () => {
       }
       const doc = new Y.Doc()
       doc.getText('content').insert(0, 'original')
+      const clientId = doc.clientID
+      const selection = Y.createRelativePositionFromTypeIndex(doc.getText('content'), 3)
+      const reactivate = jest.fn().mockResolvedValue(lease)
       const provider = new EncryptedYjsProvider(
         doc,
         'retained-peer-room',
@@ -1870,7 +1873,7 @@ describe('EncryptedYjsProvider convergence', () => {
           activeLease: { ...lease, requestId: 'initial-retained-peer', shouldBootstrap: true, release: jest.fn() },
           shouldBootstrap: true,
           validateAttachment: () => true,
-          reactivate: jest.fn().mockResolvedValue(lease),
+          reactivate,
           onFatal: jest.fn(),
           onBootstrapRetry,
           setCanonicalOwnership,
@@ -1880,12 +1883,18 @@ describe('EncryptedYjsProvider convergence', () => {
         provider.connect()
         await settle(provider)
         expect(provider.isCanonicalReady()).toBe(true)
+        status?.(true)
+        await settle(provider)
+        expect(reactivate).not.toHaveBeenCalled()
         connected = false
+        status?.(false)
         status?.(false)
         doc.getText('content').insert(8, ' + offline edit')
         connected = true
         status?.(true)
+        status?.(true)
         await settle(provider)
+        expect(reactivate).toHaveBeenCalledTimes(1)
         const request = sent.find((frame): frame is Extract<CollabFrame, { t: 'yjs-retry' }> => frame.t === 'yjs-retry')
         expect(request).toBeDefined()
         expect(setCanonicalOwnership).toHaveBeenLastCalledWith(true)
@@ -1900,6 +1909,9 @@ describe('EncryptedYjsProvider convergence', () => {
         expect(provider.isCanonicalReady()).toBe(true)
         expect(setCanonicalOwnership).toHaveBeenLastCalledWith(true)
         expect(doc.getText('content').toString()).toBe('original + offline edit')
+        expect(provider.doc).toBe(doc)
+        expect(doc.clientID).toBe(clientId)
+        expect(Y.createAbsolutePositionFromRelativePosition(selection, doc)?.index).toBe(3)
         expect(provider.getLastSyncFailure()).toBeUndefined()
       } finally {
         provider.destroy()
@@ -1986,6 +1998,11 @@ describe('EncryptedYjsProvider convergence', () => {
       expect(release).toHaveBeenCalledTimes(1)
       expect(provider.isRoomJoined()).toBe(false)
       expect(doc.getText('draft').toString()).toBe('retained edits')
+      // A duplicate open notification must not reset the exhausted retry
+      // ladder or turn its cooldown into an immediate authorization loop.
+      status?.(true)
+      await Promise.resolve()
+      expect(reactivate).toHaveBeenCalledTimes(6)
       await jest.advanceTimersByTimeAsync(14_999)
       expect(reactivate).toHaveBeenCalledTimes(6)
       await jest.advanceTimersByTimeAsync(1)

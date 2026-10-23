@@ -173,6 +173,7 @@ export class EncryptedYjsProvider implements Provider {
   private unsubscribe: (() => void) | null = null
   private unsubscribeStatus: (() => void) | null = null
   private connected = false
+  private transportConnected = false
   private joined = false
   private joinRequestId: string
   private initialCapabilityConsumed = false
@@ -490,6 +491,7 @@ export class EncryptedYjsProvider implements Provider {
     }
     this.transportGeneration += 1
     this.connected = true
+    this.transportConnected = this.channel.isConnected()
     this.setCanonicalOwnership(false)
 
     this.doc.on('update', this.onLocalDocUpdate)
@@ -1003,9 +1005,12 @@ export class EncryptedYjsProvider implements Provider {
   }
 
   private readonly onTransportStatus = (connected: boolean): void => {
-    if (!this.connected) {
+    if (!this.connected || this.transportConnected === connected) {
       return
     }
+    // Status observers may repeat the current state. Only a real transition
+    // invalidates in-flight authorization or starts a new retry budget.
+    this.transportConnected = connected
     this.transportGeneration += 1
     const generation = this.transportGeneration
     if (connected) {
