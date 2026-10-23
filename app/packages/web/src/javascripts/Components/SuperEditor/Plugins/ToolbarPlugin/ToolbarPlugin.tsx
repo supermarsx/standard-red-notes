@@ -580,10 +580,13 @@ const ToolbarPlugin = ({
   noteUuid,
   note,
   flushChanges,
+  retainWhileReadonly = false,
 }: {
   noteUuid?: string
   note?: SNNote
   flushChanges?: () => void
+  /** Keep an established collaborative ribbon stable during recovery, with all controls inert. */
+  retainWhileReadonly?: boolean
 }) => {
   const { t } = useTranslation('editor')
   const application = useApplication()
@@ -594,6 +597,7 @@ const ToolbarPlugin = ({
   const [editor] = useLexicalComposerContext()
   const [activeEditor, setActiveEditor] = useState(editor)
   const [isEditable, setIsEditable] = useState(() => editor.isEditable())
+  const [hasBeenEditable, setHasBeenEditable] = useState(() => editor.isEditable())
 
   const [blockType, setBlockType] = useState<keyof typeof blockTypeToBlockName>('paragraph')
   // The anchor block's stamped inline style string, so the block-style gallery can
@@ -1785,6 +1789,9 @@ const ToolbarPlugin = ({
     return mergeRegister(
       editor.registerEditableListener((editable) => {
         setIsEditable(editable)
+        if (editable) {
+          setHasBeenEditable(true)
+        }
       }),
       editor.registerCommand(
         SELECTION_CHANGE_COMMAND,
@@ -3466,15 +3473,18 @@ const ToolbarPlugin = ({
   // one exception; see the activation effect below. (The separate line is kept
   // only for the non-ribbon floating selection toolbar, further below.)
   const hasContextualTab = canShowAllItems && !!effectiveContextualWidget && contextualButtons.length > 0
+  const showToolbarControls = isEditable || (retainWhileReadonly && hasBeenEditable && isToolbarFixedToTop && !isMobile)
   const ribbonTabs = [
     ...superGroupTabs
-      .filter((tab) => isEditable && tab.id !== 'review' && tab.id !== 'checklistTab')
+      .filter((tab) => showToolbarControls && tab.id !== 'review' && tab.id !== 'checklistTab')
       .map((tab) => ({ id: tab.id as string, label: tab.label })),
-    ...(note && isEditable ? [{ id: 'review', label: 'Review' }] : []),
+    ...(note && showToolbarControls ? [{ id: 'review', label: 'Review' }] : []),
     ...superGroupTabs
-      .filter((tab) => isEditable && tab.id === 'checklistTab')
+      .filter((tab) => showToolbarControls && tab.id === 'checklistTab')
       .map((tab) => ({ id: tab.id as string, label: tab.label })),
-    ...(hasContextualTab && isEditable ? [{ id: CONTEXTUAL_TAB_ID, label: effectiveContextualWidget!.label }] : []),
+    ...(hasContextualTab && showToolbarControls
+      ? [{ id: CONTEXTUAL_TAB_ID, label: effectiveContextualWidget!.label }]
+      : []),
   ]
   const effectiveTabId =
     activeTabId && ribbonTabs.some((tab) => tab.id === activeTabId) ? activeTabId : (ribbonTabs[0]?.id ?? null)
@@ -3736,11 +3746,12 @@ const ToolbarPlugin = ({
 
   return (
     <>
-      {modal}
+      {isEditable && modal}
       <div
         className={classNames(
           'bg-contrast',
-          !isEditable ? 'hidden opacity-0' : '',
+          !showToolbarControls ? 'hidden opacity-0' : '',
+          showToolbarControls && !isEditable && 'opacity-60',
           isMobile && !canShowToolbarOnMobile ? 'hidden' : '',
           !isMobile && 'border-border bg-default border-b',
           !isMobile
@@ -3758,6 +3769,20 @@ const ToolbarPlugin = ({
           // toolbar's class attribute is the same string it has always been.
           isAutoHideActive && 'relative !border-b-0 !pb-0',
         )}
+        inert={!isEditable}
+        aria-disabled={!isEditable}
+        onClickCapture={(event) => {
+          if (!isEditable) {
+            event.preventDefault()
+            event.stopPropagation()
+          }
+        }}
+        onKeyDownCapture={(event) => {
+          if (!isEditable) {
+            event.preventDefault()
+            event.stopPropagation()
+          }
+        }}
         id="super-mobile-toolbar"
         ref={containerRef}
         // Drive every toolbar icon's size from the user's SuperToolbarIconSize
@@ -3851,7 +3876,7 @@ const ToolbarPlugin = ({
                 store={utilityToolbarStore}
                 aria-label="AI change tools"
                 inert={!isEditable}
-                style={!isEditable ? { visibility: 'hidden' } : undefined}
+                style={!showToolbarControls ? { visibility: 'hidden' } : undefined}
               >
                 <AssistantChangesToolbar noteUuid={noteUuid} editor={activeEditor} />
               </Toolbar>
@@ -3888,7 +3913,7 @@ const ToolbarPlugin = ({
                 'data-[super-toolbar-autohide=revealed]:pointer-events-auto data-[super-toolbar-autohide=revealed]:visible data-[super-toolbar-autohide=revealed]:opacity-100 data-[super-toolbar-autohide=revealed]:transition-opacity motion-reduce:data-[super-toolbar-autohide=revealed]:transition-none',
             )}
           >
-            {isReviewActive || !isEditable ? null : isContextualActive ? (
+            {isReviewActive || !showToolbarControls ? null : isContextualActive ? (
               <Toolbar
                 // Mirror the normal super-group layout: spaced, captioned segment
                 // blocks instead of one flat run of buttons.
@@ -4282,7 +4307,7 @@ const ToolbarPlugin = ({
       <Popover
         title={t('tableOfContentsLower')}
         anchorElement={tocAnchorRef}
-        open={isTOCOpen}
+        open={isEditable && isTOCOpen}
         togglePopover={() => setIsTOCOpen(!isTOCOpen)}
         side={isMobile ? 'top' : 'bottom'}
         align="start"
@@ -4344,7 +4369,7 @@ const ToolbarPlugin = ({
       <Popover
         title={t('blockStyle')}
         anchorElement={textStyleAnchorRef}
-        open={isTextStyleMenuOpen}
+        open={isEditable && isTextStyleMenuOpen}
         togglePopover={() => setIsTextStyleMenuOpen(!isTextStyleMenuOpen)}
         side={isMobile ? 'top' : 'bottom'}
         align="start"
@@ -4442,11 +4467,14 @@ const ToolbarPlugin = ({
       {/* Standard Red Notes: the typography-profile preview-square gallery now
           renders INLINE in the toolbar's BlockStyle group (see the activeGroups
           renderer); only the style editor modal is hosted here. */}
-      <TypographyStyleEditorModal isOpen={isTypographyEditorOpen} close={() => setIsTypographyEditorOpen(false)} />
+      <TypographyStyleEditorModal
+        isOpen={isEditable && isTypographyEditorOpen}
+        close={() => setIsTypographyEditorOpen(false)}
+      />
       <Popover
         title={t('alignment')}
         anchorElement={alignmentAnchorRef}
-        open={isAlignmentMenuOpen}
+        open={isEditable && isAlignmentMenuOpen}
         togglePopover={() => setIsAlignmentMenuOpen(!isAlignmentMenuOpen)}
         side={isMobile ? 'top' : 'bottom'}
         align="start"
@@ -4491,7 +4519,7 @@ const ToolbarPlugin = ({
       <Popover
         title={t('textColor')}
         anchorElement={textColorAnchorRef}
-        open={isTextColorMenuOpen}
+        open={isEditable && isTextColorMenuOpen}
         togglePopover={() => setIsTextColorMenuOpen(!isTextColorMenuOpen)}
         side={isMobile ? 'top' : 'bottom'}
         align="start"
@@ -4555,7 +4583,7 @@ const ToolbarPlugin = ({
       <Popover
         title={t('highlightColor')}
         anchorElement={bgColorAnchorRef}
-        open={isBgColorMenuOpen}
+        open={isEditable && isBgColorMenuOpen}
         togglePopover={() => setIsBgColorMenuOpen(!isBgColorMenuOpen)}
         side={isMobile ? 'top' : 'bottom'}
         align="start"
@@ -4605,7 +4633,7 @@ const ToolbarPlugin = ({
       <Popover
         title={t('fontFamily')}
         anchorElement={fontFamilyAnchorRef}
-        open={isFontFamilyMenuOpen}
+        open={isEditable && isFontFamilyMenuOpen}
         togglePopover={() => setIsFontFamilyMenuOpen(!isFontFamilyMenuOpen)}
         side={isMobile ? 'top' : 'bottom'}
         align="start"
@@ -4686,7 +4714,7 @@ const ToolbarPlugin = ({
       <Popover
         title={t('fontFamily')}
         anchorElement={fontWeightAnchorRef}
-        open={isFontWeightMenuOpen}
+        open={isEditable && isFontWeightMenuOpen}
         togglePopover={() => setIsFontWeightMenuOpen(!isFontWeightMenuOpen)}
         side={isMobile ? 'top' : 'bottom'}
         align="start"
@@ -4722,7 +4750,7 @@ const ToolbarPlugin = ({
       <Popover
         title={t('fontSize')}
         anchorElement={fontSizeAnchorRef}
-        open={isFontSizeMenuOpen}
+        open={isEditable && isFontSizeMenuOpen}
         togglePopover={() => setIsFontSizeMenuOpen(!isFontSizeMenuOpen)}
         side={isMobile ? 'top' : 'bottom'}
         align="start"
@@ -4757,7 +4785,7 @@ const ToolbarPlugin = ({
       <Popover
         title="Page size"
         anchorElement={pageSizeAnchorRef}
-        open={isPageSizeMenuOpen}
+        open={isEditable && isPageSizeMenuOpen}
         togglePopover={() => setIsPageSizeMenuOpen(!isPageSizeMenuOpen)}
         side={isMobile ? 'top' : 'bottom'}
         align="start"
@@ -4813,7 +4841,7 @@ const ToolbarPlugin = ({
       <Popover
         title="Margins"
         anchorElement={pageMarginsAnchorRef}
-        open={isPageMarginsMenuOpen}
+        open={isEditable && isPageMarginsMenuOpen}
         togglePopover={() => setIsPageMarginsMenuOpen(!isPageMarginsMenuOpen)}
         side={isMobile ? 'top' : 'bottom'}
         align="start"
@@ -4866,7 +4894,7 @@ const ToolbarPlugin = ({
       <Popover
         title="Columns"
         anchorElement={pageColumnsAnchorRef}
-        open={isPageColumnsMenuOpen}
+        open={isEditable && isPageColumnsMenuOpen}
         togglePopover={() => setIsPageColumnsMenuOpen(!isPageColumnsMenuOpen)}
         side={isMobile ? 'top' : 'bottom'}
         align="start"
@@ -4926,7 +4954,7 @@ const ToolbarPlugin = ({
       <Popover
         title="Header, footer & page numbers"
         anchorElement={pageHeaderFooterAnchorRef}
-        open={isPageHeaderFooterMenuOpen}
+        open={isEditable && isPageHeaderFooterMenuOpen}
         togglePopover={() => setIsPageHeaderFooterMenuOpen(!isPageHeaderFooterMenuOpen)}
         side={isMobile ? 'top' : 'bottom'}
         align="start"
@@ -5210,7 +5238,7 @@ const ToolbarPlugin = ({
       <Popover
         title="Checklist settings"
         anchorElement={checklistSettingsAnchorRef}
-        open={isChecklistSettingsMenuOpen}
+        open={isEditable && isChecklistSettingsMenuOpen}
         togglePopover={() => setIsChecklistSettingsMenuOpen(!isChecklistSettingsMenuOpen)}
         side={isMobile ? 'top' : 'bottom'}
         align="start"
@@ -5250,7 +5278,7 @@ const ToolbarPlugin = ({
       <Popover
         title="Mermaid settings"
         anchorElement={mermaidSettingsAnchorRef}
-        open={isMermaidSettingsMenuOpen && mermaidSelection !== null}
+        open={isEditable && isMermaidSettingsMenuOpen && mermaidSelection !== null}
         togglePopover={() => setIsMermaidSettingsMenuOpen(!isMermaidSettingsMenuOpen)}
         side={isMobile ? 'top' : 'bottom'}
         align="start"
@@ -5298,7 +5326,7 @@ const ToolbarPlugin = ({
       <Popover
         title="Customise diagram"
         anchorElement={mermaidCustomise?.anchor ?? null}
-        open={isMermaidCustomiseOpen}
+        open={isEditable && isMermaidCustomiseOpen}
         togglePopover={() => setMermaidCustomise(null)}
         side={isMobile ? 'top' : 'bottom'}
         align="start"
@@ -5326,7 +5354,7 @@ const ToolbarPlugin = ({
       <Popover
         title={t('changeCase')}
         anchorElement={caseAnchorRef}
-        open={isCaseMenuOpen}
+        open={isEditable && isCaseMenuOpen}
         togglePopover={() => setIsCaseMenuOpen(!isCaseMenuOpen)}
         side={isMobile ? 'top' : 'bottom'}
         align="start"
@@ -5364,7 +5392,7 @@ const ToolbarPlugin = ({
       <Popover
         title={t('sortAndDedupeLines')}
         anchorElement={sortAnchorRef}
-        open={isSortMenuOpen}
+        open={isEditable && isSortMenuOpen}
         togglePopover={() => setIsSortMenuOpen(!isSortMenuOpen)}
         side={isMobile ? 'top' : 'bottom'}
         align="start"
@@ -5412,7 +5440,7 @@ const ToolbarPlugin = ({
       <Popover
         title={t('outlineTextStroke')}
         anchorElement={outlineAnchorRef}
-        open={isOutlineMenuOpen}
+        open={isEditable && isOutlineMenuOpen}
         togglePopover={() => setIsOutlineMenuOpen(!isOutlineMenuOpen)}
         side={isMobile ? 'top' : 'bottom'}
         align="start"
@@ -5452,7 +5480,7 @@ const ToolbarPlugin = ({
       <Popover
         title={t('letterSpacingKerning')}
         anchorElement={kerningAnchorRef}
-        open={isKerningMenuOpen}
+        open={isEditable && isKerningMenuOpen}
         togglePopover={() => setIsKerningMenuOpen(!isKerningMenuOpen)}
         side={isMobile ? 'top' : 'bottom'}
         align="start"
@@ -5485,7 +5513,7 @@ const ToolbarPlugin = ({
       <Popover
         title={t('wordSpacing')}
         anchorElement={wordSpacingAnchorRef}
-        open={isWordSpacingMenuOpen}
+        open={isEditable && isWordSpacingMenuOpen}
         togglePopover={() => setIsWordSpacingMenuOpen(!isWordSpacingMenuOpen)}
         side={isMobile ? 'top' : 'bottom'}
         align="start"
@@ -5517,7 +5545,7 @@ const ToolbarPlugin = ({
       <Popover
         title={t('undoHistory')}
         anchorElement={undoAnchorRef}
-        open={isUndoMenuOpen}
+        open={isEditable && isUndoMenuOpen}
         togglePopover={() => setIsUndoMenuOpen(!isUndoMenuOpen)}
         side={isMobile ? 'top' : 'bottom'}
         align="start"
@@ -5547,7 +5575,7 @@ const ToolbarPlugin = ({
       <Popover
         title={t('redoHistory')}
         anchorElement={redoAnchorRef}
-        open={isRedoMenuOpen}
+        open={isEditable && isRedoMenuOpen}
         togglePopover={() => setIsRedoMenuOpen(!isRedoMenuOpen)}
         side={isMobile ? 'top' : 'bottom'}
         align="start"
@@ -5580,7 +5608,7 @@ const ToolbarPlugin = ({
       <Popover
         title={t('pasteOptions')}
         anchorElement={pasteAnchorRef}
-        open={isPasteMenuOpen}
+        open={isEditable && isPasteMenuOpen}
         togglePopover={() => setIsPasteMenuOpen(!isPasteMenuOpen)}
         side={isMobile ? 'top' : 'bottom'}
         align="start"
@@ -5614,7 +5642,7 @@ const ToolbarPlugin = ({
       <Popover
         title={t('copyOptions')}
         anchorElement={copyAnchorRef}
-        open={isCopyMenuOpen}
+        open={isEditable && isCopyMenuOpen}
         togglePopover={() => setIsCopyMenuOpen(!isCopyMenuOpen)}
         side={isMobile ? 'top' : 'bottom'}
         align="start"
@@ -5642,7 +5670,7 @@ const ToolbarPlugin = ({
       <Popover
         title={t('cutOptions')}
         anchorElement={cutAnchorRef}
-        open={isCutMenuOpen}
+        open={isEditable && isCutMenuOpen}
         togglePopover={() => setIsCutMenuOpen(!isCutMenuOpen)}
         side={isMobile ? 'top' : 'bottom'}
         align="start"
@@ -5673,7 +5701,7 @@ const ToolbarPlugin = ({
       <Popover
         title={t('paragraphLayoutTitle')}
         anchorElement={paragraphLayoutAnchorRef}
-        open={isParagraphLayoutMenuOpen}
+        open={isEditable && isParagraphLayoutMenuOpen}
         togglePopover={() => setIsParagraphLayoutMenuOpen(!isParagraphLayoutMenuOpen)}
         side={isMobile ? 'top' : 'bottom'}
         align="start"
@@ -5796,7 +5824,7 @@ const ToolbarPlugin = ({
       <Popover
         title={t('listStyle')}
         anchorElement={listStyleAnchorRef}
-        open={isListStyleMenuOpen}
+        open={isEditable && isListStyleMenuOpen}
         togglePopover={() => setIsListStyleMenuOpen(!isListStyleMenuOpen)}
         side={isMobile ? 'top' : 'bottom'}
         align="start"
@@ -5842,7 +5870,7 @@ const ToolbarPlugin = ({
       <Popover
         title={t('bulletedListMarkers')}
         anchorElement={bulletStyleAnchorRef}
-        open={isBulletStyleMenuOpen}
+        open={isEditable && isBulletStyleMenuOpen}
         togglePopover={toggleBulletStyleMenu}
         side={isMobile ? 'top' : 'bottom'}
         align="start"
@@ -5902,7 +5930,7 @@ const ToolbarPlugin = ({
       <Popover
         title={t('numberedListMarkers')}
         anchorElement={numberStyleAnchorRef}
-        open={isNumberStyleMenuOpen}
+        open={isEditable && isNumberStyleMenuOpen}
         togglePopover={() => setIsNumberStyleMenuOpen(!isNumberStyleMenuOpen)}
         side={isMobile ? 'top' : 'bottom'}
         align="start"
@@ -5932,7 +5960,7 @@ const ToolbarPlugin = ({
       <Popover
         title={t('multilevelList')}
         anchorElement={multilevelAnchorRef}
-        open={isMultilevelMenuOpen}
+        open={isEditable && isMultilevelMenuOpen}
         togglePopover={openMultilevelConfigurator}
         side={isMobile ? 'top' : 'bottom'}
         align="start"
@@ -6027,7 +6055,7 @@ const ToolbarPlugin = ({
       <Popover
         title={t('moreFormatting')}
         anchorElement={selectionMoreAnchorRef}
-        open={isSelectionMoreMenuOpen}
+        open={isEditable && isSelectionMoreMenuOpen}
         togglePopover={() => setIsSelectionMoreMenuOpen(!isSelectionMoreMenuOpen)}
         side={isMobile ? 'top' : 'bottom'}
         align="end"
@@ -6130,7 +6158,7 @@ const ToolbarPlugin = ({
           <ToolbarMenuItem name={t('clearFormatting')} iconName="trash" onClick={clearFormatting} />
         </Menu>
       </Popover>
-      {zoomBlockKey && (
+      {isEditable && zoomBlockKey && (
         <BlockZoomOverlay
           blockKey={zoomBlockKey}
           label={effectiveContextualWidget?.label ?? activeBlockLabel}

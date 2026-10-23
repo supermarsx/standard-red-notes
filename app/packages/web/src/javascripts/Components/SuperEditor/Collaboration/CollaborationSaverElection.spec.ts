@@ -25,6 +25,7 @@ import {
   electCollaborationSaver,
   installCollaborationSaver,
   SAVER_INITIALIZATION_TIMEOUT_MS,
+  SAVER_EDIT_HANDOFF_GRACE_MS,
   SAVER_PEER_PREPARATION_GRACE_MS,
 } from './CollaborationSaverElection'
 
@@ -147,6 +148,52 @@ describe('collaboration saver election', () => {
       awareness.destroy()
       doc.destroy()
       jest.useRealTimers()
+    })
+    it('keeps an established room locally editable only during a bounded saver handoff', async () => {
+      expect(CollaborationSaverRegistry.get('room')?.localEditReady).toBe(false)
+      await jest.advanceTimersByTimeAsync(500)
+      expect(CollaborationSaverRegistry.get('room')?.localEditReady).toBe(true)
+      lane = { usable: false }
+      changeLane()
+      expect(CollaborationSaverRegistry.get('room')).toMatchObject({
+        paused: true,
+        isSaver: false,
+        localEditReady: true,
+      })
+      // Repeated eligibility updates must not restart the grace window.
+      await jest.advanceTimersByTimeAsync(SAVER_EDIT_HANDOFF_GRACE_MS - 1)
+      changeLane()
+      expect(CollaborationSaverRegistry.get('room')?.localEditReady).toBe(true)
+      await jest.advanceTimersByTimeAsync(1)
+      expect(CollaborationSaverRegistry.get('room')?.localEditReady).toBe(false)
+      lane = { usable: true }
+      changeLane()
+      await jest.advanceTimersByTimeAsync(500)
+      expect(CollaborationSaverRegistry.get('room')).toMatchObject({ paused: false, localEditReady: true })
+    })
+    it('withdraws handoff edit permission immediately when the room lease is lost', async () => {
+      await jest.advanceTimersByTimeAsync(500)
+      lane = { usable: false }
+      changeLane()
+      expect(CollaborationSaverRegistry.get('room')?.localEditReady).toBe(true)
+      activeIdentity = undefined
+      changeIdentity()
+      expect(CollaborationSaverRegistry.get('room')).toMatchObject({
+        isSaver: false,
+        paused: true,
+        localEditReady: false,
+      })
+    })
+    it('never grants a handoff allowance to an uninitialized or disconnected document', async () => {
+      await jest.advanceTimersByTimeAsync(500)
+      provider.isCanonicalReady = () => false
+      lane = { usable: false }
+      changeLane()
+      expect(CollaborationSaverRegistry.get('room')?.localEditReady).toBe(false)
+      provider.isCanonicalReady = () => true
+      provider.isRoomJoined = () => false
+      changeLane()
+      expect(CollaborationSaverRegistry.get('room')?.localEditReady).toBe(false)
     })
     it('starts read-only and refreshes the server base before becoming saver', async () => {
       expect(CollaborationSaverRegistry.get('room')?.paused).toBe(true)

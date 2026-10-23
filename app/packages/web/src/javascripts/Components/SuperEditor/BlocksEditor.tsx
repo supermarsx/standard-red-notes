@@ -337,7 +337,14 @@ export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
       )}
       {noteUuid && <AssistantStructuralBridgePlugin noteUuid={noteUuid} />}
       {noteUuid && <AssistantChangeDecorationsPlugin noteUuid={noteUuid} />}
-      {!isMobile && <ToolbarPlugin noteUuid={noteUuid} note={commentNote} flushChanges={flushWithBypass} />}
+      {!isMobile && (
+        <ToolbarPlugin
+          noteUuid={noteUuid}
+          note={commentNote}
+          flushChanges={flushWithBypass}
+          retainWhileReadonly={Boolean(collaboration)}
+        />
+      )}
       <CommentsPlugin note={commentNote} />
       {/*
         Standard Red Notes: dock the on-screen navigation sidebar (Word-style
@@ -379,7 +386,14 @@ export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
         </EditorNavigationAids>
         {commentNote && <CommentsSidebar note={commentNote} />}
       </div>
-      {isMobile && <ToolbarPlugin noteUuid={noteUuid} note={commentNote} flushChanges={flushWithBypass} />}
+      {isMobile && (
+        <ToolbarPlugin
+          noteUuid={noteUuid}
+          note={commentNote}
+          flushChanges={flushWithBypass}
+          retainWhileReadonly={Boolean(collaboration)}
+        />
+      )}
       <ListPlugin />
       <ListStylePlugin />
       <MarkdownShortcutPlugin transformers={MarkdownTransformers} />

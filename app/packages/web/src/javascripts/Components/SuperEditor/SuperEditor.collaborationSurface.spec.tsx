@@ -8,11 +8,6 @@ import { act, createElement, ReactNode } from 'react'
 import { createRoot, Root } from 'react-dom/client'
 import type { CollaborationRoomAccessState } from './Collaboration/useCollaborationRoomAccess'
 
-const stub =
-  (testId: string) =>
-  ({ children }: { children?: ReactNode }) =>
-    createElement('div', { 'data-testid': testId }, children)
-
 const nullPlugin = () => null
 
 const mockSessionUser = { uuid: 'user-uuid' }
@@ -43,7 +38,10 @@ jest.mock('./BlocksEditorComposer', () => ({
       children,
     ),
 }))
-jest.mock('./BlocksEditor', () => ({ BlocksEditor: stub('blocks-editor') }))
+jest.mock('./BlocksEditor', () => ({
+  BlocksEditor: ({ readonly }: { readonly?: boolean }) =>
+    createElement('div', { 'data-testid': 'blocks-editor', 'data-readonly': String(readonly) }),
+}))
 jest.mock('./Plugins/ItemSelectionPlugin/ItemSelectionPlugin', () => ({ ItemSelectionPlugin: nullPlugin }))
 jest.mock('./Plugins/EncryptedFilePlugin/FilePlugin', () => ({ __esModule: true, default: nullPlugin }))
 jest.mock('./Plugins/ItemBubblePlugin/ItemBubblePlugin', () => ({ __esModule: true, default: nullPlugin }))
@@ -63,6 +61,7 @@ jest.mock('@/Hooks/usePreference', () => ({ useLocalPreference: () => [1, jest.f
 
 import { CollaborationStatusRegistry } from './Collaboration/CollaborationStatusRegistry'
 import { SuperEditor } from './SuperEditor'
+import { CollaborationSaverRegistry } from './Collaboration/CollaborationSaverElection'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -110,7 +109,7 @@ const application = {
   vaultUsers: { isCurrentUserReadonlyVaultMember: () => false },
   isAuthorizedToRenderItem: () => true,
   encryption: { getRootKey: () => ({ masterKey: 'master' }) },
-  features: { getFeatureStatus: () => 'entitled' },
+  features: { getFeatureStatus: () => 'Entitled' },
   addEventObserver: () => noopDisposer,
   commands: { addWithShortcut: () => noopDisposer },
   actions: { addPayloadRequestHandler: () => noopDisposer },
@@ -166,6 +165,7 @@ afterEach(() => {
   act(() => {
     root.unmount()
   })
+  CollaborationSaverRegistry.clear(NOTE_UUID, 'lease')
   container.remove()
   CollaborationStatusRegistry.clearRoom(NOTE_UUID)
 })
@@ -336,4 +336,57 @@ it('loads the stored body if initial room preparation is unavailable', async () 
   expect(composer()).not.toBe(offlineComposer)
   expect(composer()?.getAttribute('data-collaborating')).toBe('true')
   expect(container.querySelector('[data-testid="blocks-editor"]')).toBeNull()
+})
+
+it('retains the editable composer through an authorized saver handoff, but locks when the allowance ends', async () => {
+  mockCollaborationAccess = {
+    status: 'ready',
+    sourceId: 'source-id',
+    userUuid: 'user-uuid',
+    sessionUser: mockSessionUser,
+    roomKey: 'room-key',
+    roomEpoch: 'epoch',
+    username: 'user',
+    initialEditorState: 'body',
+    providerOwnsCanonicalState: true,
+    editorLease: { requestId: 'lease', shouldBootstrap: false },
+  } as unknown as CollaborationRoomAccessState
+  CollaborationSaverRegistry.set(NOTE_UUID, {
+    active: true,
+    leaseId: 'lease',
+    isSaver: true,
+    paused: false,
+    localEditReady: true,
+    saveRequest: 0,
+  })
+  await renderEditor()
+  const initial = composer()
+  const editor = () => container.querySelector('[data-testid="blocks-editor"]')
+  expect(editor()?.getAttribute('data-readonly')).toBe('false')
+  await act(async () => {
+    CollaborationSaverRegistry.set(NOTE_UUID, {
+      active: true,
+      leaseId: 'lease',
+      isSaver: false,
+      paused: true,
+      localEditReady: true,
+      saveRequest: 0,
+    })
+  })
+  expect(composer()).toBe(initial)
+  expect(editor()?.getAttribute('data-readonly')).toBe('false')
+  expect(CollaborationStatusRegistry.getState(NOTE_UUID)?.status.kind).toBe('active')
+  await act(async () => {
+    CollaborationSaverRegistry.set(NOTE_UUID, {
+      active: true,
+      leaseId: 'lease',
+      isSaver: false,
+      paused: true,
+      localEditReady: false,
+      saveRequest: 0,
+    })
+  })
+  expect(composer()).toBe(initial)
+  expect(editor()?.getAttribute('data-readonly')).toBe('true')
+  expect(CollaborationStatusRegistry.getState(NOTE_UUID)?.status.kind).toBe('unavailable')
 })

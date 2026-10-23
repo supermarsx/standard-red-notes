@@ -28,6 +28,8 @@ export type CollaborationSaverState = {
   active: true
   isSaver: boolean
   paused: boolean
+  /** Brief same-room handoff allowance; never grants permission to persist. */
+  localEditReady?: boolean
   leaseId: string
   saverLeaseId?: string
   /** Requests another serialization on election and while durability is pending. */
@@ -145,6 +147,7 @@ class CollaborationSaverRegistryImpl {
 }
 
 export const CollaborationSaverRegistry = new CollaborationSaverRegistryImpl()
+export const SAVER_EDIT_HANDOFF_GRACE_MS = 5_000
 export const SAVER_HANDOFF_SETTLE_MS = 200
 export const SAVER_DURABILITY_TIMEOUT_MS = 15_000
 export const SAVER_INITIALIZATION_TIMEOUT_MS = 15_000
@@ -170,6 +173,9 @@ export function installCollaborationSaver(
   let settleTimer: ReturnType<typeof setTimeout> | undefined
   let saveRequest = 0
   let stalled = false
+  let hadHealthySaver = false
+  let editGraceDeadline: number | undefined
+  let editGraceTimer: ReturnType<typeof setTimeout> | undefined
   let quarantineUntil = 0
   let retryDelay = SAVER_RETRY_INITIAL_MS
   const preparingPeers = new Map<string, number>()
@@ -263,6 +269,27 @@ export function installCollaborationSaver(
     }
     const localSaver =
       settledLease === leaseId && !stalled && saveFence !== undefined && saveFence.expiresAt > Date.now()
+    const paused = !settledLease || stalled || (settledLease === leaseId && !localSaver)
+    const documentAttached = activeIdentityValid && provider.isCanonicalReady() && provider.isRoomJoined()
+    // Keep established editing stable during a short, same-room saver handoff.
+    // Disconnects, fatal/revoked documents and durability stalls fail closed;
+    // this allowance never changes the actual SQL-fenced saver permission.
+    if (!documentAttached || stalled) {
+      hadHealthySaver = false
+      editGraceDeadline = undefined
+      clearTimeout(editGraceTimer)
+    } else if (!paused) {
+      hadHealthySaver = true
+      editGraceDeadline = undefined
+      clearTimeout(editGraceTimer)
+    } else if (hadHealthySaver && editGraceDeadline === undefined) {
+      editGraceDeadline = Date.now() + SAVER_EDIT_HANDOFF_GRACE_MS
+      editGraceTimer = setTimeout(publishRegistry, SAVER_EDIT_HANDOFF_GRACE_MS)
+    }
+    const localEditReady =
+      documentAttached &&
+      !stalled &&
+      (!paused || (hadHealthySaver && editGraceDeadline !== undefined && Date.now() < editGraceDeadline))
     const localAwareness = awareness.getLocalState()?.saver as SaverParticipant | undefined
     if (localAwareness && localAwareness.saving !== localSaver) {
       awareness.setLocalStateField('saver', { ...localAwareness, saving: localSaver })
@@ -274,7 +301,8 @@ export function installCollaborationSaver(
         active: true,
         leaseId,
         isSaver: localSaver,
-        paused: !settledLease || stalled || (settledLease === leaseId && !localSaver),
+        paused,
+        localEditReady,
         ...(settledLease ? { saverLeaseId: settledLease } : {}),
         saveRequest,
         ...(localSaver && saveFence ? { saveFence: { room, token: saveFence.token } } : {}),
@@ -706,6 +734,7 @@ export function installCollaborationSaver(
     disposed = true
     generation += 1
     clearInterval(watchdog)
+    clearTimeout(editGraceTimer)
     clearTimeout(initializationTimer)
     if (settleTimer !== undefined) {
       clearTimeout(settleTimer)

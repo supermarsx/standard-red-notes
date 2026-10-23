@@ -20,7 +20,9 @@
  * dropped), the tabs sit after the actions, and clicking a tab still swaps the
  * ribbon groups below.
  */
-import { act } from 'react'
+import { act, useEffect } from 'react'
+import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
+import type { LexicalEditor } from 'lexical'
 import { createRoot, Root } from 'react-dom/client'
 import { LocalPrefDefaults, PrefDefaults, PrefKey } from '@standardnotes/snjs'
 import { BlocksEditorComposer } from '../../BlocksEditorComposer'
@@ -91,13 +93,22 @@ afterEach(async () => {
   container.remove()
 })
 
-const mount = async () => {
+let mountedEditor: LexicalEditor
+const CaptureEditor = () => {
+  const [editor] = useLexicalComposerContext()
+  useEffect(() => {
+    mountedEditor = editor
+  }, [editor])
+  return null
+}
+const mount = async (retainWhileReadonly = false, readonly = false) => {
   await act(async () => {
     root.render(
       <ApplicationProvider application={fakeApp}>
         <AndroidBackHandlerProvider application={fakeApp}>
-          <BlocksEditorComposer initialValue={undefined}>
-            <ToolbarPlugin />
+          <BlocksEditorComposer initialValue={undefined} readonly={readonly}>
+            <CaptureEditor />
+            <ToolbarPlugin retainWhileReadonly={retainWhileReadonly} />
           </BlocksEditorComposer>
         </AndroidBackHandlerProvider>
       </ApplicationProvider>,
@@ -272,5 +283,39 @@ describe('the merged clipboard + formatting-tabs bar', () => {
 
       expect(utilityBar()!.contains(strip)).toBe(false)
     })
+  })
+})
+
+describe('collaborative ribbon recovery', () => {
+  it('keeps the same established ribbon and tab visible but inert until editing resumes', async () => {
+    await mount(true)
+    await clickTab('Layout')
+    const toolbar = container.querySelector('#super-mobile-toolbar')!
+    const strip = tabStrip()
+    const labels = tabLabels()
+    await act(async () => mountedEditor.setEditable(false))
+    expect(container.querySelector('#super-mobile-toolbar')).toBe(toolbar)
+    expect(toolbar.classList.contains('hidden')).toBe(false)
+    expect(toolbar.hasAttribute('inert')).toBe(true)
+    expect(tabStrip()).toBe(strip)
+    expect(tabLabels()).toEqual(labels)
+    expect(container.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Layout')
+    // jsdom does not implement inert; the capture guard also protects portals.
+    await clickTab('Home')
+    expect(container.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Layout')
+    await act(async () => mountedEditor.setEditable(true))
+    expect(toolbar.hasAttribute('inert')).toBe(false)
+    expect(container.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Layout')
+  })
+  it('does not expose a ribbon for an initially read-only collaborative note', async () => {
+    await mount(true, true)
+    expect(container.querySelector('#super-mobile-toolbar')?.classList.contains('hidden')).toBe(true)
+    expect(tabLabels()).toEqual([])
+  })
+  it('preserves ordinary read-only behavior outside collaboration', async () => {
+    await mount()
+    await act(async () => mountedEditor.setEditable(false))
+    expect(container.querySelector('#super-mobile-toolbar')?.classList.contains('hidden')).toBe(true)
+    expect(tabLabels()).toEqual([])
   })
 })

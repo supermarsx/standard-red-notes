@@ -506,7 +506,8 @@ export const SuperEditor: FunctionComponent<Props> = ({
     preparingInitialComposer ||
     baseEditorReadonly ||
     sharedCollaborationJoining ||
-    (Boolean(collaboration) && (!collaborationSaver || collaborationSaver.paused))
+    (Boolean(collaboration) &&
+      (!collaborationSaver || (collaborationSaver.paused && !collaborationSaver.localEditReady)))
   const editorSavePermission = useRef({ noteUuid: lifetimeNote.uuid, readonly: isEditorReadonly, live: false })
   editorSavePermission.current = {
     noteUuid: lifetimeNote.uuid,
@@ -548,7 +549,7 @@ export const SuperEditor: FunctionComponent<Props> = ({
     collaborationAccess.status === 'disabled' && collaborationAccess.retriesExhausted === true
   const publishedCollaborationStatus = useMemo<CollaborationRoomStatus>(() => {
     if (collaborationIsLive) {
-      if (collaborationSaver?.paused) {
+      if (collaborationSaver?.paused && !collaborationSaver.localEditReady) {
         return {
           kind: 'unavailable',
           readonly: true,
@@ -574,6 +575,7 @@ export const SuperEditor: FunctionComponent<Props> = ({
     collaborationIsLive,
     collaborationIsCanonical,
     collaborationSaver?.paused,
+    collaborationSaver?.localEditReady,
     collaborationUnavailableReason,
     collaborationRecovery,
     collaborationRetriesExhausted,
