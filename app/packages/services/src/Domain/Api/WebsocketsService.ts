@@ -842,6 +842,9 @@ export class WebSocketsService extends AbstractService<
     )
       .then((result) => {
         if (!result || generation !== this.collaborationAuthorizationGeneration) {
+          if (reportTypedFailure) {
+            throw new CollaborationAuthorizationError('COLLABORATION_AUTHORIZATION_UNAVAILABLE', 2_000)
+          }
           return undefined
         }
         // Challenge-bound grants are one-use; only coalesce their in-flight request.
@@ -857,12 +860,16 @@ export class WebSocketsService extends AbstractService<
         return result.authorization
       })
       .catch((error: unknown) => {
-        if (
-          generation === this.collaborationAuthorizationGeneration &&
-          reportTypedFailure &&
-          isTypedCollaborationAuthorizationError(error)
-        ) {
-          throw error
+        if (reportTypedFailure) {
+          if (
+            generation === this.collaborationAuthorizationGeneration &&
+            isTypedCollaborationAuthorizationError(error)
+          ) {
+            throw error
+          }
+          // A lost transport or a superseded request is retryable, not evidence
+          // that the current session lacks permission. Never expose raw errors.
+          throw new CollaborationAuthorizationError('COLLABORATION_AUTHORIZATION_UNAVAILABLE', 2_000)
         }
         return undefined
       })

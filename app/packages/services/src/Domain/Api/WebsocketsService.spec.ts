@@ -77,6 +77,30 @@ describe('webSocketsService', () => {
   })
 
   describe('authorizeCollaborationRoom()', () => {
+    it.each(['worker-error', 'empty-result'])(
+      'reports interrupted authorization as transient without backend details: %s',
+      async (failure) => {
+        const service = createService()
+        service.setCollaborationAuthorizationTransport(
+          failure === 'worker-error'
+            ? jest
+                .fn()
+                .mockRejectedValue(Object.assign(new Error('private transport details'), { code: 'WORKER_ERROR' }))
+            : jest.fn().mockResolvedValue(null),
+        )
+        await expect(
+          service.authorizeCollaborationRoom('note-1', undefined, undefined, roomEpoch, true),
+        ).rejects.toMatchObject({
+          code: 'COLLABORATION_AUTHORIZATION_UNAVAILABLE',
+          message: 'Collaboration authorization failed',
+          retryAfterMs: 2_000,
+        })
+        await expect(
+          service.authorizeCollaborationRoom('note-1', undefined, undefined, roomEpoch),
+        ).resolves.toBeUndefined()
+      },
+    )
+
     it.each(['COLLABORATION_NOT_AUTHORIZED', 'COLLABORATION_EPOCH_CHANGED'])(
       'preserves the closed socket failure %s only for callers requesting typed recovery',
       async (code) => {
@@ -92,6 +116,27 @@ describe('webSocketsService', () => {
         ).rejects.toMatchObject({ code })
       },
     )
+
+    it('does not apply an old permission denial to a replacement authorization transport', async () => {
+      const service = createService()
+      let rejectOld!: (error: Error) => void
+      service.setCollaborationAuthorizationTransport(
+        () =>
+          new Promise((_, reject) => {
+            rejectOld = reject
+          }),
+      )
+      const old = service.authorizeCollaborationRoom('note-1', undefined, undefined, roomEpoch, true)
+      const rejected = expect(old).rejects.toMatchObject({ code: 'COLLABORATION_AUTHORIZATION_UNAVAILABLE' })
+      service.setCollaborationAuthorizationTransport(jest.fn().mockResolvedValue(validGrant))
+      rejectOld(Object.assign(new Error('old private denial'), { code: 'COLLABORATION_NOT_AUTHORIZED' }))
+      await rejected
+      await expect(
+        service.authorizeCollaborationRoom('note-1', undefined, undefined, roomEpoch, true),
+      ).resolves.toMatchObject({
+        capability: validGrant.capability,
+      })
+    })
 
     it.each([401, 403, 503])('exposes only HTTP403 as a terminal permission denial, status=%s', async (status) => {
       const service = createService()
