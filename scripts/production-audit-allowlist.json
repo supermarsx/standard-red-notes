@@ -12,19 +12,5 @@
     ],
     "rationale": "Re-verified 2026-10-21: the vulnerable JaegerPropagator.extract is only reachable once the propagator is registered, and the telemetry wiring this transitive copy serves (app/vendor/domain-events-infra/src/Infra/OpenTelemetry/OpenTelemetrySDK.ts line 61 and its built dist/src/Infra/OpenTelemetry/OpenTelemetrySDK.js line 44, the vendored domain-events-infra the bundled home server depends on) passes a single explicit textMapPropagator of AWSXRayPropagator, which replaces the default propagator set rather than adding to it; git grep finds no OTEL_PROPAGATORS value anywhere in the tracked tree except this rationale, so nothing re-adds jaeger. Not resolvable by a pin: the registry shows the patched 2.9.0 depending on @opentelemetry/core 2.9.0, while this copy's dependent sdk-trace-node@1.19.0 pins core 1.19.0, so adopting it crosses OpenTelemetry major families inside a published patched dependency of the app lock domain — a family migration, not a keyed resolution.",
     "expiry": "2027-01-08"
-  },
-  {
-    "advisoryId": "1240992",
-    "package": "braces",
-    "domain": "app",
-    "vulnerableVersions": "<=3.0.3",
-    "versions": [
-      "3.0.3"
-    ],
-    "dependents": [
-      "chokidar@npm:3.6.0"
-    ],
-    "rationale": "Re-verified 2026-10-10: there is still NO patched braces release to move to. npm view braces versions ends at 3.0.3, which is the version installed here, and the advisory covers <=3.0.3, so no resolution, floor or dedupe can clear it and a pin would only relabel the same bytes; app/yarn.lock holds a single copy (braces@npm:^3.0.3, braces@npm:~3.0.2 both resolving to 3.0.3). The single dependent is chokidar 3.6.0, a development-time file watcher used by the bundler and test runners; it expands only glob patterns that this repository authors, never request data, and it is absent from every shipped runtime bundle. The previous entry deliberately kept a one-month horizon so the first published fix would be picked up; two monthly re-checks have now returned the same newest-ever 3.0.3, so the horizon is a quarter instead — re-checking is one npm view, and nothing about the exposure can change until upstream publishes.",
-    "expiry": "2027-01-08"
   }
 ]
