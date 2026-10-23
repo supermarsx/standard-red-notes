@@ -2098,7 +2098,7 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
       void relayQueue.then(release, release)
     }
 
-    const cleanup = (): void => {
+    const cleanup = (unexpectedDisconnect = false): void => {
       if (connectionClosed) {
         return
       }
@@ -2113,20 +2113,22 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
       void relayQueue.then(
         async () => {
           rooms.leaveAll(conn)
-          await collaborationPlane.releaseAll(conn)
+          await collaborationPlane.releaseAll(conn, unexpectedDisconnect)
         },
         async () => {
           rooms.leaveAll(conn)
-          await collaborationPlane.releaseAll(conn)
+          await collaborationPlane.releaseAll(conn, unexpectedDisconnect)
         },
       )
       logger.info(`[ws] disconnect conn=${conn.connectionId} total=${registry.size()}`)
     }
 
-    socket.on('close', cleanup)
+    socket.on('close', (code, reason) =>
+      cleanup(code === 1006 || (code === 4000 && reason.toString() === 'No pong within the deadline')),
+    )
     socket.on('error', (err) => {
       logger.warn('[ws] socket error', safeErrorLogMetadata(err))
-      cleanup()
+      cleanup(true)
     })
 
     socket.on('pong', () => {

@@ -4,6 +4,7 @@ import { Readable } from 'node:stream'
 import { AddressInfo } from 'node:net'
 import jwt from 'jsonwebtoken'
 import WebSocket from 'ws'
+import { CollaborationRedisBridge } from '../src/collaborationRedisBridge.js'
 
 const redis = vi.hoisted(() => {
   const state = {
@@ -695,6 +696,38 @@ describe('websocket connection lifecycle', () => {
     await opened(pinned)
     expect(attached!.registry.size()).toBe(1)
     pinned.close()
+  })
+
+  it.each([
+    { code: 1006, reason: '', grace: true },
+    { code: 4000, reason: 'No pong within the deadline', grace: true },
+    { code: 4000, reason: 'Other client closure', grace: false },
+    { code: 1000, reason: '', grace: false },
+    { code: 1008, reason: 'policy', grace: false },
+  ])('classifies socket close $code ($reason), grace=$grace', async ({ code, reason, grace }) => {
+    const release = vi.spyOn(CollaborationRedisBridge.prototype, 'releaseAll')
+    try {
+      await attachGateway()
+      const token = mintConnectionToken(
+        { userUuid: 'grace-user', sessionUuid: 'grace-session' },
+        CONNECTION_SECRET,
+        '60s',
+      )
+      const socket = connect(`?authToken=${token}`)
+      await opened(socket)
+      const closed = closedWith(socket)
+      if (code === 1006) {
+        socket.terminate()
+      } else {
+        socket.close(code, reason)
+      }
+      await closed
+      await vi.waitFor(() =>
+        expect(release).toHaveBeenCalledWith(expect.objectContaining({ userUuid: 'grace-user' }), grace),
+      )
+    } finally {
+      release.mockRestore()
+    }
   })
 
   it('logs connect and disconnect without the user identifier', async () => {

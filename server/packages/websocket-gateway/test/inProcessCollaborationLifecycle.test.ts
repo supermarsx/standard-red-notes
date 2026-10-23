@@ -764,3 +764,46 @@ describe('InProcessCollaborationLifecycle', () => {
     }
   })
 })
+
+describe('unexpected disconnect grace', () => {
+  it('guards the lineage without retaining authority, and accepts the returning document as a follower', async () => {
+    const { lifecycle, now } = setup()
+    const owner = connection('grace-owner')
+    const peer = connection('new-peer')
+    await enterRoom(lifecycle, owner, now, 'initial')
+    await lifecycle.releaseAll(owner, true)
+    await expect(lifecycle.hasOtherActivatedEditorLease(peer, ROOM)).resolves.toBe(false)
+    await expect(enterRoom(lifecycle, peer, now, 'new-peer')).resolves.toEqual({ shouldBootstrap: false })
+    await lifecycle.releaseAll(peer)
+    await expect(enterRoom(lifecycle, connection('returning-owner'), now, 'resume')).resolves.toEqual({
+      shouldBootstrap: false,
+    })
+    await lifecycle.stop()
+  })
+
+  it('explicit eviction cancels disconnect grace immediately', async () => {
+    const { lifecycle, now } = setup()
+    const owner = connection('grace-evicted')
+    await enterRoom(lifecycle, owner, now, 'initial')
+    await lifecycle.releaseAll(owner, true)
+    await lifecycle.releaseAll(owner)
+    expect(await lifecycle.currentRoomEpoch(ROOM, SECURITY_EPOCH)).not.toBe(EPOCH)
+    await lifecycle.stop()
+  })
+
+  it('rotates before fresh text bootstrap once disconnected grace expires', async () => {
+    const { lifecycle, now, advance } = setup()
+    const owner = connection('grace-expiry')
+    await enterRoom(lifecycle, owner, now, 'initial')
+    await lifecycle.releaseAll(owner, true)
+    advance(30_001)
+    await expect(enterRoom(lifecycle, connection('fresh'), now, 'fresh')).rejects.toBeInstanceOf(
+      CollaborationRoomEpochMismatchError,
+    )
+    const epoch = await lifecycle.currentRoomEpoch(ROOM, SECURITY_EPOCH)
+    await expect(enterRoom(lifecycle, connection('fresh'), now, 'fresh', epoch)).resolves.toEqual({
+      shouldBootstrap: true,
+    })
+    await lifecycle.stop()
+  })
+})

@@ -210,10 +210,22 @@ class FakeRedisNetwork {
           this.failedEvalCalls += 1
           throw new Error('redis eval unavailable')
         }
+        if (script.includes('SRN_DETACH_LEASE_V1')) {
+          const key = String(args[0])
+          if (this.leaseValues.get(key) !== String(args[1]) || !this.leases.has(key)) {
+            return 0
+          }
+          this.leaseValues.set(key, String(args[2]))
+          this.leases.set(key, Math.min(this.leases.get(key)!, Number(args[3])))
+          return 1
+        }
         if (script.includes('SRN_COUNT_OTHER_LEASES_V1')) {
           const members = this.sets.get(String(args[0])) ?? new Set<string>()
           const own = new Set(args.slice(1).map(String))
-          return [...members].filter((leaseKey) => !own.has(leaseKey) && this.leases.has(leaseKey)).length
+          return [...members].filter(
+            (leaseKey) =>
+              !own.has(leaseKey) && this.leases.has(leaseKey) && !this.leaseValues.get(leaseKey)?.endsWith(':detached'),
+          ).length
         }
         if (script.includes('SRN_VALIDATE_SAVER_EDITOR_V1')) {
           const state = this.roomStates.get(String(args[1]))?.split(':')
@@ -280,6 +292,9 @@ class FakeRedisNetwork {
           this.leases.set(leaseKey, ttl)
           if (args[9]) {
             this.leaseValues.set(leaseKey, String(args[9]))
+            if (!roomState.endsWith(':initialized')) {
+              this.roomStates.set(roomStateKey, roomState + ':initialized')
+            }
           }
           return 1
         }
@@ -327,8 +342,7 @@ class FakeRedisNetwork {
             const currentEpoch = separator >= 0 ? currentState.slice(0, separator) : ''
             const currentSecurityEpoch =
               securitySeparator >= 0 ? currentState.slice(separator + 1, securitySeparator) : ''
-            const currentAuthorizationIssuedAt =
-              securitySeparator >= 0 ? Number(currentState.slice(securitySeparator + 1)) : 0
+            const currentAuthorizationIssuedAt = securitySeparator >= 0 ? Number(currentState.split(':')[2]) : 0
             if (currentSecurityEpoch !== securityEpoch) {
               if (authorizationIssuedAt <= currentAuthorizationIssuedAt) {
                 return `epoch:${currentEpoch}`
@@ -347,6 +361,10 @@ class FakeRedisNetwork {
             }
           }
           active = members.size
+          if (active === 0 && currentState?.endsWith(':initialized')) {
+            this.roomStates.set(roomStateKey, `${rotatedEpoch}:${securityEpoch}:${authorizationIssuedAt}`)
+            return `epoch:${rotatedEpoch}`
+          }
           const roomLeaseLimit = Number(args[6])
           if (script.includes('active >= tonumber(ARGV[4])') && active >= roomLeaseLimit && !members.has(leaseKey)) {
             return -2
@@ -357,10 +375,19 @@ class FakeRedisNetwork {
           this.leaseValues.set(leaseKey, marker)
           members.add(leaseKey)
           this.sets.set(roomSetKey, members)
+
           return active === 0 ? 1 : 0
         }
         if (!script.includes('SRN_RELEASE_LEASE_V3')) {
           throw new Error('Unknown fake Redis collaboration script')
+        }
+        if (
+          this.leaseValues.has(leaseKey) &&
+          args[6] &&
+          this.leaseValues.get(leaseKey) !== String(args[6]) &&
+          !this.leaseValues.get(leaseKey)?.startsWith(String(args[6]) + ':active:')
+        ) {
+          return 0
         }
         this.leases.delete(leaseKey)
         this.leaseValues.delete(leaseKey)
@@ -2816,7 +2843,7 @@ describe('CollaborationRedisBridge current-epoch resolver, cause codes, responde
     const denialReturns = lines
       .map((line, index) => ({ line, index }))
       .filter(({ line }) => line.startsWith("return 'epoch:'"))
-    expect(denialReturns).toHaveLength(2)
+    expect(denialReturns).toHaveLength(3)
     for (const { index } of denialReturns) {
       const preceding = lines.slice(Math.max(0, index - 3), index)
       expect(preceding.some((line) => line.includes('PEXPIRE'))).toBe(false)
@@ -3202,5 +3229,197 @@ describe('CollaborationRedisBridge current-epoch resolver, cause codes, responde
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('unexpected disconnect lineage grace', () => {
+  it('retains lineage without saver authority or ghost responders, then rotates on expiry', async () => {
+    vi.useFakeTimers()
+    const redis = new FakeRedisNetwork()
+    const bridge = new CollaborationRedisBridge(
+      new RoomRegistry(),
+      redis.client() as never,
+      redis.client() as never,
+      logger,
+      replicaId('grace'),
+    )
+    const owner = connection('grace-owner')
+    const peer = connection('grace-peer')
+    const expiresAt = Date.now() + 60_000
+    const reserve = (conn: typeof owner, request: string, epoch = TEST_ROOM_EPOCH) =>
+      bridge.reserveEditorLease(conn, 'grace-room', request, expiresAt, 3, 1, epoch, TEST_SECURITY_EPOCH)
+    const first = await reserve(owner, 'initial')
+    await bridge.activateEditorLease(
+      owner,
+      'grace-room',
+      'initial',
+      expiresAt,
+      3,
+      1,
+      first.bootstrapChallenge,
+      TEST_ROOM_EPOCH,
+      TEST_SECURITY_EPOCH,
+    )
+    await bridge.releaseAll(owner, true)
+    expect([...redis.leaseValues.values()][0]).toMatch(/:detached$/)
+    await expect(bridge.hasOtherActivatedEditorLease(peer, 'grace-room')).resolves.toBe(false)
+    await expect(reserve(peer, 'newcomer')).resolves.toMatchObject({ shouldBootstrap: false })
+    await bridge.releaseAll(peer)
+    const ttl = [...redis.leases.values()][0]
+    await bridge.refreshLeases()
+    expect([...redis.leases.values()][0]).toBe(ttl)
+    await expect(reserve(connection('reconnected-owner'), 'resume')).resolves.toMatchObject({ shouldBootstrap: false })
+    await bridge.releaseAll(connection('unrelated'))
+    await bridge.stop()
+    vi.useRealTimers()
+  })
+
+  it('releases the same reservation if activation committed before its response reaches local cleanup', async () => {
+    const redis = new FakeRedisNetwork()
+    const commands = redis.client()
+    const originalEval = commands.eval
+    let activated!: () => void
+    let resume!: () => void
+    const committed = new Promise<void>((resolve) => {
+      activated = resolve
+    })
+    const gate = new Promise<void>((resolve) => {
+      resume = resolve
+    })
+    commands.eval = async (...args: Parameters<typeof originalEval>) => {
+      const result = await originalEval(...args)
+      if (args[0].includes('SRN_REFRESH_OWNED_LEASE_V3')) {
+        activated()
+        await gate
+      }
+      return result
+    }
+    const bridge = new CollaborationRedisBridge(
+      new RoomRegistry(),
+      commands as never,
+      redis.client() as never,
+      logger,
+      replicaId('activation-cleanup'),
+    )
+    const owner = connection('activation-cleanup')
+    const expiresAt = Date.now() + 60_000
+    const first = await bridge.reserveEditorLease(
+      owner,
+      'activation-cleanup',
+      'initial',
+      expiresAt,
+      3,
+      1,
+      TEST_ROOM_EPOCH,
+      TEST_SECURITY_EPOCH,
+    )
+    const activation = bridge.activateEditorLease(
+      owner,
+      'activation-cleanup',
+      'initial',
+      expiresAt,
+      3,
+      1,
+      first.bootstrapChallenge,
+      TEST_ROOM_EPOCH,
+      TEST_SECURITY_EPOCH,
+    )
+    await committed
+    await bridge.releaseAll(owner)
+    resume()
+    await activation
+    expect(redis.leases.size).toBe(0)
+    await bridge.stop()
+  })
+
+  it('explicit eviction cancels detached grace immediately', async () => {
+    const redis = new FakeRedisNetwork()
+    const bridge = new CollaborationRedisBridge(
+      new RoomRegistry(),
+      redis.client() as never,
+      redis.client() as never,
+      logger,
+      replicaId('grace-eviction'),
+    )
+    const owner = connection('evicted-owner')
+    const expiresAt = Date.now() + 60_000
+    const first = await bridge.reserveEditorLease(
+      owner,
+      'evicted-room',
+      'initial',
+      expiresAt,
+      3,
+      1,
+      TEST_ROOM_EPOCH,
+      TEST_SECURITY_EPOCH,
+    )
+    await bridge.activateEditorLease(
+      owner,
+      'evicted-room',
+      'initial',
+      expiresAt,
+      3,
+      1,
+      first.bootstrapChallenge,
+      TEST_ROOM_EPOCH,
+      TEST_SECURITY_EPOCH,
+    )
+    await bridge.releaseAll(owner, true)
+    await bridge.releaseAll(owner)
+    expect(redis.leases.size).toBe(0)
+    expect(await bridge.currentRoomEpoch('evicted-room', TEST_SECURITY_EPOCH)).not.toBe(TEST_ROOM_EPOCH)
+    await bridge.stop()
+  })
+
+  it('rotates an initialized epoch when all Redis keys expire before the disconnect timer runs', async () => {
+    const redis = new FakeRedisNetwork()
+    const bridge = new CollaborationRedisBridge(
+      new RoomRegistry(),
+      redis.client() as never,
+      redis.client() as never,
+      logger,
+      replicaId('expired-grace'),
+    )
+    const owner = connection('expired-owner')
+    const expiresAt = Date.now() + 60_000
+    const first = await bridge.reserveEditorLease(
+      owner,
+      'expired-room',
+      'initial',
+      expiresAt,
+      3,
+      1,
+      TEST_ROOM_EPOCH,
+      TEST_SECURITY_EPOCH,
+    )
+    await bridge.activateEditorLease(
+      owner,
+      'expired-room',
+      'initial',
+      expiresAt,
+      3,
+      1,
+      first.bootstrapChallenge,
+      TEST_ROOM_EPOCH,
+      TEST_SECURITY_EPOCH,
+    )
+    await bridge.releaseAll(owner, true)
+    redis.leases.clear()
+    redis.leaseValues.clear()
+    await expect(
+      reserveAfterRequiredEpochRotation((epoch) =>
+        bridge.reserveEditorLease(
+          connection('fresh'),
+          'expired-room',
+          'fresh',
+          expiresAt,
+          3,
+          1,
+          epoch,
+          TEST_SECURITY_EPOCH,
+        ),
+      ),
+    ).resolves.toMatchObject({ shouldBootstrap: true })
+    await bridge.stop()
   })
 })

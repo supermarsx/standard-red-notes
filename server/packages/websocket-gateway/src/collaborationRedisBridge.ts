@@ -36,6 +36,7 @@ export function collaborationRelayChannel(namespace: string | undefined): string
 }
 
 const LEASE_TTL_MS = 75_000
+const DISCONNECT_GRACE_MS = 30_000
 const ROOM_EPOCH_TOMBSTONE_TTL_MS = 24 * 60 * 60 * 1_000
 const REDIS_OPERATION_TIMEOUT_MS = 1_500
 const MAX_RELAY_ENVELOPE_BYTES = 700 * 1024
@@ -275,7 +276,7 @@ else
   local securitySeparator = separator and string.find(currentState, ':', separator + 1, true)
   local currentEpoch = separator and string.sub(currentState, 1, separator - 1) or ''
   local currentSecurityEpoch = securitySeparator and string.sub(currentState, separator + 1, securitySeparator - 1) or ''
-  local currentIssuedAt = securitySeparator and tonumber(string.sub(currentState, securitySeparator + 1)) or 0
+  local currentIssuedAt = securitySeparator and tonumber(string.match(string.sub(currentState, securitySeparator + 1), '^%d+')) or 0
   local requestedIssuedAt = tonumber(ARGV[9]) or 0
   if currentSecurityEpoch ~= ARGV[6] then
     if requestedIssuedAt <= currentIssuedAt then
@@ -291,6 +292,11 @@ else
     return 'epoch:' .. currentEpoch
   end
 end
+-- An initialized lineage must never be text-bootstrapped again after expiry.
+if active == 0 and string.sub(currentState, -12) == ':initialized' then
+  redis.call('SET', KEYS[3], ARGV[7] .. ':' .. ARGV[6] .. ':' .. ARGV[9], 'PX', ARGV[8])
+  return 'epoch:' .. ARGV[7]
+end
 if active >= tonumber(ARGV[4]) and not alreadyReserved then return -2 end
 redis.call('SET', KEYS[2], ARGV[3], 'PX', ARGV[1])
 redis.call('SADD', KEYS[1], KEYS[2])
@@ -299,8 +305,23 @@ redis.call('PEXPIRE', KEYS[3], ARGV[8])
 if active == 0 then return 1 else return 0 end
 `
 
+// Detached keys guard the CRDT lineage, never saver authority or responders.
+const DETACH_LEASE_SCRIPT = `
+-- SRN_DETACH_LEASE_V1
+if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
+local ttl = redis.call('PTTL', KEYS[1])
+if ttl <= 0 then return 0 end
+redis.call('SET', KEYS[1], ARGV[2], 'PX', math.min(ttl, tonumber(ARGV[3])))
+return 1
+`
+
 const RELEASE_LEASE_SCRIPT = `
 -- SRN_RELEASE_LEASE_V3
+local owned = redis.call('GET', KEYS[2])
+-- Activation can finish between local removal and cleanup; its reservation
+-- prefix still proves ownership, unlike a new reservation's random value.
+if owned and ARGV[4] and owned ~= ARGV[4]
+  and string.sub(owned, 1, string.len(ARGV[4]) + 8) ~= ARGV[4] .. ':active:' then return 0 end
 redis.call('DEL', KEYS[2])
 redis.call('SREM', KEYS[1], KEYS[2])
 if redis.call('SCARD', KEYS[1]) == 0 then
@@ -342,7 +363,11 @@ if active > tonumber(ARGV[4]) then return -2 end
 if redis.call('PEXPIRE', KEYS[2], ARGV[1]) ~= 1 then return -3 end
 if ARGV[7] and ARGV[7] ~= '' then redis.call('SET', KEYS[2], ARGV[7], 'PX', ARGV[1]) end
 redis.call('PEXPIRE', KEYS[1], ARGV[2])
-redis.call('PEXPIRE', KEYS[3], ARGV[6])
+if ARGV[7] and ARGV[7] ~= '' and string.sub(currentState, -12) ~= ':initialized' then
+  redis.call('SET', KEYS[3], currentState .. ':initialized', 'PX', ARGV[6])
+else
+  redis.call('PEXPIRE', KEYS[3], ARGV[6])
+end
 return 1
 `
 
@@ -356,7 +381,8 @@ local own = {}
 for _, leaseKey in ipairs(ARGV) do own[leaseKey] = true end
 local count = 0
 for _, leaseKey in ipairs(redis.call('SMEMBERS', KEYS[1])) do
-  if not own[leaseKey] and redis.call('EXISTS', leaseKey) == 1 then count = count + 1 end
+  local value = redis.call('GET', leaseKey)
+  if not own[leaseKey] and value and string.sub(value, -9) ~= ':detached' then count = count + 1 end
 end
 return count
 `
@@ -500,6 +526,7 @@ function parseRemoteFrame(raw: string, localInstanceId: string): RelayPayloadFra
  */
 export class CollaborationRedisBridge<S extends SendableSocket> implements RoomRelayLifecycle<S> {
   private readonly leases = new Map<string, LocalLease<S>>()
+  private readonly detachedLeases = new Map<string, { lease: LocalLease<S>; timer: ReturnType<typeof setTimeout> }>()
   private readonly presences = new Map<string, LocalPresence<S>>()
   private presenceExpiryTimer: ReturnType<typeof setTimeout> | undefined
   private relayHealthy = false
@@ -1049,11 +1076,44 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
     }
   }
 
-  async releaseAll(conn: Conn<S>): Promise<void> {
+  async releaseAll(conn: Conn<S>, unexpectedDisconnect = false): Promise<void> {
+    if (!unexpectedDisconnect) {
+      for (const [key, detached] of this.detachedLeases) {
+        if (detached.lease.conn !== conn) {
+          continue
+        }
+        clearTimeout(detached.timer)
+        this.detachedLeases.delete(key)
+        await this.releaseOrQueue(detached.lease)
+      }
+    }
     const owned = [...this.leases.entries()].filter(([, lease]) => lease.conn === conn)
     for (const [localId, lease] of owned) {
       this.leases.delete(localId)
       await this.releasePresence(lease, 'disconnect')
+      if (unexpectedDisconnect && lease.activated && lease.expiresAt > Date.now() && !this.stopping) {
+        const detached = { ...lease, redisValue: lease.redisValue + ':detached' }
+        const grace = Math.min(DISCONNECT_GRACE_MS, lease.expiresAt - Date.now())
+        try {
+          const result = await bounded(
+            this.commands.eval(DETACH_LEASE_SCRIPT, 1, lease.leaseKey, lease.redisValue, detached.redisValue, grace),
+          )
+          if (Number(result) === 1) {
+            const timer = setTimeout(() => {
+              if (this.detachedLeases.get(lease.leaseKey)?.lease !== detached) {
+                return
+              }
+              this.detachedLeases.delete(lease.leaseKey)
+              void this.releaseOrQueue(detached)
+            }, grace)
+            timer.unref?.()
+            this.detachedLeases.set(lease.leaseKey, { lease: detached, timer })
+            continue
+          }
+        } catch {
+          // A failed detach must not leave renewable local authority.
+        }
+      }
       await this.releaseOrQueue(lease)
     }
   }
@@ -1151,6 +1211,11 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
       await this.leaseCleanupInFlight
     }
     const pendingReleases = new Map(this.pendingLeaseReleases)
+    for (const { lease, timer } of this.detachedLeases.values()) {
+      clearTimeout(timer)
+      pendingReleases.set(lease.leaseKey, lease)
+    }
+    this.detachedLeases.clear()
     for (const lease of this.leases.values()) {
       pendingReleases.set(lease.leaseKey, lease)
     }
@@ -1346,6 +1411,7 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
           lease.rotatedRoomStateValue,
           lease.roomStatePrefix,
           ROOM_EPOCH_TOMBSTONE_TTL_MS,
+          lease.redisValue,
         ),
       )
       return true
@@ -1366,6 +1432,14 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
 
   private async denyAndReleaseRoom(room: string, reason: RoomDeniedReason = 'policy'): Promise<void> {
     this.rooms.denyRoom(room, reason)
+    for (const [key, detached] of this.detachedLeases) {
+      if (detached.lease.room !== room) {
+        continue
+      }
+      clearTimeout(detached.timer)
+      this.detachedLeases.delete(key)
+      await this.releaseOrQueue(detached.lease)
+    }
     const owned = [...this.leases.entries()].filter(([, lease]) => lease.room === room)
     await Promise.all(
       owned.map(async ([localId, lease]) => {

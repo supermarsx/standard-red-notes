@@ -120,6 +120,7 @@ type InProcessPresence<S extends SendableSocket> = {
 }
 
 type RoomState = {
+  initialized?: boolean
   epoch: string
   securityEpoch: string
   issuedAt: number
@@ -137,7 +138,7 @@ export interface CollaborationPlane<S extends SendableSocket = SendableSocket> e
   validateSaverEditor(identity: SaverEditorIdentity): Promise<boolean>
   isRelayHealthy(): boolean
   currentRoomEpoch(room: string, collaborationSecurityEpoch: string): Promise<string | undefined>
-  releaseAll(conn: Conn<S>): Promise<void>
+  releaseAll(conn: Conn<S>, unexpectedDisconnect?: boolean): Promise<void>
   refreshLeases(): Promise<void>
   stop(): Promise<void>
 }
@@ -149,6 +150,7 @@ export type InProcessCollaborationLifecycleOptions = {
 
 export class InProcessCollaborationLifecycle<S extends SendableSocket> implements CollaborationPlane<S> {
   private readonly leases = new Map<string, InProcessLease<S>>()
+  private readonly detachedLeases = new Map<string, InProcessLease<S>>()
   private readonly presences = new Map<string, InProcessPresence<S>>()
   private readonly roomState = new Map<string, RoomState>()
   private readonly yjsResponseClaims = new Map<string, number>()
@@ -331,6 +333,7 @@ export class InProcessCollaborationLifecycle<S extends SendableSocket> implement
       throw error
     }
     lease.activated = true
+    this.roomState.get(room)!.initialized = true
     return { shouldBootstrap: lease.shouldBootstrap }
   }
 
@@ -481,20 +484,39 @@ export class InProcessCollaborationLifecycle<S extends SendableSocket> implement
     }
   }
 
-  async releaseAll(conn: Conn<S>): Promise<void> {
+  async releaseAll(conn: Conn<S>, unexpectedDisconnect = false): Promise<void> {
+    if (!unexpectedDisconnect) {
+      for (const [key, lease] of this.detachedLeases) {
+        if (lease.conn !== conn) {
+          continue
+        }
+        this.detachedLeases.delete(key)
+        this.release(lease)
+      }
+    }
     for (const [localId, lease] of [...this.leases.entries()]) {
       if (lease.conn !== conn) {
         continue
       }
       this.leases.delete(localId)
       this.releasePresence(lease, 'disconnect')
-      this.release(lease)
+      if (unexpectedDisconnect && lease.activated && lease.expiresAt > this.now()) {
+        this.detachedLeases.set(localId, { ...lease, expiresAt: Math.min(lease.expiresAt, this.now() + 30_000) })
+      } else {
+        this.release(lease)
+      }
     }
   }
 
   /** Driven by the gateway heartbeat: evicts elapsed leases and sweeps state. */
   async refreshLeases(): Promise<void> {
     const now = this.now()
+    for (const [key, lease] of this.detachedLeases) {
+      if (lease.expiresAt <= now) {
+        this.detachedLeases.delete(key)
+        this.release(lease)
+      }
+    }
     const policyFailureRooms = new Map<string, RoomDeniedReason>()
     for (const [localId, lease] of [...this.leases.entries()]) {
       if (Number.isFinite(lease.expiresAt) && lease.expiresAt <= now) {
@@ -524,6 +546,7 @@ export class InProcessCollaborationLifecycle<S extends SendableSocket> implement
       return
     }
     this.stopped = true
+    this.detachedLeases.clear()
     if (this.presenceExpiryTimer) {
       clearTimeout(this.presenceExpiryTimer)
       this.presenceExpiryTimer = undefined
@@ -623,6 +646,11 @@ export class InProcessCollaborationLifecycle<S extends SendableSocket> implement
       throw new CollaborationRoomEpochMismatchError(state.epoch)
     }
 
+    if (live.length === 0 && state?.initialized) {
+      this.setState(room, rotatedRoomEpoch, collaborationSecurityEpoch, collaborationAuthorizationIssuedAt, now)
+      throw new CollaborationRoomEpochMismatchError(rotatedRoomEpoch)
+    }
+
     if (live.length >= MAX_DISTRIBUTED_EDITOR_LEASES_PER_ROOM) {
       throw roomLeaseLimitError()
     }
@@ -702,6 +730,13 @@ export class InProcessCollaborationLifecycle<S extends SendableSocket> implement
 
   private async denyAndReleaseRoom(room: string, reason: RoomDeniedReason = 'policy'): Promise<void> {
     this.rooms.denyRoom(room, reason)
+    for (const [key, lease] of this.detachedLeases) {
+      if (lease.room !== room) {
+        continue
+      }
+      this.detachedLeases.delete(key)
+      this.release(lease)
+    }
     for (const [localId, lease] of [...this.leases.entries()]) {
       if (lease.room !== room) {
         continue
@@ -714,6 +749,11 @@ export class InProcessCollaborationLifecycle<S extends SendableSocket> implement
 
   private async discardRevokedRoom(room: string): Promise<void> {
     this.rooms.denyRoom(room, 'security-revoked')
+    for (const [key, lease] of this.detachedLeases) {
+      if (lease.room === room) {
+        this.detachedLeases.delete(key)
+      }
+    }
     for (const [localId, lease] of [...this.leases.entries()]) {
       if (lease.room !== room) {
         continue
@@ -725,6 +765,11 @@ export class InProcessCollaborationLifecycle<S extends SendableSocket> implement
 
   /** Drops every lease for a room WITHOUT rotating on each one (the caller rotates once). */
   private evictRoomLeases(room: string): void {
+    for (const [key, lease] of this.detachedLeases) {
+      if (lease.room === room) {
+        this.detachedLeases.delete(key)
+      }
+    }
     for (const [localId, lease] of [...this.leases.entries()]) {
       if (lease.room === room) {
         this.leases.delete(localId)
@@ -789,6 +834,13 @@ export class InProcessCollaborationLifecycle<S extends SendableSocket> implement
   /** Live leases for a room, dropping elapsed ones WITHOUT rotating the epoch. */
   private liveLeases(room: string, now: number): InProcessLease<S>[] {
     const live: InProcessLease<S>[] = []
+    for (const [key, lease] of this.detachedLeases) {
+      if (lease.expiresAt <= now) {
+        this.detachedLeases.delete(key)
+      } else if (lease.room === room) {
+        live.push(lease)
+      }
+    }
     for (const [localId, lease] of [...this.leases.entries()]) {
       if (lease.room !== room) {
         continue
