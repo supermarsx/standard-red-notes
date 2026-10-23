@@ -291,7 +291,7 @@ it('shows every personal tick, lets you toggle only yours, and preserves shared 
 })
 
 it.each([false, true])(
-  'organizes from its compact menu after toolbar focus, respecting latest readonly=%s',
+  'organizes from individual ribbon buttons after toolbar focus, respecting latest readonly=%s',
   async (readOnly) => {
     const editor = createHeadlessEditor({
       namespace: 'organize-panel',
@@ -316,13 +316,16 @@ it.each([false, true])(
     document.body.append(container)
     const root = createRoot(container)
     await act(async () => root.render(<Sections />))
-    const anchor = container.querySelector<HTMLButtonElement>('[aria-label="Organize completed tasks"]')!
-    expect(anchor).not.toBeNull()
-    await act(async () => anchor.click())
-    expect([...container.querySelectorAll('[role="menuitem"]')].map((node) => node.textContent)).toEqual([
+    const organization = container.querySelector('[aria-label="Checklist organization"]')!
+    expect([...organization.querySelectorAll('button')].map((node) => node.getAttribute('aria-label'))).toEqual([
       'Sink completed within selection',
       'Sink completed within heading section',
       'Move section’s completed to Completed tasks',
+    ])
+    expect([...organization.querySelectorAll('button')].map((node) => node.textContent)).toEqual([
+      'Selection',
+      'Section',
+      'Completed',
     ])
     // Losing the editor selection to a ribbon control must retain the range the
     // command was opened for, but never retain an obsolete edit permission.
@@ -331,9 +334,7 @@ it.each([false, true])(
       await act(async () => editor.setEditable(false))
     }
     await act(async () =>
-      [...container.querySelectorAll<HTMLElement>('[role="menuitem"]')]
-        .find((node) => node.textContent === 'Sink completed within heading section')!
-        .click(),
+      container.querySelector<HTMLButtonElement>('[aria-label="Sink completed within heading section"]')!.click(),
     )
     editor
       .getEditorState()

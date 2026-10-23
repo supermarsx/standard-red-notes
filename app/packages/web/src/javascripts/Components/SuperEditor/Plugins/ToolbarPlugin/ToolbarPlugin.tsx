@@ -3468,9 +3468,12 @@ const ToolbarPlugin = ({
   const hasContextualTab = canShowAllItems && !!effectiveContextualWidget && contextualButtons.length > 0
   const ribbonTabs = [
     ...superGroupTabs
-      .filter((tab) => isEditable && tab.id !== 'review')
+      .filter((tab) => isEditable && tab.id !== 'review' && tab.id !== 'checklistTab')
       .map((tab) => ({ id: tab.id as string, label: tab.label })),
     ...(note && isEditable ? [{ id: 'review', label: 'Review' }] : []),
+    ...superGroupTabs
+      .filter((tab) => isEditable && tab.id === 'checklistTab')
+      .map((tab) => ({ id: tab.id as string, label: tab.label })),
     ...(hasContextualTab && isEditable ? [{ id: CONTEXTUAL_TAB_ID, label: effectiveContextualWidget!.label }] : []),
   ]
   const effectiveTabId =

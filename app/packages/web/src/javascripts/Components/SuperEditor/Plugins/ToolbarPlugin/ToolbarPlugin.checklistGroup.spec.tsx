@@ -275,6 +275,8 @@ it('uses ribbon groups for per-item settings and Review, with no duplicate task 
       { discrete: true },
     )
   })
+  const tabLabels = [...container.querySelectorAll('[role="tab"]')].map((tab) => tab.textContent)
+  expect(tabLabels.indexOf('Checklist')).toBeGreaterThan(tabLabels.indexOf('Review'))
   await clickTab('Checklist')
   const tasks = container.querySelector<HTMLElement>('[aria-label="Checklist tasks"]')!
   expect(tasks.hidden).toBe(false)

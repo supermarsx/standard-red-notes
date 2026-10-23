@@ -1,18 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
 import { $getNodeByKey, $getSelection, $isRangeSelection, $setSelection, BaseSelection } from 'lexical'
-import Menu from '@/Components/Menu/Menu'
-import MenuItem from '@/Components/Menu/MenuItem'
-import Popover from '@/Components/Popover/Popover'
+import Icon from '@/Components/Icon/Icon'
 import ToolbarButton from '../Plugins/ToolbarPlugin/ToolbarButton'
 import { $organizeCompletedTasks, ChecklistOrganizationAction } from './ChecklistTaskOrganization'
 
 /** Explicit organization, without changing the automatic sorting preference. */
 export function ChecklistOrganizeMenu({ flushChanges }: { flushChanges?: () => void }) {
   const [editor] = useLexicalComposerContext()
-  const [open, setOpen] = useState(false)
   const [editable, setEditable] = useState(editor.isEditable())
-  const anchor = useRef<HTMLButtonElement>(null)
   const selection = useRef<BaseSelection | null>(null)
   useEffect(() => {
     const refresh = () =>
@@ -31,7 +27,6 @@ export function ChecklistOrganizeMenu({ flushChanges }: { flushChanges?: () => v
     }
   }, [editor])
   const organize = (action: ChecklistOrganizationAction) => {
-    setOpen(false)
     if (!editor.isEditable()) {
       return
     }
@@ -51,45 +46,40 @@ export function ChecklistOrganizeMenu({ flushChanges }: { flushChanges?: () => v
     )
   }
   return (
-    <>
-      <ToolbarButton
-        ref={anchor}
-        name="Organize completed tasks"
-        aria-label="Organize completed tasks"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        disabled={!editable}
-        iconName="list-check"
-        onSelect={() => setOpen(!open)}
-      >
-        <span className="ml-1.5 text-xs">Organize</span>
-      </ToolbarButton>
-      <Popover
-        title="Organize completed tasks"
-        anchorElement={anchor}
-        open={open}
-        togglePopover={() => setOpen(!open)}
-        side="bottom"
-        align="start"
-        portal
-        disableMobileFullscreenTakeover
-        containerClassName="md:!min-w-64 md:!w-auto"
-      >
-        <Menu
-          a11yLabel="Organize completed tasks"
-          closeMenu={() => {
-            setOpen(false)
-            anchor.current?.focus()
-          }}
-          className="py-1"
-          onMouseDown={(event) => event.stopPropagation()}
-          onKeyDown={(event) => event.stopPropagation()}
+    <div className="flex flex-col items-start gap-0.5">
+      {(
+        [
+          {
+            action: 'selection',
+            label: 'Selection',
+            description: 'Sink completed within selection',
+            icon: 'arrow-down',
+          },
+          {
+            action: 'section',
+            label: 'Section',
+            description: 'Sink completed within heading section',
+            icon: 'sort-descending',
+          },
+          {
+            action: 'completed-section',
+            label: 'Completed',
+            description: 'Move section’s completed to Completed tasks',
+            icon: 'list-check',
+          },
+        ] as const
+      ).map(({ action, label, description, icon }) => (
+        <ToolbarButton
+          key={action}
+          name={description}
+          aria-label={description}
+          disabled={!editable}
+          onSelect={() => organize(action)}
         >
-          <MenuItem onClick={() => organize('selection')}>Sink completed within selection</MenuItem>
-          <MenuItem onClick={() => organize('section')}>Sink completed within heading section</MenuItem>
-          <MenuItem onClick={() => organize('completed-section')}>Move section’s completed to Completed tasks</MenuItem>
-        </Menu>
-      </Popover>
-    </>
+          <Icon type={icon} size="custom" className="super-toolbar-icon !text-current" />
+          <span className="ml-1.5 text-xs whitespace-nowrap">{label}</span>
+        </ToolbarButton>
+      ))}
+    </div>
   )
 }
