@@ -139,8 +139,12 @@ the current server revision before saving. The database serializes ownership
 changes with note writes, including a save already in flight.
 
 Live collaboration saves stay on the socket, including queued recovery after
-an editor closes. If no participant can obtain and maintain the saving lease,
-the room becomes read-only until a saver returns. Editors also pause when the
+an editor closes. After a healthy saver has been established, a connected,
+canonical editor allows up to five seconds for a saver handoff without disabling
+editing. This allowance does not authorize persistence: writes still require the
+server saving lease. It ends immediately if the room disconnects or durability
+stalls. If no participant can obtain and maintain the saving lease beyond that
+allowance, the room becomes read-only until a saver returns. Editors also pause when the
 server has not acknowledged the retained document state for 15 seconds.
 On deployments with a collaboration gateway, eligible shared Super notes keep
 their body and title read-only while joining or retrying the room. Editing starts
@@ -157,6 +161,16 @@ account state changes. A changed room encryption epoch requires fresh room
 preparation. None of these retries bypass the canonical-state or saving-lease
 checks. Saver election coalesces presence changes for 200 milliseconds before
 claiming its server lease and pulling the current revision.
+
+After an unexpected socket disconnect, the gateway preserves an activated
+room's history for up to 30 seconds, bounded by the remaining editor lease
+lifetime. The disconnected lease cannot save, answer state requests, or renew
+itself. A returning editor must pass authorization again, then can resume its
+retained document in the same room epoch. Explicit departures and permission
+revocations do not receive this grace. If the last lease expires, the next
+bootstrap uses a fresh epoch rather than mixing a new text-derived document
+with the old CRDT history. Long outages therefore can still require fresh room
+preparation; this is not a guarantee of uninterrupted offline editing.
 
 An eligible peer that never announces an active saving proof gets a 3-second
 preparation grace period; after that another candidate may try the server
@@ -181,8 +195,12 @@ After a room has been active, brief transient recovery avoids a paused warning:
 the status uses a neutral restoring indication for the first second, a subtle
 reconnecting indication after that, and a paused explanation after five seconds.
 An initial join, an exhausted recovery or a permission denial remains visible
-immediately. This presentation grace does not claim edits are saved or bypass
-the read-only protection while a valid saver is unavailable.
+immediately. This presentation grace does not claim edits are saved. The separate
+five-second editing allowance above applies only to an established, connected
+room during a saver handoff.
+An established fixed desktop ribbon remains visible but disabled during a
+connection pause, preserving its selected tab and layout. Controls remain hidden
+during initial preparation; a disconnected editor does not accept new edits.
 
 Switching notes can proceed while collaboration is paused if the retained
 document has already been durably acknowledged, or the read-only editor never
