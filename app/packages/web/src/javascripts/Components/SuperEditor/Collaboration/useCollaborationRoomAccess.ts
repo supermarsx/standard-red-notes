@@ -1344,9 +1344,10 @@ export function useCollaborationRoomAccess(
                 preparationController.signal,
               )
               if ('reason' in reactivated) {
-                if (reactivated.requiresRemount) {
-                  snapshot.invalidate()
-                }
+                // Only the provider can decide whether this result still belongs to
+                // its current transport generation. A delayed epoch denial from a
+                // retired reconnect must not invalidate a newer attached lease.
+                // Current results request remount through retryBootstrap instead.
                 return reactivated
               }
               if (cancelled || invalidated) {

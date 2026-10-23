@@ -447,6 +447,12 @@ describe('useCollaborationRoomAccess security transitions', () => {
     })
     expect(reservesAtOldLeaseReturn).toBe(1)
     expect(joinsAtOldLeaseReturn).toBe(1)
+    expect(latestAccess).toMatchObject({ status: 'ready', roomEpoch })
+    expect(latestAccess?.status === 'ready' && latestAccess.editorLease).toBe(lease)
+    await act(async () => {
+      lease!.retryBootstrap()
+      await flushMicrotasks(30)
+    })
     const remountedReserves = sent.filter(
       (frame): frame is Extract<CollabFrame, { t: 'room-reserve' }> => frame.t === 'room-reserve',
     )
@@ -459,6 +465,56 @@ describe('useCollaborationRoomAccess security transitions', () => {
     })
     expect(remountedJoins.at(-1)).toMatchObject({ expectedRoomEpoch: authorizedEpoch })
     expect(latestAccess).toMatchObject({ status: 'ready', roomEpoch: authorizedEpoch })
+  })
+
+  it('retains the mounted snapshot when an older reconnect reports an epoch mismatch after a newer lease activates', async () => {
+    const sent: CollabFrame[] = []
+    mockedCreateChannel.mockImplementation(() => createAutoLeaseChannel(sent).channel)
+    const note = { uuid: 'late-reconnect', text: 'canonical', dirty: false, serverUpdatedAtTimestamp: 100 } as never
+    const application = {
+      items: { streamItems: () => jest.fn(), findItem: () => note },
+      sync: { sync: jest.fn().mockResolvedValue(undefined) },
+      vaultLocks: { addEventObserver: () => jest.fn() },
+      sockets: { addEventObserver: () => jest.fn(), isWebSocketConnectionOpen: () => true },
+      addEventObserver: () => jest.fn(),
+    } as never
+    const View = () => {
+      latestAccess = useCollaborationRoomAccess(application, note, true)
+      return createElement('div', null, latestAccess.status)
+    }
+    await act(async () => {
+      root.render(createElement(View))
+      await flushMicrotasks(30)
+    })
+    const lease = latestAccess?.status === 'ready' ? latestAccess.editorLease : undefined
+    expect(lease).toBeDefined()
+    expect(lease!.validateAttachment()).toBe(true)
+    let finishOld!: (result: Awaited<ReturnType<typeof prepareCollaborationAccess>>) => void
+    mockedPrepare.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishOld = resolve
+        }),
+    )
+    const oldReconnect = lease!.reactivate()
+    await act(async () => {
+      const fresh = await lease!.reactivate()
+      expect(fresh).not.toHaveProperty('reason')
+      lease!.setProviderCanonicalOwnership?.(true)
+      await flushMicrotasks()
+    })
+    expect(lease!.isAttached()).toBe(true)
+    const leavesBefore = sent.filter((frame) => frame.t === 'room-leave').length
+    await act(async () => {
+      finishOld({ available: false, reason: 'Retired room epoch', authorizationFailure: 'epoch-mismatch' })
+      expect(await oldReconnect).toMatchObject({ reason: 'Retired room epoch', requiresRemount: true })
+      await flushMicrotasks(30)
+    })
+    expect(latestAccess?.status === 'ready' && latestAccess.editorLease).toBe(lease)
+    expect(lease!.isAttached()).toBe(true)
+    expect(lease!.validateAttachment()).toBe(true)
+    expect(sent.filter((frame) => frame.t === 'room-leave')).toHaveLength(leavesBefore)
+    expect(sent.filter((frame) => frame.t === 'room-reserve')).toHaveLength(2)
   })
 
   it('keeps committed preparation and observer readiness isolated from an abandoned note render', async () => {
@@ -2445,6 +2501,12 @@ describe('useCollaborationRoomAccess security transitions', () => {
       denial: { reason: 'epoch-mismatch', roomEpoch: rotatedEpoch },
     })
     expect(denials).toEqual([roomEpoch])
+    expect(latestAccess).toMatchObject({ status: 'ready', roomEpoch })
+    expect(latestAccess?.status === 'ready' && latestAccess.editorLease).toBe(lease)
+    await act(async () => {
+      lease!.retryBootstrap()
+      await flushMicrotasks(30)
+    })
     expect(reservesOf(sent).at(-1)).toMatchObject({ expectedRoomEpoch: rotatedEpoch })
     expect(latestAccess).toMatchObject({ status: 'ready', roomEpoch: rotatedEpoch })
   })
