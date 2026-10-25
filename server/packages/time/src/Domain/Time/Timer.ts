@@ -106,7 +106,7 @@ export class Timer implements TimerInterface {
   }
 
   dateWasNDaysAgo(date: Date): number {
-    return dayjs.utc().diff(date, 'days')
+    return dayjs.utc().diff(dayjs.utc(date), 'days')
   }
 
   convertStringDateToMicroseconds(date: string): number {

@@ -88,6 +88,21 @@ describe('Timer', () => {
     expect(createTimer().dateWasNDaysAgo(dateNDaysAgo)).toEqual(3)
   })
 
+  it('counts elapsed UTC days across a local daylight-saving offset change', () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-10-25T12:00:00Z'))
+    // Model London's autumn clock change independently of the runner timezone.
+    const offset = jest.spyOn(Date.prototype, 'getTimezoneOffset').mockImplementation(function (this: Date) {
+      return this.getTime() < Date.parse('2026-10-25T01:00:00Z') ? -60 : 0
+    })
+    try {
+      expect(createTimer().dateWasNDaysAgo(new Date('2026-10-22T12:00:00Z'))).toEqual(3)
+      expect(createTimer().dateWasNDaysAgo(new Date('2026-10-22T12:30:00Z'))).toEqual(2)
+    } finally {
+      offset.mockRestore()
+      jest.useRealTimers()
+    }
+  })
+
   it('should return a utc date n hours ago', () => {
     const date = createTimer().getUTCDate()
     const dateNHoursAgo = createTimer().getUTCDateNHoursAgo(4)
