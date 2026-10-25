@@ -469,8 +469,8 @@ const yarnSecurityPatchFloors = Object.freeze({
   "body-parser": Object.freeze({
     minimumMajor: 1,
     floors: Object.freeze({
-      1: Object.freeze([1, 20, 6]),
-      2: Object.freeze([2, 3, 0]),
+      1: Object.freeze([1, 20, 9]),
+      2: Object.freeze([2, 4, 0]),
     }),
   }),
   "ip-address": Object.freeze({
@@ -671,7 +671,7 @@ export function validateAppSecurityGraph(packageJsonText, lockfile) {
     "@grpc/grpc-js@npm:^1.7.1": "1.14.6",
     "@grpc/grpc-js@npm:^1.9.13": "1.14.6",
     "axios@npm:^1.6.1": "1.20.0",
-    "body-parser@npm:1.20.1": "1.20.8",
+    "body-parser@npm:1.20.1": "1.20.9",
     "form-data": "4.0.6",
     "jws@npm:^3.2.2": "3.2.3",
     "lodash-es@npm:4.17.21": "4.18.1",
@@ -701,7 +701,7 @@ export function validateAppSecurityGraph(packageJsonText, lockfile) {
     "@grpc/grpc-js": ["1.14.6"],
     ajv: ["6.15.0", "8.20.0"],
     axios: ["1.20.0"],
-    "body-parser": ["1.20.6", "2.3.0"],
+    "body-parser": ["1.20.9", "2.4.0"],
     "fast-xml-parser": ["5.8.0"],
     "follow-redirects": ["1.16.1"],
     "form-data": ["4.0.6"],

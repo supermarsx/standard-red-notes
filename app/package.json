@@ -78,7 +78,7 @@
     "axios@npm:^1.18.1": "1.20.0",
     "axios@npm:^1.6.1": "1.20.0",
     "axios@npm:^1.6.7": "1.20.0",
-    "body-parser@npm:1.20.1": "1.20.8",
+    "body-parser@npm:1.20.1": "1.20.9",
     "brace-expansion@npm:^1.1.7": "1.1.21",
     "brace-expansion@npm:^2.0.1": "2.1.7",
     "brace-expansion@npm:^2.0.2": "2.1.7",
@@ -120,7 +120,12 @@
     "uuid@npm:^8.3.2": "11.1.1",
     "uuid@npm:^9.0.0": "11.1.1",
     "webpack@npm:^5.108.4": "5.112.0",
-    "websocket-driver": "0.7.5"
+    "websocket-driver": "0.7.5",
+    "body-parser@npm:~1.20.5": "1.20.9",
+    "body-parser@npm:^2.2.2": "2.4.0",
+    "body-parser@npm:^2.3.0": "2.4.0",
+    "happy-dom": "21.0.4",
+    "zod": "4.6.7"
   },
   "dependencies": {
     "@standardnotes/snjs": "workspace:*"
