@@ -14,6 +14,10 @@ test("socket readiness observes worker progress while animation frames are suspe
       let started = false;
       (window as any).mainApplicationGroup = {
         primaryApplication: {
+          // Match the public application facade used by the readiness helper.
+          get syncTransportStatus() {
+            return this._webSocketSyncTransport.transportStatus;
+          },
           _webSocketSyncTransport: {
             get transportStatus() {
               if (!started) {
