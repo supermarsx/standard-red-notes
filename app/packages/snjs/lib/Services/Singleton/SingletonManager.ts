@@ -183,31 +183,8 @@ export class SingletonManager extends AbstractService implements SingletonManage
 
     /** Item not found, safe to create after full sync has completed */
     if (!this.sync.getLastSyncDate()) {
-      /**
-       * Add a temporary observer in case of long-running sync request, where
-       * the item we're looking for ends up resolving early or in the middle.
-       */
-      let matchingItem: DecryptedItemInterface | undefined
-
-      const removeObserver = this.itemManager.addObserver(contentType, ({ inserted }) => {
-        if (inserted.length > 0) {
-          const matchingItems = inserted.filter((i) => i.content_type === contentType)
-
-          if (matchingItems.length > 0) {
-            matchingItem = matchingItems[0]
-          }
-        }
-      })
-
       await this.sync.sync({ sourceDescription: 'Find or create singleton, before any sync has completed' })
-
-      removeObserver()
-
-      if (matchingItem) {
-        return matchingItem as T
-      }
-
-      /** Check again */
+      /** Sync can replace or delete a singleton it inserted earlier; only its final live state is usable. */
       const refreshedItems = this.itemManager.getItems<T>(contentType)
       if (refreshedItems.length > 0) {
         return refreshedItems[0] as T
@@ -249,31 +226,8 @@ export class SingletonManager extends AbstractService implements SingletonManage
 
     /** Item not found, safe to create after full sync has completed */
     if (!this.sync.getLastSyncDate()) {
-      /**
-       * Add a temporary observer in case of long-running sync request, where
-       * the item we're looking for ends up resolving early or in the middle.
-       */
-      let matchingItem: DecryptedItemInterface | undefined
-
-      const removeObserver = this.itemManager.addObserver(contentType, ({ inserted }) => {
-        if (inserted.length > 0) {
-          const matchingItems = inserted.filter((i) => i.satisfiesPredicate(predicate))
-
-          if (matchingItems.length > 0) {
-            matchingItem = matchingItems[0]
-          }
-        }
-      })
-
       await this.sync.sync({ sourceDescription: 'Find or create singleton, before any sync has completed' })
-
-      removeObserver()
-
-      if (matchingItem) {
-        return matchingItem as T
-      }
-
-      /** Check again */
+      /** Re-evaluate the predicate against the surviving snapshot, not an earlier insertion event. */
       const refreshedItems = this.itemManager.itemsMatchingPredicate<T>(contentType, predicate)
       if (refreshedItems.length > 0) {
         return refreshedItems[0] as T
