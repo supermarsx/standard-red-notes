@@ -3770,7 +3770,7 @@ const ToolbarPlugin = ({
           isAutoHideActive && 'relative !border-b-0 !pb-0',
         )}
         inert={!isEditable}
-        aria-disabled={!isEditable}
+        aria-disabled={!isEditable || undefined}
         onClickCapture={(event) => {
           if (!isEditable) {
             event.preventDefault()
