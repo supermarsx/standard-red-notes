@@ -505,25 +505,25 @@ test("pinned but unplanned actions cannot cross release security boundaries", ()
     [
       ".github/workflows/srn-client.yml",
       "      - name: Upload packaged binaries",
-      "      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n\n",
+      "      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2\n\n",
       /package action sequence must be exactly/,
     ],
     [
       ".github/workflows/srn-openclaw.yml",
       "      - name: Upload attested release package",
-      "      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n\n",
+      "      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2\n\n",
       /attest action sequence must be exactly/,
     ],
     [
       "app/.github/workflows/desktop.release.reuse.yml",
-      "      - name: Upload\n        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1",
-      "      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n\n",
+      "      - name: Upload\n        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2",
+      "      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2\n\n",
       /Mac action sequence must be exactly/,
     ],
     [
       ".github/workflows/release-contract.yml",
       "      - name: Upload machine and readable release reports",
-      "      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0\n\n",
+      "      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0\n\n",
       /validate action sequence must be exactly/,
     ],
   ]) {
@@ -585,7 +585,7 @@ test("mobile action boundaries, checkout credentials, and recovery retention rem
     (job) =>
       job.replace(
         "      - name: Upload validated Android artifacts",
-        "      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n\n      - name: Upload validated Android artifacts",
+        "      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2\n\n      - name: Upload validated Android artifacts",
       ),
   );
   assert.match(
@@ -887,7 +887,7 @@ test("native runtime, packager flags, and workflow actions cannot drift from the
 
   files = withFileChanged(".github/workflows/srn-client.yml", (content) =>
     content.replaceAll(
-      "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0",
+      "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0",
       "actions/setup-node@1111111111111111111111111111111111111111 # v7.0.0",
     ),
   );
@@ -1371,7 +1371,7 @@ test("mutable OpenClaw action references are rejected", () => {
   const file = ".github/workflows/srn-openclaw.yml";
   const files = withFileChanged(file, (content) =>
     content.replace(
-      "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
+      "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
       "actions/checkout@v7",
     ),
   );
@@ -1386,7 +1386,7 @@ test("OpenClaw action SHAs, labels, and inventory remain exact", () => {
   const file = ".github/workflows/srn-openclaw.yml";
   let files = withFileChanged(file, (content) =>
     content.replace(
-      "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0",
+      "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
       "actions/checkout@1111111111111111111111111111111111111111 # v7.0.0",
     ),
   );
@@ -1397,13 +1397,13 @@ test("OpenClaw action SHAs, labels, and inventory remain exact", () => {
 
   files = withFileChanged(file, (content) =>
     content.replace(
-      "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0",
-      "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.1",
+      "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
+      "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
     ),
   );
   assert.match(
     validateReleaseContract(files).join("\n"),
-    /incorrect human version label for actions\/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0; expected v7\.0\.0/,
+    /incorrect human version label for actions\/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1; expected v7\.0\.0/,
   );
 
   files = withFileChanged(file, (content) =>
@@ -1854,7 +1854,7 @@ test("a best-effort attested payload handoff is rejected", () => {
 test("OpenClaw provenance action identity is bound in workflow and fingerprint contract", () => {
   let files = withFileChanged(openClawWorkflowFile, (content) =>
     content.replace(
-      "actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373",
+      "actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8",
       "actions/attest-build-provenance@1111111111111111111111111111111111111111",
     ),
   );
@@ -1865,7 +1865,7 @@ test("OpenClaw provenance action identity is bound in workflow and fingerprint c
 
   files = withFileChanged("scripts/release-packaging-contract.mjs", (content) =>
     content.replace(
-      'attestBuildProvenance: "0f67c3f4856b2e3261c31976d6725780e5e4c373"',
+      'attestBuildProvenance: "4d101475d8b20a2381f78447822ac1eab6504dd8"',
       'attestBuildProvenance: "mutable-tag"',
     ),
   );
@@ -2191,7 +2191,7 @@ test("desktop action inventories reject SHA, label, and owner drift", () => {
   ]) {
     let files = withFileChanged(file, (content) =>
       content.replace(
-        "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0",
+        "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0",
         "actions/setup-python@1111111111111111111111111111111111111111 # v6.3.0",
       ),
     );
@@ -2202,13 +2202,13 @@ test("desktop action inventories reject SHA, label, and owner drift", () => {
 
     files = withFileChanged(file, (content) =>
       content.replace(
-        "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0",
-        "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.2.0",
+        "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0",
+        "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v6.2.0",
       ),
     );
     assert.match(
       validateReleaseContract(files).join("\n"),
-      /incorrect human version label for actions\/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1; expected v6\.3\.0/,
+      /incorrect human version label for actions\/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97; expected v6\.3\.0/,
     );
   }
 });
@@ -3155,7 +3155,7 @@ test("desktop packaging fingerprints bind lock, patches, config, toolchain, and 
         "",
       )
       .replace(
-        "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0",
+        "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0",
         "actions/setup-python@1111111111111111111111111111111111111111 # v6.3.0",
       )
       .replace(
@@ -3209,11 +3209,11 @@ test("mobile packaging fingerprints bind dependency locks and native toolchains"
         "",
       )
       .replaceAll(
-        "actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a",
+        "actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad",
         "actions/setup-java@1111111111111111111111111111111111111111",
       )
       .replaceAll(
-        "ruby/setup-ruby@003a5c4d8d6321bd302e38f6f0ec593f77f06600",
+        "ruby/setup-ruby@824c0e29fdfc7d689c191c27acc969d2d04b7dd8",
         "ruby/setup-ruby@2222222222222222222222222222222222222222",
       )
       .replaceAll(
@@ -3385,7 +3385,7 @@ test("release-contract CI produces both complete report formats", () => {
       .replace("            --output release-impact.json \\\n", "")
       .replace("            --report release-impact.md\n", "")
       .replace(
-        "        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1\n",
+        "        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2\n",
         "        run: true\n",
       ),
   );

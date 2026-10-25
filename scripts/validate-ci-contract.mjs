@@ -120,8 +120,8 @@ export function discoverWorkspaceManifests(
 export const CI_PAGES_ACTIONS = Object.freeze({
   attestBuildProvenance: Object.freeze({
     action: "actions/attest-build-provenance",
-    sha: "0f67c3f4856b2e3261c31976d6725780e5e4c373",
-    version: "v4.1.1",
+    sha: "4d101475d8b20a2381f78447822ac1eab6504dd8",
+    version: "v4.2.2",
   }),
   cache: Object.freeze({
     action: "actions/cache",
@@ -140,13 +140,13 @@ export const CI_PAGES_ACTIONS = Object.freeze({
   }),
   deployPages: Object.freeze({
     action: "actions/deploy-pages",
-    sha: "cd2ce8fcbc39b97be8ca5fce6e763baed58fa128",
-    version: "v5.0.0",
+    sha: "368f82528645a54fb793d4d04e342629a3f51346",
+    version: "v5.0.1",
   }),
   downloadArtifact: Object.freeze({
     action: "actions/download-artifact",
-    sha: "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
-    version: "v8.0.1",
+    sha: "9000827ccba6bdab643e8b6fd33ac0654aef8333",
+    version: "v8.0.2",
   }),
   jekyllBuildPages: Object.freeze({
     action: "actions/jekyll-build-pages",
@@ -155,23 +155,23 @@ export const CI_PAGES_ACTIONS = Object.freeze({
   }),
   loginRegistry: Object.freeze({
     action: "docker/login-action",
-    sha: "af1e73f918a031802d376d3c8bbc3fe56130a9b0",
-    version: "v4.4.0",
+    sha: "dbcb813823bdd20940b903addbd779551569679f",
+    version: "v4.6.0",
   }),
   setupBuildx: Object.freeze({
     action: "docker/setup-buildx-action",
-    sha: "bb05f3f5519dd87d3ba754cc423b652a5edd6d2c",
-    version: "v4.2.0",
+    sha: "f87e5991a6d7451dcb8d9637bfbc97413f497069",
+    version: "v4.4.1",
   }),
   setupNode: Object.freeze({
     action: "actions/setup-node",
-    sha: "820762786026740c76f36085b0efc47a31fe5020",
-    version: "v7.0.0",
+    sha: "949feb2413d6458794dcd2491c4babbbce0c15c1",
+    version: "v7.1.0",
   }),
   uploadArtifact: Object.freeze({
     action: "actions/upload-artifact",
-    sha: "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
-    version: "v7.0.1",
+    sha: "cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+    version: "v7.0.2",
   }),
   uploadPagesArtifact: Object.freeze({
     action: "actions/upload-pages-artifact",
@@ -180,8 +180,8 @@ export const CI_PAGES_ACTIONS = Object.freeze({
   }),
   buildPush: Object.freeze({
     action: "docker/build-push-action",
-    sha: "53b7df96c91f9c12dcc8a07bcb9ccacbed38856a",
-    version: "v7.3.0",
+    sha: "c3c9e263c25d99ce0380d002d59b67737d91b0dc",
+    version: "v7.4.0",
   }),
 });
 
