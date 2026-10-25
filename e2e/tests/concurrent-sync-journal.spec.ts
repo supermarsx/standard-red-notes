@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test'
 import { readFileSync } from 'node:fs'
-import { transpileModule, ModuleKind, ScriptTarget } from 'typescript'
+import { transformSync } from 'esbuild'
 import { resolve } from 'node:path'
 
 // Exercise the production journal against each browser's real IndexedDB transaction
@@ -10,9 +10,12 @@ const source = readFileSync(
   'utf8',
 )
 // Constructor parameter properties need compilation, not Node's strip-only API.
-const compiled = transpileModule(source, {
-  compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 },
-}).outputText
+// TypeScript 7 provides the CLI but no longer exports the JS compiler API.
+const compiled = transformSync(source, {
+  loader: 'ts',
+  format: 'esm',
+  target: 'es2022',
+}).code
 
 test.beforeEach(async ({ page }) => {
   await page.route('http://journal.test/**', (route) =>
