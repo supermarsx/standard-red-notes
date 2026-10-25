@@ -519,14 +519,14 @@ test("every Yarn domain keeps security-sensitive packages on patched floors", ()
       "app/yarn.lock",
       "body-parser",
       '"body-parser@npm:~1.20.5":',
-      "1.20.6",
+      "1.20.9",
       "1.20.5",
     ],
     [
       "app/yarn.lock",
       "body-parser",
       '"body-parser@npm:^2.2.2":',
-      "2.3.0",
+      "2.4.0",
       "2.2.2",
     ],
     [
