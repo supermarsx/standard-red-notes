@@ -1398,12 +1398,12 @@ test("OpenClaw action SHAs, labels, and inventory remain exact", () => {
   files = withFileChanged(file, (content) =>
     content.replace(
       "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
-      "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
+      "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.0",
     ),
   );
   assert.match(
     validateReleaseContract(files).join("\n"),
-    /incorrect human version label for actions\/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1; expected v7\.0\.0/,
+    /incorrect human version label for actions\/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1; expected v7\.0\.1/,
   );
 
   files = withFileChanged(file, (content) =>
@@ -2208,7 +2208,7 @@ test("desktop action inventories reject SHA, label, and owner drift", () => {
     );
     assert.match(
       validateReleaseContract(files).join("\n"),
-      /incorrect human version label for actions\/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97; expected v6\.3\.0/,
+      /incorrect human version label for actions\/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97; expected v7\.0\.0/,
     );
   }
 });
