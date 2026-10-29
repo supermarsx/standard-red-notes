@@ -22,7 +22,7 @@
     "format:check": "prettier --check \"src/**/*.{ts,tsx,js,json,md}\""
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.32.1",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@standardnotes/domain-core": "^1.41.8",
     "@standardnotes/sncrypto-web": "1.14.11",
     "@standardnotes/snjs": "2.212.4",
@@ -36,7 +36,7 @@
     "esbuild": "^0.28.2",
     "prettier": "^3.9.10",
     "tsx": "^4.23.15",
-    "typescript": "6.0.3",
+    "typescript": "7.0.2",
     "vite": "^8.3.5",
     "vitest": "^5.0.5"
   }
