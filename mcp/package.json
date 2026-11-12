@@ -22,22 +22,22 @@
     "format:check": "prettier --check \"src/**/*.{ts,tsx,js,json,md}\""
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.32.1",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@standardnotes/domain-core": "^1.41.8",
     "@standardnotes/sncrypto-web": "1.14.11",
-    "@standardnotes/snjs": "2.212.4",
+    "@standardnotes/snjs": "2.212.9",
     "libsodium-wrappers-sumo": "0.8.4",
     "uuid": "14.0.3",
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@types/node": "^26.6.5",
-    "@vitest/coverage-v8": "^5.0.5",
+    "@types/node": "^26.6.6",
+    "@vitest/coverage-v8": "^5.1.0",
     "esbuild": "^0.28.2",
     "prettier": "^3.9.10",
     "tsx": "^4.23.15",
-    "typescript": "6.0.3",
-    "vite": "^8.3.5",
-    "vitest": "^5.0.5"
+    "typescript": "7.0.2",
+    "vite": "^8.3.6",
+    "vitest": "^5.1.0"
   }
 }
