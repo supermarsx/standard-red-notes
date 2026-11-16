@@ -949,6 +949,112 @@ describe('useCollaborationRoomAccess security transitions', () => {
     expect(sent).toContainEqual({ t: 'room-leave', room: 'epoch-note', requestId: 'epoch-request' })
   })
 
+  it('opens a server-confirmed current note without waiting for an unrelated account sync', async () => {
+    const sent: CollabFrame[] = []
+    mockedCreateChannel.mockReturnValue(createAutoLeaseChannel(sent).channel)
+    const note = { uuid: 'current-note', text: 'canonical body', dirty: false, serverUpdatedAtTimestamp: 100 }
+    const sync = jest.fn(() => new Promise<void>(() => undefined))
+    const application = {
+      items: { streamItems: () => jest.fn(), findItem: () => note },
+      sync: { sync },
+      vaultLocks: { addEventObserver: () => jest.fn() },
+      sockets: { addEventObserver: () => jest.fn(), isWebSocketConnectionOpen: () => true },
+      addEventObserver: () => jest.fn(),
+    } as never
+    const View = () => {
+      latestAccess = useCollaborationRoomAccess(application, note as never, true)
+      return createElement('div', null, latestAccess.status)
+    }
+
+    await act(async () => {
+      root.render(createElement(View))
+      await flushMicrotasks(30)
+    })
+
+    expect(latestAccess).toMatchObject({ status: 'ready', initialEditorState: 'canonical body' })
+    expect(sync).not.toHaveBeenCalled()
+    // Both the fresh request-bound grant and the elected bootstrap challenge remain required.
+    expect(mockedPrepare).toHaveBeenCalledTimes(2)
+    expect(mockedPrepare.mock.calls[0][2]).toMatchObject({ leaseRequestId: expect.any(String) })
+    expect(mockedPrepare.mock.calls[1][2]).toMatchObject({ bootstrapChallenge: expect.any(String) })
+    expect(sent.filter((frame) => frame.t === 'room-join')).toHaveLength(1)
+  })
+
+  it('still syncs a dirty note whose server revision matches a fresh grant', async () => {
+    const dirty = { uuid: 'dirty-note', text: 'unsaved local edit', dirty: true, serverUpdatedAtTimestamp: 100 }
+    let live = dirty
+    let finishSync!: () => void
+    const sync = jest.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishSync = () => {
+            live = { ...dirty, dirty: false, text: 'durable body' }
+            resolve()
+          }
+        }),
+    )
+    const preparation = prepareSynchronizedEditorAccess(
+      { sync: { sync }, items: { findItem: () => live } } as never,
+      dirty as never,
+      { leaseRequestId: 'dirty-request' },
+    )
+    await flushMicrotasks()
+    expect(sync).toHaveBeenCalledTimes(1)
+    finishSync()
+    await expect(preparation).resolves.toMatchObject({ available: true, initialEditorState: 'durable body' })
+  })
+
+  it('does not treat a potentially cached unbound grant as a fresh revision check', async () => {
+    const note = { uuid: 'cached-grant-note', text: 'current locally', dirty: false, serverUpdatedAtTimestamp: 100 }
+    const sync = jest.fn().mockResolvedValue(undefined)
+    await expect(
+      prepareSynchronizedEditorAccess({ sync: { sync }, items: { findItem: () => note } } as never, note as never),
+    ).resolves.toMatchObject({ available: true })
+    expect(sync).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(['revision', 'dirty', 'lite', 'removed', 'session', 'key'])(
+    'rechecks live %s state after fresh authorization instead of trusting the opening snapshot',
+    async (change) => {
+      const note = {
+        uuid: 'changed-during-authorization',
+        text: 'opening body',
+        dirty: false,
+        serverUpdatedAtTimestamp: 100,
+        payload: { content: {} },
+      }
+      const live = {
+        ...note,
+        text: 'changed body',
+        dirty: change === 'dirty',
+        serverUpdatedAtTimestamp: change === 'revision' ? 101 : 100,
+        payload: { content: change === 'lite' ? { __lazyLite: true } : {} },
+      }
+      const replacementSession = { ...sessionUser }
+      mockedResolve.mockImplementation(
+        () =>
+          ({
+            available: true,
+            noteUuid: note.uuid,
+            sourceId: change === 'key' ? 'rotated-key' : 'root-same-uuid:version-1',
+            userUuid: 'user-1',
+            sessionUser: change === 'session' ? replacementSession : sessionUser,
+          }) as never,
+      )
+      const sync = jest.fn().mockResolvedValue(undefined)
+
+      await expect(
+        prepareSynchronizedEditorAccess(
+          { sync: { sync }, items: { findItem: () => (change === 'removed' ? undefined : live) } } as never,
+          note as never,
+          { leaseRequestId: 'changed-request' },
+        ),
+      ).resolves.toMatchObject({ available: false })
+      expect(sync).toHaveBeenCalled()
+      expect(mockedCreateChannel).not.toHaveBeenCalled()
+    },
+  )
+
   it('syncs a stale first device before bootstrap so newer persisted text is the only seed', async () => {
     const stale = {
       uuid: 'note-stale',
@@ -990,7 +1096,9 @@ describe('useCollaborationRoomAccess security transitions', () => {
       items: { findItem: () => live },
     } as never
 
-    const result = await prepareSynchronizedEditorAccess(application, stale as never)
+    const result = await prepareSynchronizedEditorAccess(application, stale as never, {
+      leaseRequestId: 'stale-request',
+    })
 
     expect(sync).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1037,7 +1145,7 @@ describe('useCollaborationRoomAccess security transitions', () => {
     const firstSession = sessionUser
     const secondSession = { uuid: sessionUser.uuid, email: sessionUser.email }
     let activeSession = firstSession
-    const note = { uuid: 'session-race-note', text: 'canonical', dirty: false, serverUpdatedAtTimestamp: 100 }
+    const note = { uuid: 'session-race-note', text: 'canonical', dirty: false, serverUpdatedAtTimestamp: 99 }
     mockedResolve.mockImplementation(
       () =>
         ({
@@ -1071,6 +1179,7 @@ describe('useCollaborationRoomAccess security transitions', () => {
     const preparation = prepareSynchronizedEditorAccess(
       { sync: { sync }, items: { findItem: () => note } } as never,
       note as never,
+      { leaseRequestId: 'session-race-request' },
     )
     await flushMicrotasks(2)
     expect(sync).toHaveBeenCalledTimes(1)
@@ -1386,11 +1495,13 @@ describe('useCollaborationRoomAccess security transitions', () => {
     let applicationObserver: ((event: ApplicationEvent) => Promise<void>) | undefined
     mockedCreateChannel.mockReturnValue(createAutoLeaseChannel(sent).channel)
     const note = { uuid: 'note-self-sync', text: 'canonical', dirty: false, serverUpdatedAtTimestamp: 100 }
+    let live = { ...note, text: 'stale', serverUpdatedAtTimestamp: 99 }
     const sync = jest.fn(async () => {
+      live = note
       await applicationObserver?.(ApplicationEvent.CompletedFullSync)
     })
     const application = {
-      items: { streamItems: () => jest.fn(), findItem: () => note },
+      items: { streamItems: () => jest.fn(), findItem: () => live },
       sync: { sync },
       vaultLocks: { addEventObserver: () => jest.fn() },
       sockets: { addEventObserver: () => jest.fn() },
@@ -1467,9 +1578,9 @@ describe('useCollaborationRoomAccess security transitions', () => {
     })
     const join = sent.find((frame): frame is Extract<CollabFrame, { t: 'room-join' }> => frame.t === 'room-join')
     expect(join).toBeDefined()
-    // Three exhausted barrier attempts, then one barrier plus one activation authorization.
+    // Three exhausted barrier attempts, then a fresh matching grant and activation authorization.
     expect(mockedPrepare).toHaveBeenCalledTimes(5)
-    expect(sync).toHaveBeenCalledTimes(4)
+    expect(sync).toHaveBeenCalledTimes(3)
     expect(latestAccess).toMatchObject({ status: 'ready', initialEditorState: 'canonical after later sync' })
 
     const sentAtReady = [...sent]
@@ -1478,7 +1589,7 @@ describe('useCollaborationRoomAccess security transitions', () => {
       await Promise.resolve()
     })
     expect(mockedPrepare).toHaveBeenCalledTimes(5)
-    expect(sync).toHaveBeenCalledTimes(4)
+    expect(sync).toHaveBeenCalledTimes(3)
     expect(sent).toEqual(sentAtReady)
     expect(latestAccess?.status).toBe('ready')
   })
@@ -1607,7 +1718,12 @@ describe('useCollaborationRoomAccess security transitions', () => {
     async (pendingPhase) => {
       const sent: CollabFrame[] = []
       mockedCreateChannel.mockImplementation(() => createAutoLeaseChannel(sent).channel)
-      const note = { uuid: 'note-1', dirty: false, serverUpdatedAtTimestamp: 100, text: 'persisted' } as never
+      const note = {
+        uuid: 'note-1',
+        dirty: false,
+        serverUpdatedAtTimestamp: pendingPhase === 'sync barrier' ? 99 : 100,
+        text: 'persisted',
+      } as never
       let resume!: () => void
       const pending = new Promise<void>((resolve) => {
         resume = resolve

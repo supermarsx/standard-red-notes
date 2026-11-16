@@ -218,9 +218,10 @@ type CollaborationAuthorizationContext = {
 
 /**
  * Establish a freshness barrier before an editor lease can become authoritative.
- * Authorization returns the server's canonical encrypted-item revision; after
- * an ordinary awaited encrypted sync, the live item must be clean and match it
- * exactly. A revision race retries only after that completed sync.
+ * A fresh request-bound authorization returns the server's canonical encrypted-item
+ * revision. A clean, full live item that already matches it needs no account-wide
+ * sync. Otherwise await ordinary encrypted sync and require the same exact match.
+ * A revision race retries only after that completed sync.
  */
 export async function prepareSynchronizedEditorAccess(
   application: WebApplication,
@@ -244,6 +245,15 @@ export async function prepareSynchronizedEditorAccess(
         available: false,
         sourceId: result.sourceId,
         reason: 'The note changed while collaboration was synchronizing.',
+      }
+    }
+    // Lease-bound grants are fetched afresh (not served from the authorization
+    // cache). Reuse the same live identity/body/revision check as activation;
+    // opening a current note must not wait for an unrelated account-wide sync.
+    if (authorizationContext?.leaseRequestId) {
+      const currentRevision = confirmCanonicalRevision(application, result)
+      if (currentRevision.confirmed) {
+        return { ...result, initialEditorState: currentRevision.initialEditorState }
       }
     }
     await application.sync.sync({
