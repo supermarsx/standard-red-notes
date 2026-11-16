@@ -1,6 +1,7 @@
 import type { CollabFrame } from './CollabChannel'
 import {
   EphemeralRoomPresence,
+  PRESENCE_DISCONNECT_GRACE_MS,
   PRESENCE_REJOIN_GRACE_MS,
   type EncryptedAwarenessIdentity,
 } from './EphemeralRoomPresence'
@@ -173,6 +174,102 @@ describe('EphemeralRoomPresence', () => {
     expect(presence.size).toBe(1)
   })
 
+  it('suppresses both notices across repeated brief socket disconnects with fresh client identities', () => {
+    const activities = jest.fn()
+    const terminal = jest.fn()
+    const presence = new EphemeralRoomPresence({
+      room,
+      roomEpoch,
+      localClientId: 7,
+      resolveEncryptedAwarenessIdentity: () => ({ userUuid: 'user-1', label: 'Alice' }),
+      onActivity: activities,
+      onTerminalClient: terminal,
+    })
+    let clientId = remoteClientId
+    let presenceId = 'presence-1'
+    presence.accept(joinedFrame())
+    for (let attempt = 0; attempt < 4; attempt++) {
+      expect(presence.accept(leftFrame({ presenceId, clientId, reason: 'disconnect' }))).toBe(true)
+      expect(presence.size).toBe(0)
+      expect(terminal).toHaveBeenLastCalledWith(clientId, 'disconnect')
+      jest.advanceTimersByTime(1_000)
+      clientId++
+      presenceId = `reconnected-${attempt}`
+      expect(presence.accept(joinedFrame({ presenceId, clientId }))).toBe(true)
+    }
+    jest.advanceTimersByTime(PRESENCE_DISCONNECT_GRACE_MS)
+    expect(activities).toHaveBeenCalledTimes(1)
+    expect(presence.size).toBe(1)
+    presence.clear()
+    expect(jest.getTimerCount()).toBe(0)
+  })
+
+  it('announces a lasting disconnect once, then announces a later return', () => {
+    const activities = jest.fn()
+    const presence = new EphemeralRoomPresence({
+      room,
+      roomEpoch,
+      localClientId: 7,
+      resolveEncryptedAwarenessIdentity: () => ({ userUuid: 'user-1', label: 'Alice' }),
+      onActivity: activities,
+    })
+    presence.accept(joinedFrame())
+    presence.accept(leftFrame({ reason: 'disconnect' }))
+    jest.advanceTimersByTime(PRESENCE_DISCONNECT_GRACE_MS - 1)
+    expect(activities).toHaveBeenCalledTimes(1)
+    jest.advanceTimersByTime(1)
+    expect(activities).toHaveBeenCalledTimes(2)
+    expect(activities).toHaveBeenLastCalledWith(expect.objectContaining({ action: 'left', reason: 'disconnect' }))
+    presence.accept(joinedFrame({ presenceId: 'later-presence', clientId: 51 }))
+    expect(activities).toHaveBeenCalledTimes(3)
+    expect(activities).toHaveBeenLastCalledWith(expect.objectContaining({ action: 'joined' }))
+    presence.clear()
+  })
+
+  it('silently remembers peers during a brief local transport break without retaining live sessions', () => {
+    const activities = jest.fn()
+    const presence = new EphemeralRoomPresence({
+      room,
+      roomEpoch,
+      localClientId: 7,
+      resolveEncryptedAwarenessIdentity: () => ({ userUuid: 'user-1', label: 'Alice' }),
+      onActivity: activities,
+    })
+    presence.accept(joinedFrame())
+    presence.suspend()
+    expect(presence.size).toBe(0)
+    jest.advanceTimersByTime(1_000)
+    presence.accept(joinedFrame({ presenceId: 'reconnected', clientId: 51 }))
+    expect(activities).toHaveBeenCalledTimes(1)
+    presence.suspend()
+    jest.advanceTimersByTime(PRESENCE_DISCONNECT_GRACE_MS)
+    // A local outage is not evidence that the remote collaborator left.
+    expect(activities).toHaveBeenCalledTimes(1)
+    expect(jest.getTimerCount()).toBe(0)
+    presence.clear()
+  })
+
+  it('honors the reconnect deadline even when a background tab has delayed the timer', () => {
+    let now = 0
+    const activities = jest.fn()
+    const presence = new EphemeralRoomPresence({
+      room,
+      roomEpoch,
+      localClientId: 7,
+      resolveEncryptedAwarenessIdentity: () => ({ userUuid: 'user-1', label: 'Alice' }),
+      onActivity: activities,
+      now: () => now,
+    })
+    presence.accept(joinedFrame())
+    presence.accept(leftFrame({ reason: 'disconnect' }))
+    now += PRESENCE_DISCONNECT_GRACE_MS + 1
+    // Wall time advanced, but the held-departure callback has not run yet.
+    presence.accept(joinedFrame({ presenceId: 'late-return', clientId: 51 }))
+    expect(activities.mock.calls.map(([activity]) => activity.action)).toEqual(['joined', 'left', 'joined'])
+    presence.clear()
+    expect(jest.getTimerCount()).toBe(0)
+  })
+
   it('announces a clean leave and a revocation at once rather than holding them', () => {
     let now = 0
     const activities = jest.fn()
@@ -244,6 +341,7 @@ describe('EphemeralRoomPresence', () => {
     expect(presence.accept(joinedFrame())).toBe(true)
     expect(presence.size).toBe(1)
     expect(activities).toHaveBeenCalledTimes(1)
+    presence.accept(leftFrame({ reason: 'disconnect' }))
     presence.clear()
     expect(presence.size).toBe(0)
 

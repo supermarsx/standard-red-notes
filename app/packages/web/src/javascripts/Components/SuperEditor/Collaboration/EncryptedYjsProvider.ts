@@ -1042,7 +1042,7 @@ export class EncryptedYjsProvider implements Provider {
     this.clearInboundCryptoQueue()
     this.clearLocalOutboundQueue()
     this.stopPresenceHeartbeat()
-    this.ephemeralPresence?.clear()
+    this.ephemeralPresence?.suspend()
     if (this.joined) {
       this.setJoined(false)
       this.emit('sync', false as never)

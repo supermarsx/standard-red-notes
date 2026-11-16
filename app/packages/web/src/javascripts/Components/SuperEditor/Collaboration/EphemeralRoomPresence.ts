@@ -15,6 +15,9 @@ const MAX_PRESENCE_SESSIONS = 64
  */
 export const PRESENCE_REJOIN_GRACE_MS = 90_000
 
+/** Hide momentary socket breaks without delaying genuine departures indefinitely. */
+export const PRESENCE_DISCONNECT_GRACE_MS = 5_000
+
 const MAX_PRESENCE_ID_LENGTH = 128
 const MAX_USER_UUID_LENGTH = 128
 const MAX_DISPLAY_LABEL_LENGTH = 128
@@ -46,11 +49,12 @@ type PresenceSession = {
   joinedActivityEmitted: boolean
 }
 
-/** A `heartbeat-timeout` departure withheld in case the same user is only reconnecting. */
+/** A departure withheld in case the same user is only reconnecting. */
 type HeldDeparture = {
   activity: CollaborationPresenceActivity
   label: string
   releaseAt: number
+  announce: boolean
 }
 
 export type EphemeralRoomPresenceOptions = {
@@ -75,7 +79,7 @@ export class EphemeralRoomPresence {
   private readonly sessions = new Map<string, PresenceSession>()
   private readonly presenceIdByClientId = new Map<number, string>()
   private expiryTimeout: ReturnType<typeof setTimeout> | undefined
-  /** Departures held back for PRESENCE_REJOIN_GRACE_MS, keyed by user (R31). */
+  /** Departures held back for the applicable reconnect grace, keyed by user. */
   private readonly heldDepartures = new Map<string, HeldDeparture>()
   private heldDepartureTimeout: ReturnType<typeof setTimeout> | undefined
 
@@ -120,6 +124,31 @@ export class EphemeralRoomPresence {
         userUuid: session.userUuid,
         clientId: session.clientId,
         label,
+      })
+    }
+  }
+
+  /** Clear live presence immediately, retaining only brief, silent notification continuity. */
+  suspend(): void {
+    const announced = [...this.sessions.values()]
+    this.clear()
+    for (const session of announced) {
+      if (!session.joinedActivityEmitted || !session.label) {
+        continue
+      }
+      this.holdDeparture(session.userUuid, {
+        activity: {
+          action: 'left',
+          presenceId: session.presenceId,
+          userUuid: session.userUuid,
+          clientId: session.clientId,
+          label: session.label,
+          reason: 'disconnect',
+        },
+        label: session.label,
+        releaseAt: this.now() + PRESENCE_DISCONNECT_GRACE_MS,
+        // Our lost connection says nothing about whether these peers left.
+        announce: false,
       })
     }
   }
@@ -229,16 +258,17 @@ export class EphemeralRoomPresence {
       label: session.label,
       reason,
     }
-    // R31. Only a missed heartbeat is ambiguous: a clean leave, a disconnect or a revocation
-    // all mean the collaborator really is gone, and those are announced at once.
-    if (reason !== 'heartbeat-timeout') {
+    // Socket loss and missed heartbeats may be temporary. Deliberate departures
+    // and permission revocations remain immediate, including editor cleanup above.
+    if (reason !== 'heartbeat-timeout' && reason !== 'disconnect') {
       this.emitActivity(activity)
       return
     }
     this.holdDeparture(session.userUuid, {
       activity,
       label: session.label,
-      releaseAt: this.now() + PRESENCE_REJOIN_GRACE_MS,
+      releaseAt: this.now() + (reason === 'disconnect' ? PRESENCE_DISCONNECT_GRACE_MS : PRESENCE_REJOIN_GRACE_MS),
+      announce: true,
     })
   }
 
@@ -246,7 +276,9 @@ export class EphemeralRoomPresence {
     if (!this.heldDepartures.has(userUuid) && this.heldDepartures.size >= MAX_PRESENCE_SESSIONS) {
       // A room that churns beyond its own session ceiling gets the plain notice instead of
       // an unbounded ledger of pending ones.
-      this.emitActivity(held.activity)
+      if (held.announce) {
+        this.emitActivity(held.activity)
+      }
       return
     }
     this.heldDepartures.set(userUuid, held)
@@ -264,6 +296,14 @@ export class EphemeralRoomPresence {
     }
     this.heldDepartures.delete(userUuid)
     this.scheduleHeldDepartureRelease()
+    // Background tabs can deliver a rejoin before an overdue timer callback.
+    // Honor the actual deadline rather than swallowing a genuinely later arrival.
+    if (held.releaseAt <= this.now()) {
+      if (held.announce) {
+        this.emitActivity(held.activity)
+      }
+      return undefined
+    }
     return held
   }
 
@@ -286,7 +326,9 @@ export class EphemeralRoomPresence {
         for (const [userUuid, held] of [...this.heldDepartures.entries()]) {
           if (held.releaseAt <= now) {
             this.heldDepartures.delete(userUuid)
-            this.emitActivity(held.activity)
+            if (held.announce) {
+              this.emitActivity(held.activity)
+            }
           }
         }
         this.scheduleHeldDepartureRelease()

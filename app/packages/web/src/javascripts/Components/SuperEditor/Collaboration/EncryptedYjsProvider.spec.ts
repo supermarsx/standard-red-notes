@@ -560,6 +560,78 @@ describe('EncryptedYjsProvider convergence', () => {
     expect(release).toHaveBeenCalledTimes(1)
   })
 
+  it('does not reannounce existing peers after a brief local socket disconnect', async () => {
+    jest.useFakeTimers()
+    const room = 'quiet-reconnect-room'
+    let connected = true
+    let status: ((connected: boolean) => void) | undefined
+    let inbound: ((frame: CollabFrame) => void) | undefined
+    const onPresenceActivity = jest.fn()
+    const lease = {
+      requestId: 'quiet-lease',
+      shouldBootstrap: true,
+      protocolVersion: 3 as const,
+      maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+      roomEpoch: TEST_ROOM_EPOCH,
+      release: jest.fn(),
+    }
+    const provider = new EncryptedYjsProvider(
+      new Y.Doc(),
+      room,
+      {
+        isConnected: () => connected,
+        authorize: jest.fn(),
+        subscribe: (handler) => {
+          inbound = handler
+          return jest.fn()
+        },
+        subscribeStatus: (handler) => {
+          status = handler
+          return jest.fn()
+        },
+        send: jest.fn(),
+      },
+      createTestTransportCipher(),
+      undefined,
+      lease.requestId,
+      {
+        activeLease: lease,
+        shouldBootstrap: true,
+        expectedRoomEpoch: TEST_ROOM_EPOCH,
+        validateAttachment: () => true,
+        reactivate: async () => ({ ...lease, requestId: 'quiet-reconnected-lease' }),
+        onFatal: jest.fn(),
+        onPresenceActivity,
+      },
+    )
+    try {
+      provider.connect()
+      await flushMicrotasksUntil(() => provider.isRoomJoined())
+      const remoteClientId = provider.doc.clientID === 9001 ? 9002 : 9001
+      const awareness = seedRemoteAwareness(provider, remoteClientId)
+      awareness.getStates().set(remoteClientId, { name: 'Alice', awarenessData: { userUuid: 'remote-user' } })
+      const joined = remotePresenceJoin(room, provider.doc.clientID, 30_000)
+      inbound?.(joined)
+      expect(onPresenceActivity).toHaveBeenCalledTimes(1)
+
+      connected = false
+      status?.(false)
+      expect(awareness.getStates().has(remoteClientId)).toBe(false)
+      expect(provider.isRoomJoined()).toBe(false)
+      jest.advanceTimersByTime(1_000)
+      connected = true
+      status?.(true)
+      await flushMicrotasksUntil(() => provider.isRoomJoined())
+      expect(provider.isRoomJoined()).toBe(true)
+      inbound?.({ ...joined, presenceId: 'renewed-peer' })
+      expect(onPresenceActivity).toHaveBeenCalledTimes(1)
+    } finally {
+      provider.destroy()
+      jest.clearAllTimers()
+      jest.useRealTimers()
+    }
+  })
+
   it('beats at a third of the presence TTL the gateway advertised rather than a hardcoded period', async () => {
     // R31: the server owns the presence TTL; a client that assumes its own period is one
     // server-side change away from being evicted for a timeout it could not have avoided.
