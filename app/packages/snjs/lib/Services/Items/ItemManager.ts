@@ -554,19 +554,45 @@ export class ItemManager extends Services.AbstractService implements Services.It
     source: Models.PayloadEmitSource,
     sourceKey?: string,
   ) {
-    const filter = <I extends Models.ItemInterface>(items: I[], types: string[]) => {
-      return items.filter((item) => {
-        return types.includes(ContentType.TYPES.Any) || types.includes(item.content_type)
-      })
+    const selector = <I extends Models.ItemInterface>(items: I[]) => {
+      let byType: Map<string, I[]> | undefined
+      return (types: string[]): I[] => {
+        if (types.includes(ContentType.TYPES.Any)) {
+          return items.slice()
+        }
+        if (types.length !== 1) {
+          // Mixed subscriptions retain the original order across content types.
+          return items.filter((item) => types.includes(item.content_type))
+        }
+        if (!byType) {
+          byType = new Map()
+          for (const item of items) {
+            const type = item.content_type
+            const bucket = byType.get(type)
+            if (bucket) {
+              bucket.push(item)
+            } else {
+              byType.set(type, [item])
+            }
+          }
+        }
+        // Each observer still owns its array; callbacks cannot alter later deliveries.
+        return byType.get(types[0])?.slice() ?? []
+      }
     }
 
     const frozenObservers = this.observers.slice()
+    const selectChanged = selector(changed)
+    const selectInserted = selector(inserted)
+    const selectRemoved = selector(removed)
+    const selectIgnored = selector(ignored)
+    const selectUnerrored = selector(unerrored)
     for (const observer of frozenObservers) {
-      const filteredChanged = filter(changed, observer.contentType)
-      const filteredInserted = filter(inserted, observer.contentType)
-      const filteredDiscarded = filter(removed, observer.contentType)
-      const filteredIgnored = filter(ignored, observer.contentType)
-      const filteredUnerrored = filter(unerrored, observer.contentType)
+      const filteredChanged = selectChanged(observer.contentType)
+      const filteredInserted = selectInserted(observer.contentType)
+      const filteredDiscarded = selectRemoved(observer.contentType)
+      const filteredIgnored = selectIgnored(observer.contentType)
+      const filteredUnerrored = selectUnerrored(observer.contentType)
 
       if (
         filteredChanged.length === 0 &&

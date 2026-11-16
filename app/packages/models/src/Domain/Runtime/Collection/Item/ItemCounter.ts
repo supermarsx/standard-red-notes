@@ -27,6 +27,7 @@ export class ItemCounter implements SNIndex {
   private countableItemsByType = new Map<string, Set<string>>()
   private displayOptions?: AnyDisplayOptions
   private vaultDisplayOptions?: VaultDisplayOptions
+  private pendingCountChanges?: Set<string | undefined>
 
   constructor(
     private collection: ItemCollection,
@@ -44,12 +45,12 @@ export class ItemCounter implements SNIndex {
 
   public setDisplayOptions(options: AnyDisplayOptions) {
     this.displayOptions = options
-    this.receiveItemChanges(this.collection.all())
+    this.batchCountChanges(() => this.receiveItemChanges(this.collection.all()))
   }
 
   public setVaultDisplayOptions(options: VaultDisplayOptions) {
     this.vaultDisplayOptions = options
-    this.receiveItemChanges(this.collection.all())
+    this.batchCountChanges(() => this.receiveItemChanges(this.collection.all()))
   }
 
   public allCountableItemsCount(): number {
@@ -94,6 +95,10 @@ export class ItemCounter implements SNIndex {
   }
 
   public onChange(delta: ItemDelta): void {
+    this.batchCountChanges(() => this.receiveChanges(delta))
+  }
+
+  private receiveChanges(delta: ItemDelta): void {
     const folderChanges = [...delta.changed, ...delta.inserted, ...delta.discarded].some(isFolderItem)
     const foldersToRefresh = folderChanges ? new Set(this.folderParents.keys()) : undefined
     if (folderChanges) {
@@ -157,6 +162,30 @@ export class ItemCounter implements SNIndex {
     return false
   }
 
+  private batchCountChanges(update: () => void): void {
+    if (this.pendingCountChanges) {
+      update()
+      return
+    }
+    const pending = new Set<string | undefined>()
+    this.pendingCountChanges = pending
+    try {
+      update()
+    } finally {
+      // Clear before callbacks: a callback may synchronously emit a new batch.
+      this.pendingCountChanges = undefined
+      for (const uuid of pending) {
+        this.publishCountChange(uuid)
+      }
+    }
+  }
+
+  private publishCountChange(uuid: string | undefined): void {
+    for (const observer of this.observers) {
+      observer(uuid)
+    }
+  }
+
   private notifyObservers(tagUuid: string | undefined) {
     const affected = new Set<string | undefined>([tagUuid])
     let parent = tagUuid ? this.folderParents.get(tagUuid) : undefined
@@ -165,8 +194,10 @@ export class ItemCounter implements SNIndex {
       parent = this.folderParents.get(parent)
     }
     for (const uuid of affected) {
-      for (const observer of this.observers) {
-        observer(uuid)
+      if (this.pendingCountChanges) {
+        this.pendingCountChanges.add(uuid)
+      } else {
+        this.publishCountChange(uuid)
       }
     }
   }

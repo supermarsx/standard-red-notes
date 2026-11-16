@@ -129,11 +129,13 @@ export class ItemsEncryptionService extends AbstractService {
   public itemsKeyForEncryptedPayload(
     payload: EncryptedPayloadInterface,
   ): ItemsKeyInterface | KeySystemItemsKeyInterface | undefined {
-    const itemsKeys = this.getItemsKeys()
-    const keySystemItemsKeys = this.items.getItems<KeySystemItemsKeyInterface>(ContentType.TYPES.KeySystemItemsKey)
-
-    return [...itemsKeys, ...keySystemItemsKeys].find(
-      (key) => key.uuid === payload.items_key_id || key.duplicateOf === payload.items_key_id,
+    const matches = (key: ItemsKeyInterface | KeySystemItemsKeyInterface) =>
+      key.uuid === payload.items_key_id || key.duplicateOf === payload.items_key_id
+    // Account notes normally resolve here; avoid loading/copying vault keys per note.
+    // Keep the original first-match/duplicate-alias precedence and read live keys each time.
+    return (
+      this.getItemsKeys().find(matches) ??
+      this.items.getItems<KeySystemItemsKeyInterface>(ContentType.TYPES.KeySystemItemsKey).find(matches)
     )
   }
 

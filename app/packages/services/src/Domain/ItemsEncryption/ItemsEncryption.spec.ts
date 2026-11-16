@@ -124,6 +124,60 @@ describe('ItemsEncryptionService', () => {
     })
   })
 
+  describe('bulk account key lookup', () => {
+    it('does not repeatedly retrieve vault keys for notes encrypted with an account key', () => {
+      const key = { uuid: 'account-key' } as ItemsKeyInterface
+      mockItems.getDisplayableItemsKeys = jest.fn().mockReturnValue([key])
+      mockItems.getItems = jest.fn().mockReturnValue([])
+      for (let i = 0; i < 1000; i++) {
+        expect(
+          itemsEncryptionService.itemsKeyForEncryptedPayload({
+            items_key_id: key.uuid,
+          } as EncryptedPayloadInterface),
+        ).toBe(key)
+      }
+      expect(mockItems.getItems).not.toHaveBeenCalled()
+    })
+
+    it('preserves regular-key and duplicate-alias precedence over a vault key', () => {
+      const alias = { uuid: 'old-account-key', duplicateOf: 'shared-id' } as ItemsKeyInterface
+      const exact = { uuid: 'shared-id' } as ItemsKeyInterface
+      const vault = { uuid: 'shared-id' } as KeySystemItemsKeyInterface
+      mockItems.getDisplayableItemsKeys = jest.fn().mockReturnValue([alias, exact])
+      mockItems.getItems = jest.fn().mockReturnValue([vault])
+      expect(
+        itemsEncryptionService.itemsKeyForEncryptedPayload({ items_key_id: 'shared-id' } as EncryptedPayloadInterface),
+      ).toBe(alias)
+    })
+
+    it('still resolves vault aliases and leaves unknown keys waiting for recovery', async () => {
+      const key = { uuid: 'vault-key', duplicateOf: 'old-vault-key' } as KeySystemItemsKeyInterface
+      mockItems.getDisplayableItemsKeys = jest.fn().mockReturnValue([])
+      mockItems.getItems = jest.fn().mockReturnValue([key])
+      expect(
+        itemsEncryptionService.itemsKeyForEncryptedPayload({
+          items_key_id: 'old-vault-key',
+        } as EncryptedPayloadInterface),
+      ).toBe(key)
+      expect(
+        await itemsEncryptionService.decryptPayloadWithKeyLookup({
+          uuid: 'unknown',
+          items_key_id: 'missing-key',
+        } as EncryptedPayloadInterface),
+      ).toEqual({ uuid: 'unknown', errorDecrypting: true, waitingForKey: true })
+    })
+
+    it('reads the current key collection again after a key change', () => {
+      const before = { uuid: 'key' } as ItemsKeyInterface
+      const after = { uuid: 'key' } as ItemsKeyInterface
+      mockItems.getDisplayableItemsKeys = jest.fn().mockReturnValueOnce([before]).mockReturnValueOnce([after])
+      mockItems.getItems = jest.fn().mockReturnValue([])
+      const payload = { items_key_id: 'key' } as EncryptedPayloadInterface
+      expect(itemsEncryptionService.itemsKeyForEncryptedPayload(payload)).toBe(before)
+      expect(itemsEncryptionService.itemsKeyForEncryptedPayload(payload)).toBe(after)
+    })
+  })
+
   describe('encryptPayloadWithKeyLookup', () => {
     it('throws an error when keyToUseForItemEncryption returns an instance of StandardException', async () => {
       const mockPayload: DecryptedPayloadInterface = {} as DecryptedPayloadInterface

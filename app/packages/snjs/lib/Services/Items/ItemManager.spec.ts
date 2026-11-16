@@ -142,6 +142,59 @@ describe('itemManager', () => {
     })
   })
 
+  describe('bulk observer dispatch', () => {
+    it('does not rescan a note batch for every unrelated observer', () => {
+      let contentTypeReads = 0
+      const notes = Array.from({ length: 1000 }, (_, i) => ({
+        uuid: 'note-' + i,
+        get content_type() {
+          contentTypeReads++
+          return ContentType.TYPES.Note
+        },
+      })) as Models.DecryptedItemInterface[]
+      const unrelated = jest.fn()
+      for (let i = 0; i < 30; i++) {
+        itemManager.addObserver(ContentType.TYPES.Tag, unrelated)
+      }
+      const received = jest.fn()
+      itemManager.addObserver(ContentType.TYPES.Note, received)
+
+      itemManager['notifyObservers'](notes, [], [], [], [], Models.PayloadEmitSource.LocalDatabaseLoaded)
+
+      expect(unrelated).not.toHaveBeenCalled()
+      expect(received).toHaveBeenCalledTimes(1)
+      expect(received.mock.calls[0][0].changed).toEqual(notes)
+      expect(contentTypeReads).toBeLessThanOrEqual(notes.length)
+    })
+
+    it('preserves mixed-type ordering, independent arrays, and observer registration snapshots', () => {
+      const first = createNoteWithTitle('first')
+      const tag = createTag('tag')
+      const last = createNoteWithTitle('last')
+      const changed = [first, tag, last]
+      const late = jest.fn()
+      itemManager.addObserver(ContentType.TYPES.Note, ({ changed }) => {
+        changed.length = 0
+        itemManager.addObserver(ContentType.TYPES.Note, late)
+      })
+      const sameType = jest.fn()
+      const mixed = jest.fn()
+      const wildcard = jest.fn()
+      itemManager.addObserver(ContentType.TYPES.Note, sameType)
+      itemManager.addObserver([ContentType.TYPES.Tag, ContentType.TYPES.Note], mixed)
+      itemManager.addObserver(ContentType.TYPES.Any, wildcard)
+
+      itemManager['notifyObservers'](changed, [], [], [], [], Models.PayloadEmitSource.LocalDatabaseLoaded, 'batch')
+
+      expect(sameType.mock.calls[0][0].changed).toEqual([first, last])
+      expect(mixed.mock.calls[0][0].changed).toEqual(changed)
+      expect(wildcard.mock.calls[0][0].changed).toEqual(changed)
+      expect(wildcard.mock.calls[0][0].sourceKey).toBe('batch')
+      expect(changed).toHaveLength(3)
+      expect(late).not.toHaveBeenCalled()
+    })
+  })
+
   describe('note display criteria', () => {
     it('viewing notes with tag', async () => {
       const tag = createTag('parent')

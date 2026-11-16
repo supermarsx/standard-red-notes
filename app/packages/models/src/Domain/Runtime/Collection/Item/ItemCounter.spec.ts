@@ -109,6 +109,83 @@ describe('count notifications after deletion and scope changes', () => {
     counter.onChange(full)
   }
 
+  it('publishes final folder and ancestor counts once per bulk sync batch', () => {
+    const collection = new ItemCollection()
+    const counter = new ItemCounter(collection)
+    const notes = Array.from({ length: 1000 }, (_, i) => note('bulk-' + i))
+    const folder = (uuid: string, references: FolderContent['references']) =>
+      new SNFolder(
+        new DecryptedPayload({
+          uuid,
+          content_type: FolderContentType,
+          content: FillItemContent<FolderContent>({ title: uuid, references }),
+          ...PayloadTimestampDefaults(),
+        }),
+      )
+    const parent = folder('parent', [])
+    const child = folder('child', [
+      { uuid: parent.uuid, content_type: FolderContentType, reference_type: ContentReferenceType.FolderToParentFolder },
+      ...notes.map((item) => ({ uuid: item.uuid, content_type: item.content_type })),
+    ])
+    apply(collection, counter, { inserted: [parent, child] })
+    const updates: { uuid: string | undefined; total: number; folder: number }[] = []
+    counter.addCountChangeObserver((uuid) => {
+      updates.push({
+        uuid,
+        total: counter.allCountableNotesCount(),
+        folder: counter.countableNotesForFolder(parent, true),
+      })
+    })
+
+    apply(collection, counter, { inserted: notes })
+
+    expect(updates.length).toBe(3)
+    expect(updates).toEqual([
+      { uuid: child.uuid, total: notes.length, folder: notes.length },
+      { uuid: parent.uuid, total: notes.length, folder: notes.length },
+      { uuid: undefined, total: notes.length, folder: notes.length },
+    ])
+    updates.length = 0
+    counter.setDisplayOptions({ customFilter: () => false })
+    expect(updates).toEqual([
+      { uuid: child.uuid, total: 0, folder: 0 },
+      { uuid: parent.uuid, total: 0, folder: 0 },
+      { uuid: undefined, total: 0, folder: 0 },
+    ])
+  })
+
+  it('delivers a reentrant count change as a separate completed batch', () => {
+    const collection = new ItemCollection()
+    const counter = new ItemCounter(collection)
+    const first = note('first')
+    const second = note('second')
+    const tag = new SNTag(
+      new DecryptedPayload({
+        uuid: 'tag',
+        content_type: ContentType.TYPES.Tag,
+        content: FillItemContent<TagContent>({
+          title: 'tag',
+          references: [first, second].map((item) => ({ uuid: item.uuid, content_type: item.content_type })),
+        }),
+        ...PayloadTimestampDefaults(),
+      }),
+    )
+    apply(collection, counter, { inserted: [tag] })
+    const counts: number[] = []
+    counter.addCountChangeObserver((uuid) => {
+      if (uuid !== tag.uuid) {
+        return
+      }
+      counts.push(counter.countableItemsForTag(tag))
+      if (counts.length === 1) {
+        apply(collection, counter, { inserted: [second] })
+      }
+    })
+    apply(collection, counter, { inserted: [first] })
+    expect(counts).toEqual([1, 2])
+    expect(counter.allCountableNotesCount()).toBe(2)
+  })
+
   it('removes cached tag membership when remote clean tombstones discard reverse references first', () => {
     const collection = new ItemCollection()
     const counter = new ItemCounter(collection)
