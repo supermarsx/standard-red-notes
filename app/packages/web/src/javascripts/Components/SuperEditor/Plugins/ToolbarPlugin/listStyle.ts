@@ -14,15 +14,15 @@
  * class (see lists.scss). Both the `list-style-type` and the class are written to
  * the live DOM and persisted on the node so they round-trip + re-render.
  *
- * WHY TWO WRITES (node + DOM): In this Lexical build (0.45) the reconciler only
+ * WHY TWO WRITES (node + DOM): In this Lexical build the reconciler only
  * applies `text-align`/indent for ElementNodes — it never copies an
  * ElementNode's `__style` onto the rendered `<ol>`/`<ul>`, and `ListNode`'s
  * `createDOM`/`updateDOM` ignore style entirely. So to make the marker actually
  * RENDER we must set the inline style on the live list element directly via
- * `getElementByKey`. We also persist the value onto the node's inherited
- * `__style` (`ElementNode.setStyle`) so it round-trips through
- * `exportJSON`/`importJSON` and is re-applied by `applyPersistedListStyles`
- * after a fresh render where the reconciler rebuilt the DOM from scratch.
+ * `getElementByKey`. ElementNode's inherited `__style` is NOT serialized, so
+ * the declarations are also stored in Lexical NodeState, which survives
+ * JSON save/reload and collaborative updates on the ordinary list node type.
+ * `applyPersistedListStyles` restores the marker after DOM reconstruction.
  *
  * MULTILEVEL: a top-level list can additionally store a per-nesting-level style
  * map under the custom `--sn-list-levels` declaration in its inline style (a
@@ -30,7 +30,18 @@
  * stamps the matching marker onto each descendant list keyed by its visual depth,
  * so "Define new multilevel list" choices survive reload.
  */
-import { $getEditor, $getNodeByKey, $getRoot, $isElementNode, BaseSelection, LexicalEditor, LexicalNode } from 'lexical'
+import {
+  $getEditor,
+  $getNodeByKey,
+  $getRoot,
+  $getState,
+  $isElementNode,
+  $setState,
+  createState,
+  BaseSelection,
+  LexicalEditor,
+  LexicalNode,
+} from 'lexical'
 import { $getNearestNodeOfType } from '@lexical/utils'
 import { $isListNode, ListNode } from '@lexical/list'
 
@@ -98,6 +109,19 @@ const LIST_STYLE_PROPERTY = 'list-style-type'
 const MARKER_PROPERTY = '--sn-list-marker'
 /** Custom declaration storing the compact per-level multilevel style map. */
 const LEVELS_PROPERTY = '--sn-list-levels'
+
+/** Native list serialization omits ElementNode.__style; NodeState is durable and shared by Yjs. */
+const persistedListStyle = createState('srnListStyle', {
+  parse: (value: unknown): string => (typeof value === 'string' ? value : ''),
+})
+
+const $readListStyle = (list: ListNode): string => $getState(list, persistedListStyle) || list.getStyle()
+
+const $writeListStyle = (list: ListNode, style: string): void => {
+  $setState(list, persistedListStyle, style)
+  // Mirror into the runtime style for existing layout/copy consumers.
+  list.setStyle(style)
+}
 
 /**
  * Stable marker value for the user-defined CUSTOM glyph marker. Unlike the
@@ -329,7 +353,7 @@ export const $setCustomListStyle = (selection: BaseSelection | null, rawGlyph: s
 
 /** Read the persisted custom glyph off a `ListNode` (`''` when none). */
 export const $getCustomListGlyph = (listNode: ListNode): string =>
-  stripCssQuotes(parseCSS(listNode.getStyle()).get(CUSTOM_GLYPH_PROPERTY))
+  stripCssQuotes(parseCSS($readListStyle(listNode)).get(CUSTOM_GLYPH_PROPERTY))
 
 /**
  * Persist a marker style on a writable list node: the native `list-style-type`
@@ -340,17 +364,17 @@ const persistMarker = (writable: ListNode, styleValue: string, customGlyph?: str
   const preset = PRESET_BY_VALUE.get(styleValue)
   const isCustom = styleValue === CUSTOM_MARKER_VALUE
   const cssType = isCustom ? 'none' : preset ? (preset.listStyleType ?? 'none') : styleValue
-  let css = withProperty(writable.getStyle(), LIST_STYLE_PROPERTY, cssType)
+  let css = withProperty($readListStyle(writable), LIST_STYLE_PROPERTY, cssType)
   css = withProperty(css, MARKER_PROPERTY, styleValue)
   if (isCustom) {
     // Prefer the newly-entered glyph; fall back to whatever this node already
     // stored (so re-stamping 'custom' without a glyph keeps it), else a bullet.
     const sanitized = sanitizeCustomGlyph(customGlyph ?? '')
-    const previous = stripCssQuotes(parseCSS(writable.getStyle()).get(CUSTOM_GLYPH_PROPERTY))
+    const previous = stripCssQuotes(parseCSS($readListStyle(writable)).get(CUSTOM_GLYPH_PROPERTY))
     const glyph = sanitized || previous || '•'
     css = withProperty(css, CUSTOM_GLYPH_PROPERTY, toCssString(glyph))
   }
-  writable.setStyle(css)
+  $writeListStyle(writable, css)
 }
 
 /**
@@ -370,11 +394,11 @@ export const $setMultilevelListStyle = (
   const writable = top.getWritable()
   const serialized = serializeLevels(levels)
   if (serialized) {
-    writable.setStyle(withProperty(writable.getStyle(), LEVELS_PROPERTY, serialized))
+    $writeListStyle(writable, withProperty($readListStyle(writable), LEVELS_PROPERTY, serialized))
   } else {
-    const map = parseCSS(writable.getStyle())
+    const map = parseCSS($readListStyle(writable))
     map.delete(LEVELS_PROPERTY)
-    writable.setStyle(serializeCSS(map))
+    $writeListStyle(writable, serializeCSS(map))
   }
   applyListStyleToDOM(writable)
   return writable
@@ -382,7 +406,7 @@ export const $setMultilevelListStyle = (
 
 /** Read the persisted per-level multilevel style map off a top `ListNode`. */
 export const $getMultilevelListStyle = (listNode: ListNode): MultilevelStyleMap =>
-  parseLevels(parseCSS(listNode.getStyle()).get(LEVELS_PROPERTY))
+  parseLevels(parseCSS($readListStyle(listNode)).get(LEVELS_PROPERTY))
 
 /**
  * Read the persisted marker style off a `ListNode`. Prefers an explicit single
@@ -390,7 +414,7 @@ export const $getMultilevelListStyle = (listNode: ListNode): MultilevelStyleMap 
  * preset `value` when recognisable, else the raw `list-style-type`.
  */
 export const $getListStyle = (listNode: ListNode): string | null => {
-  const declared = parseCSS(listNode.getStyle())
+  const declared = parseCSS($readListStyle(listNode))
   return declared.get(MARKER_PROPERTY) ?? declared.get(LIST_STYLE_PROPERTY) ?? null
 }
 
@@ -482,7 +506,7 @@ export const applyListStyleToDOM = (listNode: ListNode, editor?: LexicalEditor):
 
   // The stable marker value persisted on the node (custom-glyph identity lives in
   // MARKER_PROPERTY; fall back to a raw native list-style-type for older nodes).
-  const declared = parseCSS(listNode.getStyle())
+  const declared = parseCSS($readListStyle(listNode))
   const markerValue = declared.get(MARKER_PROPERTY) ?? declared.get(LIST_STYLE_PROPERTY) ?? null
   // The user's custom glyph (if this list uses the CUSTOM marker), recovered
   // from its persisted CSS string so it re-renders after a cold reload.

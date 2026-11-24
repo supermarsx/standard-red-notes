@@ -14,6 +14,7 @@ import {
   $createTextNode,
   $getRoot,
   $getSelection,
+  $nodesOfType,
   $setSelection,
 } from 'lexical'
 import { $createListItemNode, $createListNode, $isListNode, ListItemNode, ListNode } from '@lexical/list'
@@ -67,6 +68,76 @@ const seedListAndSelect = (editor: ReturnType<typeof makeEditor>, listType: 'bul
   )
   return listKey
 }
+
+/** Use the same JSON serialization as note saves, then load into a fresh editor. */
+const reload = (editor: ReturnType<typeof makeEditor>) => {
+  const saved = JSON.stringify(editor.getEditorState().toJSON())
+  const restored = makeEditor()
+  restored.setEditorState(restored.parseEditorState(saved))
+  return restored
+}
+
+describe('list markers survive saved-note reloads', () => {
+  it.each([
+    ...BULLET_STYLES.map((preset) => ['bullet', preset.value] as const),
+    ...NUMBER_STYLES.map((preset) => ['number', preset.value] as const),
+  ])('restores the %s marker %s after saving and reopening', (type, marker) => {
+    const editor = makeEditor()
+    seedListAndSelect(editor, type)
+    editor.update(() => $setListStyle($getSelection(), marker), { discrete: true })
+    const restored = reload(editor)
+    restored.getEditorState().read(() => {
+      const list = $nodesOfType(ListNode)[0]
+      expect(list.getListType()).toBe(type)
+      expect($getListStyle(list)).toBe(marker)
+    })
+  })
+
+  it('restores an entered emoji marker and renders it on a newly created list element', () => {
+    const editor = makeEditor()
+    seedListAndSelect(editor)
+    editor.update(() => $setCustomListStyle($getSelection(), '🧭'), { discrete: true })
+    const restored = reload(editor)
+    const element = document.createElement('ul')
+    jest.spyOn(restored, 'getElementByKey').mockReturnValue(element)
+    restored.getEditorState().read(() => {
+      const list = $nodesOfType(ListNode)[0]
+      expect($getListStyle(list)).toBe(CUSTOM_MARKER_VALUE)
+      expect($getCustomListGlyph(list)).toBe('🧭')
+      applyPersistedListStyles(restored)
+    })
+    expect(element.classList.contains('Lexical__listStyle--custom')).toBe(true)
+    expect(element.style.getPropertyValue('--sn-list-marker-custom')).toContain('🧭')
+  })
+
+  it('preserves multilevel marker choices when a reopened list is edited and saved again', () => {
+    const editor = makeEditor()
+    seedListAndSelect(editor)
+    const levels = { 1: 'disc', 2: 'arrow', 3: 'upper-roman' }
+    editor.update(
+      () => {
+        $setCustomListStyle($getSelection(), '◆')
+        $setMultilevelListStyle($getSelection(), levels)
+      },
+      { discrete: true },
+    )
+    const restored = reload(editor)
+    restored.update(
+      () => {
+        const list = $nodesOfType(ListNode)[0]
+        list.getFirstDescendant()!.selectStart()
+        $setListStyle($getSelection(), 'star')
+      },
+      { discrete: true },
+    )
+    const reopenedAgain = reload(restored)
+    reopenedAgain.getEditorState().read(() => {
+      const list = $nodesOfType(ListNode)[0]
+      expect($getListStyle(list)).toBe('star')
+      expect($getMultilevelListStyle(list)).toEqual(levels)
+    })
+  })
+})
 
 describe('presets', () => {
   it('expose bullet and number marker values', () => {

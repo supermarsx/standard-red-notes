@@ -9,10 +9,9 @@ import { applyListStyleToDOM, applyPersistedListStyles } from '../ToolbarPlugin/
  * Standard Red Notes: re-applies persisted list-marker styling to the DOM.
  *
  * Custom markers (and the multilevel per-level map) are persisted on each
- * `ListNode`'s inline `__style`, which round-trips through `exportJSON` /
- * `importJSON`. But in this Lexical build the reconciler never copies an
- * ElementNode's `__style` onto the rendered `<ul>`/`<ol>`, so after a fresh
- * render the markers must be stamped back on manually.
+ * `ListNode`'s serialized NodeState (also mirrored into its runtime `__style`).
+ * The inherited `__style` itself is neither serialized nor copied onto rendered
+ * `<ul>`/`<ol>` elements, so fresh renders restore markers from NodeState.
  *
  * IMPORTANT: this must NOT run on every editor update — an earlier version walked
  * the entire document tree on each keystroke, which froze large notes ("page is
