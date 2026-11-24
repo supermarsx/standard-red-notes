@@ -104,13 +104,19 @@ describe('$buildDocumentOutline', () => {
     expect(outline.bookmarks.every((b) => typeof b.nodeKey === 'string' && b.nodeKey.length > 0)).toBe(true)
   })
 
-  it('keeps empty-text headings (structure preserved)', () => {
+  it('omits empty and whitespace-only headings without changing the document', () => {
     const outline = outlineAfter(() => {
       const root = $getRoot()
       root.clear()
-      root.append($createHeadingNode('h2')) // no text child
+      root.append(
+        $createHeadingNode('h1'),
+        heading('h2', 'Real section'),
+        heading('h3', ' \t\u00a0 '),
+        $createHeadingNode('h2'),
+      )
     })
-    expect(outline.headings).toEqual([{ kind: 'heading', nodeKey: expect.any(String), level: 2, text: '' }])
+    expect(outline.headings).toEqual([{ kind: 'heading', nodeKey: expect.any(String), level: 2, text: 'Real section' }])
+    expect(editor.getEditorState().read(() => $getRoot().getChildrenSize())).toBe(4)
   })
 
   it('returns an empty outline for an empty document', () => {

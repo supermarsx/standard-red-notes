@@ -215,9 +215,9 @@ const NavigationSidebar = () => {
                   className="text-text hover:bg-contrast flex w-full items-center truncate py-1 pr-2 text-left text-sm"
                   style={{ paddingLeft: (heading.level - 1) * 12 + 8 }}
                   onClick={() => jumpToHeading(heading.nodeKey)}
-                  title={heading.text || 'Untitled heading'}
+                  title={heading.text}
                 >
-                  <span className="truncate">{heading.text || '(untitled heading)'}</span>
+                  <span className="truncate">{heading.text}</span>
                 </button>
               </li>
             ))}

@@ -11,8 +11,8 @@
  *    so every heading instance in this editor is collected.
  *  - We descend into EVERY element (not just root children) so a heading or anchor
  *    nested inside a collapsible / table / list is still found.
- *  - Empty-text headings are kept (the sidebar renders them as a placeholder) so
- *    the outline still mirrors the document's structure.
+ *  - Blank headings are omitted from navigation while their editable blocks
+ *    remain in the document.
  */
 import { $getRoot, $isElementNode, ElementNode } from 'lexical'
 import { $isHeadingNode } from '@lexical/rich-text'
@@ -44,7 +44,10 @@ export function $buildDocumentOutline(): DocumentOutline {
       if ($isHeadingNode(child)) {
         const tag = child.getTag() // 'h1'..'h6'
         const level = Number(tag.slice(1)) || 1
-        headings.push({ kind: 'heading', nodeKey: child.getKey(), level, text: child.getTextContent().trim() })
+        const text = child.getTextContent().trim()
+        if (text.length > 0) {
+          headings.push({ kind: 'heading', nodeKey: child.getKey(), level, text })
+        }
       } else if ($isBookmarkAnchorNode(child)) {
         bookmarks.push({ kind: 'bookmark', nodeKey: child.getKey(), bookmarkId: child.getBookmarkId() })
       }

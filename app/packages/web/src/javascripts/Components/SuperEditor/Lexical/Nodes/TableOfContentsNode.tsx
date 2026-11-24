@@ -83,7 +83,7 @@ function TableOfContentsList({
   editor: LexicalEditor
   format: TableOfContentsFormat
 }): React.JSX.Element {
-  const headings = entries.filter(([, , tag]) => levelOf(tag) <= format.maxLevel)
+  const headings = entries.filter(([, text, tag]) => text.trim().length > 0 && levelOf(tag) <= format.maxLevel)
 
   if (headings.length === 0) {
     return (
@@ -107,12 +107,12 @@ function TableOfContentsList({
               type="button"
               data-srn-print-static-text="true"
               className="text-foreground hover:bg-contrast hover:text-info block w-full truncate rounded px-2 py-0.5 text-left text-sm outline-none"
-              title={text || 'Untitled heading'}
+              title={text}
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => scrollToHeading(editor, key)}
             >
               {format.numbered ? `${index + 1}. ` : ''}
-              {text || 'Untitled heading'}
+              {text}
             </button>
           </li>
         )

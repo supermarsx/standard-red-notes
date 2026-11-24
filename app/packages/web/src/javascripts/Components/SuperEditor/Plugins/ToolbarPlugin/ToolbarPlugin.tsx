@@ -4321,13 +4321,14 @@ const ToolbarPlugin = ({
         <div className="text-text mt-1 mb-1.5 px-3 text-sm font-semibold uppercase">{t('tableOfContents')}</div>
         <TableOfContentsPlugin>
           {(tableOfContents) => {
-            if (!tableOfContents.length) {
+            const headings = tableOfContents.filter(([, text]) => text.trim().length > 0)
+            if (!headings.length) {
               return <div className="py-2 text-center">{t('noHeadingsFound')}</div>
             }
 
             return (
               <Menu a11yLabel={t('tableOfContentsLower')} className="!px-0">
-                {tableOfContents.map(([key, text, tag]) => {
+                {headings.map(([key, text, tag]) => {
                   const level = parseInt(tag.slice(1)) || 1
                   return (
                     <MenuItem

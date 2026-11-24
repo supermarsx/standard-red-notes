@@ -229,6 +229,28 @@ describe('NavigationSidebar', () => {
     expect(bookmarks[0].textContent).toContain('My Marked Spot')
   })
 
+  it('omits trailing blank headings from navigation while retaining their editor blocks', () => {
+    mount()
+    act(() => {
+      capturedEditor.update(
+        () => {
+          $getRoot().append($createHeadingNode('h2'), $createHeadingNode('h3').append($createTextNode(' \t\u00a0 ')))
+        },
+        { discrete: true },
+      )
+      capturedEditor.getRootElement()?.dispatchEvent(
+        new CustomEvent(NAVIGATION_LAYOUT_CHANGED_EVENT, {
+          detail: { visible: true, showBookmarks: true },
+        }),
+      )
+    })
+    expect(
+      Array.from(container.querySelectorAll('[data-outline-heading]')).map((heading) => heading.textContent),
+    ).toEqual(['Introduction', 'Details'])
+    expect(container.querySelector('[data-navigation-sidebar]')?.textContent).not.toContain('untitled')
+    expect(capturedEditor.getEditorState().read(() => $getRoot().getChildrenSize())).toBe(5)
+  })
+
   it('scrolls the editor element into view when a heading is clicked', () => {
     saveNoteLayout(NOTE_UUID, { ...DEFAULT_NOTE_LAYOUT, navigation: { visible: true, showBookmarks: true } })
     mount()
