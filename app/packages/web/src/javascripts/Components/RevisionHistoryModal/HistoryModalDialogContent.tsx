@@ -22,7 +22,6 @@ const HistoryModalDialogContent = ({ dismissModal, note }: RevisionHistoryModalC
       new NoteHistoryController(
         note,
         application.itemListController,
-        application.features,
         application.items,
         application.mutator,
         application.sync,
@@ -98,7 +97,6 @@ const HistoryModalDialogContent = ({ dismissModal, note }: RevisionHistoryModalC
           )}
         >
           <HistoryListContainer
-            features={application.features}
             noteHistoryController={noteHistoryController}
             selectMobileModalTab={setSelectedMobileTab}
           />

@@ -71,7 +71,6 @@ describe('restoring a revision that was saved from a live shared document', () =
     const controller = new NoteHistoryController(
       current,
       {} as never,
-      { hasMinimumRole: jest.fn().mockReturnValue(true) } as never,
       { findItem: jest.fn().mockReturnValue(current) } as never,
       {} as never,
       { sync: jest.fn() } as never,

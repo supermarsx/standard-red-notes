@@ -16,5 +16,4 @@ export enum RevisionContentState {
   Idle,
   Loading,
   Loaded,
-  NotEntitled,
 }

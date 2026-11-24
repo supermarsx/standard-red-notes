@@ -1,25 +1,18 @@
 import { observer } from 'mobx-react-lite'
 import { Fragment, FunctionComponent, useMemo, useState } from 'react'
-import Icon from '@/Components/Icon/Icon'
 import { useListKeyboardNavigation } from '@/Hooks/useListKeyboardNavigation'
 import HistoryListItem from './HistoryListItem'
 import { previewHistoryEntryTitle } from './utils'
-import { FeaturesClientInterface, RevisionMetadata } from '@standardnotes/snjs'
+import { RevisionMetadata } from '@standardnotes/snjs'
 import { NoteHistoryController } from '@/Controllers/NoteHistory/NoteHistoryController'
 import Spinner from '@/Components/Spinner/Spinner'
-import { PremiumFeatureIconClass, PremiumFeatureIconName } from '../Icon/PremiumFeatureIcon'
 
 type RemoteHistoryListProps = {
-  features: FeaturesClientInterface
   noteHistoryController: NoteHistoryController
   onSelectRevision: () => void
 }
 
-const RemoteHistoryList: FunctionComponent<RemoteHistoryListProps> = ({
-  features,
-  noteHistoryController,
-  onSelectRevision,
-}) => {
+const RemoteHistoryList: FunctionComponent<RemoteHistoryListProps> = ({ noteHistoryController, onSelectRevision }) => {
   const { remoteHistory, isFetchingRemoteHistory, selectRemoteRevision, selectedEntry } = noteHistoryController
 
   const [listElement, setListElement] = useState<HTMLDivElement | null>(null)
@@ -66,9 +59,6 @@ const RemoteHistoryList: FunctionComponent<RemoteHistoryListProps> = ({
                         </div>
                       )}
                     </div>
-                    {!features.hasMinimumRole(entry.required_role) && (
-                      <Icon type={PremiumFeatureIconName} className={PremiumFeatureIconClass} />
-                    )}
                   </div>
                 </HistoryListItem>
               ))}

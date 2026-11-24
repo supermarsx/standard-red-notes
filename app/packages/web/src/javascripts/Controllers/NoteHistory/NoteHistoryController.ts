@@ -11,7 +11,6 @@ import {
   ButtonType,
   ChangeAndSaveItem,
   DeleteRevision,
-  FeaturesClientInterface,
   GetRevision,
   HistoryEntry,
   HistoryServiceInterface,
@@ -60,7 +59,6 @@ export class NoteHistoryController {
   constructor(
     private note: SNNote | undefined,
     private itemListController: ItemListController,
-    private features: FeaturesClientInterface,
     private items: ItemManagerInterface,
     private mutator: MutatorClientInterface,
     private sync: SyncServiceInterface,
@@ -259,10 +257,6 @@ export class NoteHistoryController {
       return
     }
 
-    if (!this.features.hasMinimumRole(previousEntry.required_role)) {
-      return
-    }
-
     try {
       const previousRevisionOrError = await this._getRevision.execute({
         itemUuid: note.uuid,
@@ -377,12 +371,6 @@ export class NoteHistoryController {
 
   selectRemoteRevision = async (entry: RevisionMetadata) => {
     if (this.deallocated || !this.note) {
-      return
-    }
-
-    if (!this.features.hasMinimumRole(entry.required_role)) {
-      this.setContentState(RevisionContentState.NotEntitled)
-      this.setSelectedRevision(undefined)
       return
     }
 

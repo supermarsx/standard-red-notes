@@ -1,4 +1,3 @@
-import RevisionContentLocked from './RevisionContentLocked'
 import { observer } from 'mobx-react-lite'
 import { NoteHistoryController } from '@/Controllers/NoteHistory/NoteHistoryController'
 import { RevisionContentState } from '@/Controllers/NoteHistory/Types'
@@ -81,8 +80,6 @@ const HistoryModalContentPane = ({ noteHistoryController, note }: Props) => {
           )
         }
         return <ReadonlyNoteContent note={note} content={selectedRevision.payload.content} showLinkedItems={false} />
-      case RevisionContentState.NotEntitled:
-        return <RevisionContentLocked />
       default:
         return null
     }
