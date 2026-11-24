@@ -1,201 +1,177 @@
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
 import { mergeRegister } from '@lexical/utils'
 import {
+  $addUpdateTag,
+  $createTextNode,
   $getSelection,
+  $isElementNode,
   $isRangeSelection,
   $isTextNode,
+  BEFORE_INPUT_COMMAND,
   COMMAND_PRIORITY_HIGH,
+  CONTROLLED_TEXT_INSERTION_COMMAND,
+  HISTORY_PUSH_TAG,
   KEY_BACKSPACE_COMMAND,
-  TextNode,
+  type LexicalEditor,
+  type RangeSelection,
+  type TextNode,
 } from 'lexical'
 import { useEffect } from 'react'
+import { decideBackspace, decideInsertion, type Selection } from '../../Utils/AutoPair/autoPair'
 
-import { decideBackspace, decideInsertion, Selection } from '../../Utils/AutoPair/autoPair'
+type LocalContext = { node?: TextNode; text: string; selection: Selection }
 
-/**
- * AutoPairPlugin
- *
- * Auto-pairs brackets and quotes in the Super (Lexical) editor:
- *
- *   - Typing an opener `( [ { " ' \`` with a collapsed caret inserts the matching
- *     closer and leaves the caret between the two.
- *   - Typing an opener while text is selected WRAPS the selection in the pair,
- *     keeping the inner text selected.
- *   - Typing a closer when the very next character is that same closer "types
- *     over" it (advances the caret rather than inserting a duplicate).
- *   - Backspace with a collapsed caret sitting between an empty matching pair
- *     deletes both characters.
- *
- * All decision logic lives in the pure, unit-tested `autoPair` helper. This
- * plugin only adapts the current Lexical selection into the helper's
- * string+offset abstraction (scoped to the caret's own text node) and applies
- * the resulting action through Lexical selection APIs inside a single
- * `editor.update()` so each gesture is one undo step.
- *
- * IME / composition: keystroke insertion is handled via a `beforeinput`
- * listener on the editor root which ignores composing input (`isComposing` and
- * non-`insertText` input types), so multi-key IME composition is never
- * auto-paired. Backspace is handled via Lexical's KEY_BACKSPACE_COMMAND.
- *
- * Key-clash note: this plugin reacts to printable single characters and
- * Backspace only. The Foldable / MultiCursor / Toolbar plugins react to clicks
- * and modifier chords (Cmd/Ctrl+…), so there is no overlap.
- */
-
-type LocalContext = {
-  node: TextNode
-  text: string
-  selection: Selection
-}
-
-/**
- * Reads the current selection as a string + offsets scoped to the caret's text
- * node. We deliberately scope to a single text node: it gives correct neighbour
- * characters for the common case and avoids reaching across inline-format runs
- * or block boundaries. Returns null when the selection isn't a simple range with
- * both ends in the same text node.
- */
-function $readLocalContext(): LocalContext | null {
-  const selection = $getSelection()
-  if (!$isRangeSelection(selection)) {
-    return null
-  }
+/** Neighbours for a collapsed caret, including the empty paragraph before its first keystroke. */
+function $readLocalContext(selection: RangeSelection): LocalContext | undefined {
   const { anchor, focus } = selection
   if (anchor.key !== focus.key) {
-    return null
+    return undefined
   }
   const node = anchor.getNode()
-  if (!$isTextNode(node)) {
-    return null
+  if ($isTextNode(node)) {
+    return {
+      node,
+      text: node.getTextContent(),
+      selection: { start: Math.min(anchor.offset, focus.offset), end: Math.max(anchor.offset, focus.offset) },
+    }
   }
-  const text = node.getTextContent()
-  const start = Math.min(anchor.offset, focus.offset)
-  const end = Math.max(anchor.offset, focus.offset)
-  return { node, text, selection: { start, end } }
+  if ($isElementNode(node) && node.isEmpty()) {
+    return { text: '', selection: { start: 0, end: 0 } }
+  }
+  return undefined
 }
 
+/** Insert only the boundaries: never replace selected runs, links, list structure or their formatting. */
+function $wrapSelection(selection: RangeSelection, open: string, close: string): boolean {
+  const backward = selection.isBackward()
+  const textNodes = selection.extract().filter($isTextNode)
+  const first = textNodes[0]
+  const last = textNodes[textNodes.length - 1]
+  if (!first || !last) {
+    return false
+  }
+  first.insertBefore($createTextNode(open))
+  last.insertAfter($createTextNode(close))
+  if (backward) {
+    selection.setTextNodeRange(last, last.getTextContentSize(), first, 0)
+  } else {
+    selection.setTextNodeRange(first, 0, last, last.getTextContentSize())
+  }
+  return true
+}
+
+/** Pair through Lexical's input commands, before its ordinary insertion can alter the selection. */
+export function registerAutoPair(editor: LexicalEditor): () => void {
+  const insert = (char: string): boolean => {
+    if (!editor.isEditable() || editor.isComposing() || char.length !== 1) {
+      return false
+    }
+    const selection = $getSelection()
+    if (!$isRangeSelection(selection)) {
+      return false
+    }
+    if (!selection.isCollapsed()) {
+      const text = selection.getTextContent()
+      const action = decideInsertion(char, { text, selection: { start: 0, end: text.length } })
+      if (action.type !== 'wrap-selection') {
+        return false
+      }
+      const handled = $wrapSelection(selection, action.open, action.close)
+      if (handled) {
+        $addUpdateTag(HISTORY_PUSH_TAG)
+      }
+      return handled
+    }
+    const local = $readLocalContext(selection)
+    if (!local) {
+      return false
+    }
+    const action = decideInsertion(char, local)
+    if (action.type === 'insert-pair') {
+      $addUpdateTag(HISTORY_PUSH_TAG)
+      selection.insertText(action.open + action.close)
+      const after = $getSelection()
+      if ($isRangeSelection(after)) {
+        const node = after.anchor.getNode()
+        if ($isTextNode(node)) {
+          const offset = after.anchor.offset - action.close.length
+          after.setTextNodeRange(node, offset, node, offset)
+        }
+      }
+      return true
+    }
+    if (action.type === 'type-over' && local.node) {
+      const offset = local.selection.start + 1
+      selection.setTextNodeRange(local.node, offset, local.node, offset)
+      return true
+    }
+    return false
+  }
+
+  return mergeRegister(
+    editor.registerCommand(
+      BEFORE_INPUT_COMMAND,
+      (event) => {
+        if (event.isComposing || event.inputType !== 'insertText' || !event.data || !insert(event.data)) {
+          return false
+        }
+        event.preventDefault()
+        return true
+      },
+      COMMAND_PRIORITY_HIGH,
+    ),
+    // Covers input engines that deliver controlled insertion without beforeinput.
+    // Replacement text, paste and composition remain ordinary editor operations.
+    editor.registerCommand(
+      CONTROLLED_TEXT_INSERTION_COMMAND,
+      (eventOrText) => {
+        if (typeof eventOrText === 'string') {
+          return insert(eventOrText)
+        }
+        if (
+          eventOrText.isComposing ||
+          eventOrText.inputType !== 'insertText' ||
+          eventOrText.dataTransfer ||
+          !eventOrText.data
+        ) {
+          return false
+        }
+        const handled = insert(eventOrText.data)
+        if (handled) {
+          eventOrText.preventDefault()
+        }
+        return handled
+      },
+      COMMAND_PRIORITY_HIGH,
+    ),
+    editor.registerCommand(
+      KEY_BACKSPACE_COMMAND,
+      () => {
+        if (!editor.isEditable() || editor.isComposing()) {
+          return false
+        }
+        const selection = $getSelection()
+        if (!$isRangeSelection(selection) || !selection.isCollapsed()) {
+          return false
+        }
+        const local = $readLocalContext(selection)
+        if (!local?.node || decideBackspace(local).type !== 'delete-pair') {
+          return false
+        }
+        $addUpdateTag(HISTORY_PUSH_TAG)
+        const caret = local.selection.start
+        local.node.spliceText(caret - 1, 2, '')
+        selection.setTextNodeRange(local.node, caret - 1, local.node, caret - 1)
+        return true
+      },
+      COMMAND_PRIORITY_HIGH,
+    ),
+  )
+}
+
+/** Auto-pair brackets and quotes, preserving selected content, formatting and IME input. */
 export default function AutoPairPlugin(): null {
   const [editor] = useLexicalComposerContext()
-
-  useEffect(() => {
-    /**
-     * Handle a printable character before the browser inserts it. The pure
-     * helper decides the action; anything other than `none` prevents the default
-     * input and is applied through Lexical instead.
-     */
-    const onBeforeInput = (event: InputEvent) => {
-      // Single printable characters only; ignore IME composition + non-inserts.
-      if (event.isComposing) {
-        return
-      }
-      if (event.inputType !== 'insertText') {
-        return
-      }
-      const char = event.data
-      if (char === null || char.length !== 1) {
-        return
-      }
-
-      let handled = false
-      editor.update(() => {
-        const selection = $getSelection()
-        if (!$isRangeSelection(selection)) {
-          return
-        }
-        const local = $readLocalContext()
-        if (!local) {
-          return
-        }
-
-        const action = decideInsertion(char, { text: local.text, selection: local.selection })
-        switch (action.type) {
-          case 'insert-pair': {
-            selection.insertText(action.open + action.close)
-            const after = $getSelection()
-            if ($isRangeSelection(after)) {
-              const node = after.anchor.getNode()
-              if ($isTextNode(node)) {
-                const offset = after.anchor.offset - action.close.length
-                after.setTextNodeRange(node, offset, node, offset)
-              }
-            }
-            handled = true
-            break
-          }
-          case 'wrap-selection': {
-            const inner = selection.getTextContent()
-            selection.insertText(action.open + inner + action.close)
-            const after = $getSelection()
-            if ($isRangeSelection(after)) {
-              const node = after.anchor.getNode()
-              if ($isTextNode(node)) {
-                const end = after.anchor.offset - action.close.length
-                const begin = end - inner.length
-                after.setTextNodeRange(node, begin, node, end)
-              }
-            }
-            handled = true
-            break
-          }
-          case 'type-over': {
-            const offset = local.selection.start + 1
-            selection.setTextNodeRange(local.node, offset, local.node, offset)
-            handled = true
-            break
-          }
-          case 'none':
-          default:
-            break
-        }
-      })
-
-      if (handled) {
-        event.preventDefault()
-      }
-    }
-
-    const onRoot = (root: HTMLElement | null, prevRoot: HTMLElement | null) => {
-      prevRoot?.removeEventListener('beforeinput', onBeforeInput as EventListener)
-      root?.addEventListener('beforeinput', onBeforeInput as EventListener)
-    }
-
-    return mergeRegister(
-      editor.registerRootListener(onRoot),
-      // Backspace: delete an empty surrounding pair in one undo step.
-      editor.registerCommand<KeyboardEvent>(
-        KEY_BACKSPACE_COMMAND,
-        () => {
-          let handled = false
-          editor.update(() => {
-            const selection = $getSelection()
-            if (!$isRangeSelection(selection) || !selection.isCollapsed()) {
-              return
-            }
-            const local = $readLocalContext()
-            if (!local) {
-              return
-            }
-            const action = decideBackspace({ text: local.text, selection: local.selection })
-            if (action.type !== 'delete-pair') {
-              return
-            }
-            const node = local.node
-            const text = node.getTextContent()
-            const caret = local.selection.start
-            const updated = text.slice(0, caret - 1) + text.slice(caret + 1)
-            node.setTextContent(updated)
-            const after = $getSelection()
-            if ($isRangeSelection(after)) {
-              after.setTextNodeRange(node, caret - 1, node, caret - 1)
-            }
-            handled = true
-          })
-          return handled
-        },
-        COMMAND_PRIORITY_HIGH,
-      ),
-    )
-  }, [editor])
-
+  useEffect(() => registerAutoPair(editor), [editor])
   return null
 }
