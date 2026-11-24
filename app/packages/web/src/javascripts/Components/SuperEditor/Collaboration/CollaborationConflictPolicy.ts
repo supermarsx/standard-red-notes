@@ -1,7 +1,12 @@
 import { ConflictStrategy, isDecryptedPayload, type SyncConflictPolicy } from '@standardnotes/models'
 import { ContentType } from '@standardnotes/domain-core'
 import { CollaborativeDocumentRegistry } from './CollaborativeDocumentRegistry'
-import { readCollaborationRevisionStamp, revisionStampCoversDocumentState } from './CollaborationRevisionStamp'
+import {
+  documentStateCovers,
+  readCollaborationRevisionStamp,
+  revisionStampCoversDocumentState,
+  revisionStampCoversRevision,
+} from './CollaborationRevisionStamp'
 import { CollaborationSaverRegistry } from './CollaborationSaverElection'
 
 /** Compare all metadata; only CRDT body, derived previews and its timestamp/stamp may differ. */
@@ -39,7 +44,7 @@ function nonBodyMetadata(content: Record<string, unknown>): string {
 }
 
 /**
- * Resolve only bodies proved to belong to the authenticated retained CRDT.
+ * Resolve only bodies proved to belong to the same saved or authenticated retained CRDT.
  * Untyped, deleted, unstamped and metadata-divergent items keep ordinary conflict rules.
  */
 export const collaborationConflictPolicy: SyncConflictPolicy = (base, incoming) => {
@@ -55,9 +60,6 @@ export const collaborationConflictPolicy: SyncConflictPolicy = (base, incoming) 
   ) {
     return undefined
   }
-  if (!CollaborationSaverRegistry.get(base.uuid)) {
-    return undefined
-  }
   const localStamp = readCollaborationRevisionStamp(base.content)
   const remoteStamp = readCollaborationRevisionStamp(incoming.content)
   if (
@@ -70,21 +72,38 @@ export const collaborationConflictPolicy: SyncConflictPolicy = (base, incoming) 
     return undefined
   }
   const document = CollaborativeDocumentRegistry.get(base.uuid)
-  const state = document?.state()
+  if (!document) {
+    // Reopening/rejoining sync happens before a provider exists. Valid stamps
+    // can still prove one saved body contains every insertion AND deletion in
+    // the other. Never infer this from timestamps or similar-looking text.
+    if (revisionStampCoversRevision(remoteStamp, localStamp)) {
+      return ConflictStrategy.KeepApply
+    }
+    if (revisionStampCoversRevision(localStamp, remoteStamp)) {
+      return ConflictStrategy.KeepBase
+    }
+    return undefined
+  }
+  if (!CollaborationSaverRegistry.get(base.uuid)) {
+    return undefined
+  }
+  const liveState = document.state()
+  const state = liveState ?? document.retainedState?.()
   if (
     !state ||
-    document?.epoch !== localStamp.epoch ||
-    !CollaborativeDocumentRegistry.covers(base.uuid, localStamp) ||
-    !CollaborativeDocumentRegistry.covers(base.uuid, remoteStamp)
+    document.epoch !== localStamp.epoch ||
+    !documentStateCovers(state, localStamp) ||
+    !documentStateCovers(state, remoteStamp)
   ) {
     return undefined
   }
   // All retained edits are durably covered: accepting the peer's clean revision
   // releases the former saver without another full-body upload or a duplicate.
-  if (revisionStampCoversDocumentState(remoteStamp, state)) {
+  if (liveState && revisionStampCoversDocumentState(remoteStamp, state)) {
     return ConflictStrategy.KeepApply
   }
   // The room retains every operation in both bodies. Rebase the dirty copy on
   // the new server timestamp; the elected saver will serialize the merged doc.
+  // A detached retained document proves coverage, not readiness to clear dirty state.
   return ConflictStrategy.KeepBase
 }

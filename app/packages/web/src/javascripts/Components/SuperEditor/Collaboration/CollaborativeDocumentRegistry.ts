@@ -18,7 +18,7 @@ export type LiveCollaborativeDocument = {
    * empty document, and an empty document proves nothing about what it will contain).
    */
   state(): CollaborativeDocumentState | undefined
-  /** Established document retained during a transport loss, for lifecycle preservation only. */
+  /** Previously established document retained during transport loss; never grants save readiness. */
   retainedState?(): CollaborativeDocumentState | undefined
   /** Called after every update applied to the document, local or remote. */
   subscribe(listener: () => void): () => void
@@ -81,6 +81,15 @@ export class CollaborativeDocumentRegistryImpl {
    * serialized from.
    */
   covers(room: string, stamp: CollaborationRevisionStamp): boolean {
+    return this.checkCoverage(room, stamp, false)
+  }
+
+  /** Coverage proof may survive transport loss; this does not acknowledge durability or grant writes. */
+  retains(room: string, stamp: CollaborationRevisionStamp): boolean {
+    return this.checkCoverage(room, stamp, true)
+  }
+
+  private checkCoverage(room: string, stamp: CollaborationRevisionStamp, allowRetained: boolean): boolean {
     const document = this.documents.get(room)
     if (!document || document.epoch !== stamp.epoch) {
       return false
@@ -88,6 +97,9 @@ export class CollaborativeDocumentRegistryImpl {
     let state: CollaborativeDocumentState | undefined
     try {
       state = document.state()
+      if (!state && allowRetained) {
+        state = document.retainedState?.()
+      }
     } catch {
       return false
     }
@@ -95,7 +107,7 @@ export class CollaborativeDocumentRegistryImpl {
   }
 
   /**
-   * Resolve true as soon as the live document covers the stamp, or false once
+   * Resolve true as soon as the established live or retained document covers the stamp, or false once
    * `timeoutMilliseconds` have passed without it.
    *
    * A revision saved by someone who was offline holds operations the room has not seen, and the
@@ -106,7 +118,7 @@ export class CollaborativeDocumentRegistryImpl {
    * live document cannot account for.
    */
   whenCovers(room: string, stamp: CollaborationRevisionStamp, timeoutMilliseconds: number): Promise<boolean> {
-    if (this.covers(room, stamp)) {
+    if (this.retains(room, stamp)) {
       return Promise.resolve(true)
     }
     const document = this.documents.get(room)
@@ -129,12 +141,12 @@ export class CollaborativeDocumentRegistryImpl {
         }
         resolve(covered)
       }
-      waiting.timeout = this.clock.setTimeout(() => settle(this.covers(room, stamp)), timeoutMilliseconds)
+      waiting.timeout = this.clock.setTimeout(() => settle(this.retains(room, stamp)), timeoutMilliseconds)
       try {
         waiting.unsubscribe = document.subscribe(() => {
           // A different document may have taken the room over while this waited (a remount);
-          // `covers` reads whichever is registered now, which is the one that matters.
-          if (this.covers(room, stamp)) {
+          // `retains` reads whichever is registered now, which is the one that matters.
+          if (this.retains(room, stamp)) {
             settle(true)
           }
         })
@@ -144,7 +156,7 @@ export class CollaborativeDocumentRegistryImpl {
       }
       // The update that completes the merge may have landed between the first check and the
       // subscription.
-      if (this.covers(room, stamp)) {
+      if (this.retains(room, stamp)) {
         settle(true)
       }
     })

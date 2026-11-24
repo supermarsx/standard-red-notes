@@ -323,6 +323,19 @@ export function revisionStampCoversDocumentState(
   stamp: Pick<CollaborationRevisionStamp, 'sv' | 'ds'>,
   state: CollaborativeDocumentState,
 ): boolean {
+  const target = createCollaborationRevisionStamp('coverage', state, '', 0)
+  return target !== undefined && documentStateCovers(documentStateFromStamp(stamp), target)
+}
+
+/** Compare validated, body-bound saved revisions even before a live provider is mounted. */
+export function revisionStampCoversRevision(
+  covering: CollaborationRevisionStamp,
+  covered: CollaborationRevisionStamp,
+): boolean {
+  return covering.epoch === covered.epoch && documentStateCovers(documentStateFromStamp(covering), covered)
+}
+
+function documentStateFromStamp(stamp: Pick<CollaborationRevisionStamp, 'sv' | 'ds'>): CollaborativeDocumentState {
   const deleted = new Map<number, Array<[number, number]>>()
   for (const [clientId, runs] of stamp.ds) {
     let end = 0
@@ -334,8 +347,7 @@ export function revisionStampCoversDocumentState(
     }
     deleted.set(clientId, absolute)
   }
-  const target = createCollaborationRevisionStamp('coverage', state, '', 0)
-  return target !== undefined && documentStateCovers({ stateVector: new Map(stamp.sv), deleted }, target)
+  return { stateVector: new Map(stamp.sv), deleted }
 }
 
 /** Whether every clock in the flat `gap, length` runs lies inside one of `local`'s ascending runs. */

@@ -136,6 +136,28 @@ describe('documentStateOf', () => {
 })
 
 describe('CollaborativeDocumentRegistry.covers', () => {
+  it('recognizes a retained revision during reconnect without granting live save coverage', async () => {
+    const clock = manualClock()
+    const registry = new CollaborativeDocumentRegistryImpl(clock)
+    const document = documentOf(1)
+    type(document, 'already merged')
+    const stamp = stampOf(document)
+    const stop = registry.set(ROOM, {
+      epoch: EPOCH,
+      state: () => undefined,
+      retainedState: () => documentStateOf(document),
+      subscribe: () => () => undefined,
+    })
+    expect(registry.covers(ROOM, stamp)).toBe(false)
+    expect(registry.retains(ROOM, stamp)).toBe(true)
+    await expect(registry.whenCovers(ROOM, stamp, 10_000)).resolves.toBe(true)
+    expect(clock.pending()).toBe(0)
+    expect(registry.retains(ROOM, { ...stamp, epoch: 'other-epoch' })).toBe(false)
+    stop()
+    expect(registry.retains(ROOM, stamp)).toBe(false)
+    document.destroy()
+  })
+
   it('is true only for a revision the registered document contains', () => {
     const registry = new CollaborativeDocumentRegistryImpl(manualClock())
     const alice = documentOf(1)

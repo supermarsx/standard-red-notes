@@ -266,12 +266,15 @@ const renderEditor = async (): Promise<void> => {
 }
 
 /** Register the live shared document the collaboration plugin would have registered. */
-const registerLiveDocument = (options: { epoch?: string; ready?: boolean | (() => boolean) } = {}): void => {
+const registerLiveDocument = (
+  options: { epoch?: string; ready?: boolean | (() => boolean); retained?: boolean } = {},
+): void => {
   const ready = typeof options.ready === 'function' ? options.ready : () => options.ready !== false
   unregisterDocument?.()
   unregisterDocument = CollaborativeDocumentRegistry.set(NOTE_UUID, {
     epoch: options.epoch ?? EPOCH,
     state: () => (ready() ? { stateVector: liveVector, deleted: liveDeleted } : undefined),
+    retainedState: () => (options.retained ? { stateVector: liveVector, deleted: liveDeleted } : undefined),
     subscribe: (listener) => {
       documentListeners.add(listener)
       return () => documentListeners.delete(listener)
@@ -597,6 +600,34 @@ describe('a retrieved revision of a note that is open in a live shared document'
     await settle()
 
     expect(duplicateItem).not.toHaveBeenCalled()
+  })
+
+  it('does not copy an already merged revision while the established document is reconnecting', async () => {
+    let ready = true
+    registerLiveDocument({ ready: () => ready, retained: true })
+    await renderEditor()
+    await typeIntoEditor('the latest merged body')
+    ready = false
+    const older = 'an earlier saved body'
+    await retrieve(
+      revision(
+        older,
+        2,
+        stampAt(
+          [
+            [1, 8],
+            [2, 7],
+          ],
+          older,
+        ),
+      ),
+    )
+    act(() => {
+      jest.advanceTimersByTime(RETRIEVED_REVISION_MERGE_WAIT_MS * 2)
+    })
+    await settle()
+    expect(duplicateItem).not.toHaveBeenCalled()
+    expect(documentListeners.size).toBe(0)
   })
 
   it('waits for the relay when the revision holds operations the room has not received, then makes no copy', async () => {
