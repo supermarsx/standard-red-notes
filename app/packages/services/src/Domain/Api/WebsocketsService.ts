@@ -181,6 +181,8 @@ export interface SyncItemsPushedData {
 
 export type CollaborationRoomAuthorization = {
   capability: string
+  /** Conservative local-clock deadline, including request latency and JWT rounding. */
+  expiresAt?: number
   serverUpdatedAtTimestamp: number
   collaborationProtocolVersion: 3
   roomEpoch: string
@@ -865,6 +867,7 @@ export class WebSocketsService extends AbstractService<
       return inFlight
     }
 
+    const requestedAt = Date.now()
     const request = this.requestCollaborationAuthorization(
       noteUuid,
       leaseRequestId,
@@ -878,17 +881,19 @@ export class WebSocketsService extends AbstractService<
           }
           return undefined
         }
+        const expiresAt = requestedAt + result.expiresIn * 1_000 - 1_000
+        const authorization = { ...result.authorization, expiresAt }
         // Challenge-bound grants are one-use; only coalesce their in-flight request.
         if (!leaseRequestId && !bootstrapChallenge) {
           while (this.collaborationAuthorizationCache.size >= 128) {
             this.collaborationAuthorizationCache.delete(this.collaborationAuthorizationCache.keys().next().value!)
           }
           this.collaborationAuthorizationCache.set(key, {
-            authorization: result.authorization,
-            expiresAt: Date.now() + result.expiresIn * 1_000,
+            authorization,
+            expiresAt,
           })
         }
-        return result.authorization
+        return authorization
       })
       .catch((error: unknown) => {
         if (reportTypedFailure) {

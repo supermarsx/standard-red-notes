@@ -171,6 +171,31 @@ describe('collaboration saver election', () => {
       await jest.advanceTimersByTimeAsync(500)
       expect(CollaborationSaverRegistry.get('room')).toMatchObject({ paused: false, localEditReady: true })
     })
+    it('keeps editing enabled while an active room lease renews and reclaims its save fence', async () => {
+      await jest.advanceTimersByTimeAsync(500)
+      expect(CollaborationSaverRegistry.get('room')?.localEditReady).toBe(true)
+      activeIdentity = { leaseId: 'renewed-local', roomEpoch: 'epoch' }
+      changeIdentity()
+      expect(CollaborationSaverRegistry.get('room')).toMatchObject({
+        leaseId: 'renewed-local',
+        isSaver: false,
+        paused: true,
+        localEditReady: true,
+      })
+      await jest.advanceTimersByTimeAsync(500)
+      expect(CollaborationSaverRegistry.get('room')).toMatchObject({
+        leaseId: 'renewed-local',
+        isSaver: true,
+        paused: false,
+        localEditReady: true,
+      })
+      expect(claimCollaborationSaveFence).toHaveBeenLastCalledWith(application, {
+        room: 'room',
+        roomEpoch: 'epoch',
+        leaseId: 'renewed-local',
+      })
+    })
+
     it('withdraws handoff edit permission immediately when the room lease is lost', async () => {
       await jest.advanceTimersByTimeAsync(500)
       lane = { usable: false }

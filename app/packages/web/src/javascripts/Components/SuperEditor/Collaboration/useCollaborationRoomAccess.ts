@@ -73,6 +73,8 @@ function readRoomDenial(frame: Extract<CollabFrame, { t: 'room-denied' }>): Room
 
 export type ActiveEditorCollaborationLease = {
   requestId: string
+  /** Local deadline of the capability that activated this membership. */
+  expiresAt?: number
   shouldBootstrap: boolean
   protocolVersion: typeof COLLABORATION_PROTOCOL_VERSION
   maxTransferBytes: number
@@ -87,7 +89,7 @@ export type EditorCollaborationLease = ActiveEditorCollaborationLease & {
   isAttached(): boolean
   /** Provider transport currently owns an established canonical Y.Doc. */
   setProviderCanonicalOwnership?(active: boolean): void
-  /** Obtain and activate a fresh lease after the shared socket reconnects. */
+  /** Activate a fresh lease before expiry or after the shared socket reconnects. */
   reactivate(): Promise<ActiveEditorCollaborationLease | LeaseFailure>
   /** Drop back to ordinary encrypted persistence after a fatal transport limit. */
   fail(reason: string): void
@@ -386,7 +388,7 @@ export function beginEditorLeaseReservation(
   promise: Promise<EditorLeaseReservation | LeaseFailure>
   /** Contract C3: true once the gateway's advertised activation budget is spent. */
   isActivationBudgetSpent(): boolean
-  activate(capability: string): Promise<ActiveEditorCollaborationLease | LeaseFailure>
+  activate(capability: string, expiresAt?: number): Promise<ActiveEditorCollaborationLease | LeaseFailure>
   cancel(): void
 } {
   const channel = createGatewayCollabChannel(application)
@@ -394,6 +396,7 @@ export function beginEditorLeaseReservation(
   let leaveSent = false
   let reserveSent = false
   let activationSent = false
+  let capabilityExpiresAt: number | undefined
   let reservation: EditorLeaseReservation | undefined
   /** Absolute moment by which `room-join` must be sent (contract C3); undefined = no budget advertised. */
   let activationDeadlineAt: number | undefined
@@ -516,6 +519,7 @@ export function beginEditorLeaseReservation(
       cleanupListener()
       resolveActivation?.({
         requestId,
+        ...(capabilityExpiresAt === undefined ? {} : { expiresAt: capabilityExpiresAt }),
         shouldBootstrap: reservation.shouldBootstrap,
         protocolVersion: COLLABORATION_PROTOCOL_VERSION,
         maxTransferBytes: COLLABORATION_MAX_TRANSFER_BYTES,
@@ -548,7 +552,7 @@ export function beginEditorLeaseReservation(
       const remaining = activationBudgetRemainingMs()
       return remaining !== undefined && remaining <= 0
     },
-    activate: (activationCapability: string) => {
+    activate: (activationCapability: string, expiresAt?: number) => {
       if (phase !== 'reserved') {
         return Promise.resolve({ reason: 'The editor reservation is not available for activation.' })
       }
@@ -559,6 +563,7 @@ export function beginEditorLeaseReservation(
         return Promise.resolve({ reason })
       }
       phase = 'activating'
+      capabilityExpiresAt = expiresAt
       const activation = new Promise<ActiveEditorCollaborationLease | LeaseFailure>((resolve) => {
         resolveActivation = resolve
       })
@@ -793,7 +798,7 @@ async function attemptEditorAccess(
         continue
       }
 
-      const lease = await transaction.activate(activationAccess.capability)
+      const lease = await transaction.activate(activationAccess.capability, activationAccess.capabilityExpiresAt)
       if ('reason' in lease) {
         return lease
       }

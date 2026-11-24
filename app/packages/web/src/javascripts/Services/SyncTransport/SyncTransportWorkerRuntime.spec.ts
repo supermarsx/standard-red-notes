@@ -3641,7 +3641,46 @@ describe('SyncTransportWorkerRuntime', () => {
       expect(socket.readyState).toBe(1)
     })
 
-    it('bounds refreshes per socket and is not replenished by a successful one', async () => {
+    it('keeps one healthy socket through repeated token rotations beyond the old lifetime refresh quota', async () => {
+      const harness = setup()
+      const socket = await openRpcSocket(harness, 'rotation-0')
+      for (let rotation = 0; rotation < 12; rotation++) {
+        if (rotation > 0) {
+          for (let tick = 0; tick < 10; tick++) {
+            await jest.advanceTimersByTimeAsync(30_000)
+            const ping = framesOfType(socket, 'PING').at(-1)!
+            socket.receive(serverFrame('PONG', ping.commandId, {}))
+            await flush()
+          }
+          await harness.runtime.handle({
+            type: 'OPEN_RPC',
+            clientRequestId: `rotation-${rotation}`,
+            sessionScope: SESSION_A,
+            request: GET_RPC,
+          })
+        }
+        const request = framesOfType(socket, 'RPC_REQUEST').at(-1)!
+        socket.receive(serverFrame('RPC_ACCEPTED', request.commandId, { accepted: true }))
+        socket.receive(serverFrame('RPC_RESPONSE', request.commandId, { status: 401, headers: {}, stream: false }))
+        await flush()
+        expect(refreshRequests(harness)).toHaveLength(rotation + 1)
+        await answerRefresh(harness, rotation)
+        const reauth = framesOfType(socket, 'REAUTH').at(-1)!
+        socket.receive(serverFrame('REAUTHENTICATED', reauth.commandId, {}))
+        await flush()
+        const retry = framesOfType(socket, 'RPC_REQUEST').at(-1)!
+        socket.receive(serverFrame('RPC_ACCEPTED', retry.commandId, { accepted: true }))
+        socket.receive(serverFrame('RPC_RESPONSE', retry.commandId, { status: 200, headers: {}, stream: false }))
+        socket.receive(serverFrame('RPC_END', retry.commandId, { status: 'COMPLETED' }))
+        await flush()
+        expect(socket.readyState).toBe(1)
+        expect(harness.sockets).toHaveLength(1)
+      }
+      expect(framesOfType(socket, 'REAUTH')).toHaveLength(12)
+      expect(socket.closes).toHaveLength(0)
+    }, 30_000)
+
+    it('bounds refresh bursts per socket and is not replenished by a successful one', async () => {
       const harness = setup()
       const socket = await openRpcSocket(harness, 'rpc-0')
 
@@ -3689,6 +3728,38 @@ describe('SyncTransportWorkerRuntime', () => {
         headers: {},
         stream: false,
       })
+    })
+
+    it('does not retry a newly refused credential when the rolling window expires', async () => {
+      const harness = setup()
+      const socket = await openRpcSocket(harness)
+      const pending = framesOfType(socket, 'RPC_REQUEST').at(-1)!
+      socket.receive(serverFrame('RPC_ACCEPTED', pending.commandId, { accepted: true }))
+      socket.receive(serverFrame('RPC_RESPONSE', pending.commandId, { status: 401, headers: {}, stream: false }))
+      await flush()
+      await answerRefresh(harness, 0)
+      const reauth = framesOfType(socket, 'REAUTH').at(-1)!
+      socket.receive(serverFrame('ERROR', reauth.commandId, { code: 'SESSION_STALE', retryable: true }))
+      await flush()
+      await jest.advanceTimersByTimeAsync(60_001)
+      await harness.runtime.handle({
+        type: 'OPEN_RPC',
+        clientRequestId: 'later-refusal',
+        sessionScope: SESSION_A,
+        request: GET_RPC,
+      })
+      const later = framesOfType(socket, 'RPC_REQUEST').at(-1)!
+      socket.receive(serverFrame('RPC_ACCEPTED', later.commandId, { accepted: true }))
+      socket.receive(serverFrame('RPC_RESPONSE', later.commandId, { status: 401, headers: {}, stream: false }))
+      await flush()
+      expect(refreshRequests(harness)).toHaveLength(1)
+      expect(harness.messages).toContainEqual(
+        expect.objectContaining({
+          type: 'RPC_RESPONSE',
+          clientRequestId: 'later-refusal',
+          status: 401,
+        }),
+      )
     })
 
     it('coalesces refusals from two lanes into one refresh and resumes both', async () => {

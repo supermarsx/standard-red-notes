@@ -1550,6 +1550,125 @@ describe('EncryptedYjsProvider convergence', () => {
     provider.destroy()
   })
 
+  it.each([false, true])(
+    'renews room authorization without dropping editing, transient refusal=%s',
+    async (retryOnce) => {
+      jest.useFakeTimers()
+      const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined)
+      const sent: CollabFrame[] = []
+      let inbound: ((frame: CollabFrame) => void) | undefined
+      let status: ((connected: boolean) => void) | undefined
+      let connected = true
+      const releases: jest.Mock[] = []
+      let sequence = 0
+      const nextLease = () => {
+        const release = jest.fn()
+        releases.push(release)
+        return {
+          requestId: `continuous-lease-${sequence++}`,
+          shouldBootstrap: true,
+          protocolVersion: 3 as const,
+          maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+          roomEpoch: TEST_ROOM_EPOCH,
+          expiresAt: Date.now() + 299_000,
+          release,
+        }
+      }
+      const initial = nextLease()
+      let attempts = 0
+      const reactivate = jest.fn(async () => {
+        if (retryOnce && attempts++ === 0) {
+          return { reason: 'Collaboration authorization is temporarily unavailable.' }
+        }
+        return nextLease()
+      })
+      const setCanonicalOwnership = jest.fn()
+      const doc = new Y.Doc()
+      doc.getText('content').insert(0, 'keep typing')
+      const clientId = doc.clientID
+      const selection = Y.createRelativePositionFromTypeIndex(doc.getText('content'), 4)
+      const provider = new EncryptedYjsProvider(
+        doc,
+        'continuous-room',
+        {
+          isConnected: () => connected,
+          authorize: jest.fn(),
+          subscribe: (handler) => {
+            inbound = handler
+            return () => undefined
+          },
+          subscribeStatus: (handler) => {
+            status = handler
+            return () => undefined
+          },
+          send: (frame) => {
+            sent.push(frame)
+            if (frame.t === 'yjs' && frame.transferId) {
+              inbound?.({ t: 'yjs-accepted', room: frame.room, transferId: frame.transferId, protocolVersion: 3 })
+            }
+          },
+        },
+        createTestTransportCipher(),
+        undefined,
+        initial.requestId,
+        {
+          activeLease: initial,
+          shouldBootstrap: true,
+          validateAttachment: () => true,
+          reactivate,
+          onFatal: jest.fn(),
+          setCanonicalOwnership,
+        },
+      )
+      try {
+        provider.connect()
+        await settle(provider)
+        const identities = jest.fn()
+        provider.onActiveEditorLeaseChange(identities)
+        const synced = jest.fn()
+        provider.on('sync', synced)
+        setCanonicalOwnership.mockClear()
+        for (let cycle = 0; cycle < 24; cycle++) {
+          const uploads = sent.filter((frame) => frame.t === 'yjs').length
+          await jest.advanceTimersByTimeAsync(241_000)
+          await settle(provider)
+          expect(reactivate).toHaveBeenCalledTimes(cycle + 1 + (retryOnce ? 1 : 0))
+          expect(releases[cycle]).toHaveBeenCalledTimes(1)
+          expect(provider.isRoomJoined()).toBe(true)
+          expect(provider.isCanonicalReady()).toBe(true)
+          expect(sent.filter((frame) => frame.t === 'yjs')).toHaveLength(uploads)
+          doc.getText('content').insert(doc.getText('content').length, '.')
+          await settle(provider)
+        }
+        expect(identities.mock.calls.every(([identity]) => identity !== undefined)).toBe(true)
+        expect(setCanonicalOwnership).not.toHaveBeenCalledWith(false)
+        expect(synced).not.toHaveBeenCalledWith(false)
+        expect(doc.clientID).toBe(clientId)
+        expect(Y.createAbsolutePositionFromRelativePosition(selection, doc)?.index).toBe(4)
+        expect(doc.getText('content').toString()).toBe(`keep typing${'.'.repeat(24)}`)
+        // An old renewal must never reattach after its socket disappears.
+        let finishRenewal!: (lease: typeof initial) => void
+        reactivate.mockImplementationOnce(() => new Promise<typeof initial>((resolve) => (finishRenewal = resolve)))
+        await jest.advanceTimersByTimeAsync(241_000)
+        const abandoned = nextLease()
+        connected = false
+        status?.(false)
+        finishRenewal(abandoned)
+        await settle(provider)
+        expect(abandoned.release).toHaveBeenCalledTimes(1)
+        expect(provider.getActiveEditorLeaseIdentity()).toBeUndefined()
+        provider.destroy()
+        await jest.advanceTimersByTimeAsync(600_000)
+        expect(reactivate).toHaveBeenCalledTimes(25 + (retryOnce ? 1 : 0))
+      } finally {
+        provider.destroy()
+        doc.destroy()
+        consoleError.mockRestore()
+        jest.useRealTimers()
+      }
+    },
+  )
+
   it('retains the live Y.Doc and obtains one fresh activated lease after transport reconnect', async () => {
     const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined)
     const sent: CollabFrame[] = []

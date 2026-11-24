@@ -211,6 +211,7 @@ export class EncryptedYjsProvider implements Provider {
    */
   private lastLeaseFailure: string | undefined
   private currentLease: ActiveEditorCollaborationLease | undefined
+  private leaseRenewalTimeout: ReturnType<typeof setTimeout> | undefined
   private transportGeneration = 0
   private reactivatingGeneration: number | undefined
   private awaitingStateRequestId: string | undefined
@@ -382,6 +383,9 @@ export class EncryptedYjsProvider implements Provider {
 
   private setJoined(joined: boolean): void {
     this.joined = joined
+    if (!joined) {
+      this.clearLeaseRenewal()
+    }
     const identity = this.getActiveEditorLeaseIdentity()
     for (const listener of [...this.activeEditorLeaseListeners]) {
       try {
@@ -584,21 +588,29 @@ export class EncryptedYjsProvider implements Provider {
     }
 
     const previousLease = this.currentLease
+    const uninterrupted =
+      this.joined && this.stateServingReady && previousLease !== undefined && this.lastSyncFailure === undefined
     this.currentLease = lease
     if (previousLease && previousLease !== lease) {
-      previousLease.release()
       this.clearPendingResponseClaims()
     }
     this.joinRequestId = lease.requestId
     this.setJoined(true)
     this.startPresenceHeartbeat()
+    this.scheduleLeaseRenewal(lease)
+    // The new membership is active and announced before retiring the old one.
+    if (previousLease && previousLease !== lease) {
+      previousLease.release()
+    }
     this.joinRetryAttempts = 0
     this.lastLeaseFailure = undefined
     this.clearJoinRetry()
     this.clearStateRequest()
     this.correlatedStateAttempts = 0
     this.recoveryStateAttempts = 0
-    this.emit('sync', false as never)
+    if (!uninterrupted) {
+      this.emit('sync', false as never)
+    }
 
     try {
       this.setLocalStateReadiness(this.stateServingReady && this.hasDocumentState())
@@ -610,6 +622,13 @@ export class EncryptedYjsProvider implements Provider {
         console.error('[collab] encrypted-awareness-initial-frame-failed')
       }
       if (!this.connected || !this.joined || this.currentLease !== lease) {
+        return
+      }
+
+      // Credential rotation on an uninterrupted socket changes no document state.
+      // Keep the binding, selection and canonical readiness instead of uploading
+      // the whole note and entering another peer/bootstrap handshake.
+      if (uninterrupted) {
         return
       }
 
@@ -670,6 +689,33 @@ export class EncryptedYjsProvider implements Provider {
         }
       }
     }
+  }
+
+  private clearLeaseRenewal(): void {
+    if (this.leaseRenewalTimeout !== undefined) {
+      clearTimeout(this.leaseRenewalTimeout)
+      this.leaseRenewalTimeout = undefined
+    }
+  }
+
+  private scheduleLeaseRenewal(lease: ActiveEditorCollaborationLease): void {
+    this.clearLeaseRenewal()
+    if (!this.options || lease.expiresAt === undefined || !Number.isSafeInteger(lease.expiresAt)) {
+      return
+    }
+    const remaining = lease.expiresAt - Date.now()
+    // Leave time for authenticated reserve/activate and transient retries. The
+    // old membership continues relaying until its replacement is acknowledged.
+    const margin = Math.min(60_000, Math.max(5_000, remaining * 0.2))
+    this.leaseRenewalTimeout = setTimeout(
+      () => {
+        this.leaseRenewalTimeout = undefined
+        if (this.currentLease === lease && this.joined && this.connected && this.validateLiveAttachment()) {
+          this.track(this.reactivateAfterReconnect())
+        }
+      },
+      Math.max(1_000, remaining - margin),
+    )
   }
 
   private async reactivateAfterReconnect(generation = this.transportGeneration): Promise<void> {

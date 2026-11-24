@@ -134,6 +134,35 @@ maybe('collaboration room-key derivation', () => {
     }
   })
 
+  it('passes the local capability deadline to editor preparation for proactive renewal', async () => {
+    const session = { uuid: 'user-a' }
+    const expiresAt = Date.now() + 299_000
+    const application = {
+      sessions: { isSignedIn: () => true, getUser: () => session },
+      vaults: { getItemVault: () => undefined },
+      encryption: {
+        getRootKey: () => ({
+          masterKey: 'account-root',
+          keyVersion: '004',
+          keyParams: { getPortableValue: () => ({ identifier: 'alice', pw_nonce: 'parameters' }) },
+        }),
+      },
+      sockets: {
+        authorizeCollaborationRoom: async () => ({
+          capability: 'capability',
+          expiresAt,
+          roomEpoch: 'room_epoch_0000000000000001',
+          serverUpdatedAtTimestamp: 100,
+          collaborationProtocolVersion: 3,
+        }),
+      },
+      isAuthorizedToRenderItem: () => true,
+    } as never
+    await expect(
+      prepareCollaborationAccess(application, { uuid: 'personal-note', user_uuid: 'user-a' } as never),
+    ).resolves.toMatchObject({ available: true, capabilityExpiresAt: expiresAt })
+  })
+
   it('derives the same non-extractable AES-256-GCM key for two vault members', async () => {
     const input = {
       rootKeySecret: 'client-only-shared-vault-root-secret',

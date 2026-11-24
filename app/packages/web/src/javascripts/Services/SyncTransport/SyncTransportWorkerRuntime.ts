@@ -172,21 +172,13 @@ const HANDSHAKE_LOOP_HOLD_MS = 60_000
 const OPAQUE_SESSION_SCOPE_PATTERN = /^sync-session-v1:[a-f0-9]{64}$/u
 
 /**
- * In-place credential refreshes this client will ask ONE socket for.
- *
- * The gateway's own budget is eight per socket; this is deliberately smaller so
- * the client always gives up first and never learns its bound by being closed.
- * It is NOT reset by a successful refresh — that is exactly the loop shape (a
- * refusal refreshes, the refusal recurs, the refresh succeeds again, forever) —
- * and not by the clock, so no periodic caller can replenish it. It is reset only
- * by a new `AUTHENTICATED` handshake, which is a genuinely new socket carrying a
- * freshly minted credential that needs no refresh in the first place.
- *
- * Four covers four token rotations inside one socket's life. The fifth refusal
- * takes the pre-existing recovery (re-ticket, then durable recovery), which
- * cannot be lost and cannot double-apply.
+ * Bound refresh bursts below the gateway's eight-per-minute limit. A rolling
+ * minute allows normal token rotations throughout a long-lived connection.
+ * Success does not reset the window, and each operation can still retry only
+ * once, so a recurring refusal cannot create an unbounded refresh loop.
  */
 const MAX_SESSION_REFRESH_ATTEMPTS = 4
+const SESSION_REFRESH_WINDOW_MS = 60_000
 
 /**
  * How long one refresh may take, measured from the moment the worker asks the
@@ -759,8 +751,9 @@ export class SyncTransportWorkerRuntime {
   private inviteEventsUnavailable = false
   /** At most one credential refresh is in flight; concurrent refusals join it. */
   private sessionRefresh?: ActiveSessionRefresh
-  /** Refreshes asked for on THIS socket. Reset only by a new AUTHENTICATED handshake. */
-  private sessionRefreshAttempts = 0
+  private sessionRefreshAttempts: number[] = []
+  /** A freshly minted credential was refused; retry only on a new socket. */
+  private sessionRefreshRejected = false
   /**
    * The gateway ANSWERED that it will not refresh this socket's credential —
    * `OPERATION_UNAVAILABLE` (the deployment composed no session revalidator) or
@@ -2534,12 +2527,10 @@ export class SyncTransportWorkerRuntime {
       this.clearAckDeadline()
       this.sequence = Number(nextSequence)
       this.negotiatedOperations = new Set(operations as SyncNegotiatedOperation[])
-      // A new socket carries a credential captured moments ago, so the refresh
-      // budget it has not spent starts over. This is the ONLY thing that
-      // replenishes it: a success must not, or a refusal that keeps recurring
-      // would refresh for as long as the tab is open. `sessionRefreshUnsupported`
-      // is deliberately NOT cleared — the two refusals that set it are structural.
-      this.sessionRefreshAttempts = 0
+      // A new authenticated socket starts a fresh rolling budget. Structural
+      // refusal of refresh support remains latched for this worker/session.
+      this.sessionRefreshAttempts = []
+      this.sessionRefreshRejected = false
       // A fresh socket (a redeploy, a repaired membership) gets the next save at
       // once. The refusal COUNT is kept, so a refusal that survives the reconnect
       // still escalates: at most one refused round trip per reconnect.
@@ -2924,9 +2915,9 @@ export class SyncTransportWorkerRuntime {
    *    RPC is restricted to requests carrying NO idempotency key, which given
    *    `isValidWorkerRpcRequest` is exactly GET.
    *
-   * 3. IT CANNOT SPIN. One refresh in flight at a time, a per-socket attempt
-   *    budget that nothing replenishes but a new handshake, and a latch for the
-   *    two refusals that are structural rather than transient.
+   * 3. IT CANNOT SPIN. One refresh in flight at a time, a rolling attempt
+   *    budget that success cannot reset, and latches for refused credentials
+   *    and unsupported refreshes.
    * ===========================================================================
    */
 
@@ -2940,13 +2931,16 @@ export class SyncTransportWorkerRuntime {
    * ordinary reconnect — which mints a fresh credential anyway — is the answer.
    */
   private canRefreshSession(): boolean {
+    const now = this.now()
+    this.sessionRefreshAttempts = this.sessionRefreshAttempts.filter((at) => now - at < SESSION_REFRESH_WINDOW_MS)
     return (
       !this.shuttingDown &&
       !this.sessionRefreshUnsupported &&
+      !this.sessionRefreshRejected &&
       this.state === 'READY' &&
       this.socket?.readyState === 1 &&
       this.sessionScope !== undefined &&
-      (this.sessionRefresh !== undefined || this.sessionRefreshAttempts < MAX_SESSION_REFRESH_ATTEMPTS)
+      (this.sessionRefresh !== undefined || this.sessionRefreshAttempts.length < MAX_SESSION_REFRESH_ATTEMPTS)
     )
   }
 
@@ -2977,7 +2971,7 @@ export class SyncTransportWorkerRuntime {
       sent: false,
       parked: [operation],
     }
-    this.sessionRefreshAttempts += 1
+    this.sessionRefreshAttempts.push(this.now())
     this.sessionRefresh = refresh
     refresh.timer = this.scheduleTimeout(() => {
       if (this.sessionRefresh === refresh) {
@@ -3084,8 +3078,8 @@ export class SyncTransportWorkerRuntime {
         } else if (frame.payload.code === 'SESSION_STALE') {
           // We just minted a current credential and the session plane still would
           // not take it. Nothing is gained by presenting another one on this
-          // socket, so the budget is spent rather than merely decremented.
-          this.sessionRefreshAttempts = MAX_SESSION_REFRESH_ATTEMPTS
+          // socket. Time passing must not retry this refused credential.
+          this.sessionRefreshRejected = true
         }
         await this.settleSessionRefresh('failed')
         return true

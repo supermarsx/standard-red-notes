@@ -951,6 +951,12 @@ describe('useCollaborationRoomAccess security transitions', () => {
 
   it('opens a server-confirmed current note without waiting for an unrelated account sync', async () => {
     const sent: CollabFrame[] = []
+    const expiresAt = Date.now() + 299_000
+    const prepare = mockedPrepare.getMockImplementation()!
+    mockedPrepare.mockImplementation(async (...args) => ({
+      ...(await prepare(...args)),
+      capabilityExpiresAt: expiresAt,
+    }))
     mockedCreateChannel.mockReturnValue(createAutoLeaseChannel(sent).channel)
     const note = { uuid: 'current-note', text: 'canonical body', dirty: false, serverUpdatedAtTimestamp: 100 }
     const sync = jest.fn(() => new Promise<void>(() => undefined))
@@ -972,6 +978,7 @@ describe('useCollaborationRoomAccess security transitions', () => {
     })
 
     expect(latestAccess).toMatchObject({ status: 'ready', initialEditorState: 'canonical body' })
+    expect(latestAccess).toMatchObject({ editorLease: { expiresAt } })
     expect(sync).not.toHaveBeenCalled()
     // Both the fresh request-bound grant and the elected bootstrap challenge remain required.
     expect(mockedPrepare).toHaveBeenCalledTimes(2)

@@ -238,6 +238,7 @@ describe('webSocketsService', () => {
         createService().authorizeCollaborationRoom('note-1', undefined, undefined, roomEpoch),
       ).resolves.toEqual({
         capability: 'capability-1',
+        expiresAt: expect.any(Number),
         serverUpdatedAtTimestamp: 1_723_456_789_000_000,
         collaborationProtocolVersion: 3,
         roomEpoch,
@@ -281,6 +282,28 @@ describe('webSocketsService', () => {
         'challenge-1',
         roomEpoch,
       )
+    })
+
+    it('preserves a conservative authorization deadline across latency and cached reads', async () => {
+      jest.useFakeTimers()
+      try {
+        const started = Date.now()
+        let finish!: (grant: typeof validGrant) => void
+        const authorize = jest.fn(() => new Promise<typeof validGrant>((resolve) => (finish = resolve)))
+        const service = createService()
+        service.setCollaborationAuthorizationTransport(authorize)
+        const pending = service.authorizeCollaborationRoom('note-1')
+        await jest.advanceTimersByTimeAsync(7_000)
+        finish(validGrant)
+        await expect(pending).resolves.toMatchObject({ expiresAt: started + 299_000 })
+        await jest.advanceTimersByTimeAsync(20_000)
+        await expect(service.authorizeCollaborationRoom('note-1')).resolves.toMatchObject({
+          expiresAt: started + 299_000,
+        })
+        expect(authorize).toHaveBeenCalledTimes(1)
+      } finally {
+        jest.useRealTimers()
+      }
     })
 
     it('coalesces and caches valid socket authorizations without issuing an HTTP request', async () => {
@@ -357,6 +380,7 @@ describe('webSocketsService', () => {
 
       await expect(service.authorizeCollaborationRoom('note-1')).resolves.toEqual({
         capability: 'capability-1',
+        expiresAt: expect.any(Number),
         serverUpdatedAtTimestamp: 123,
         collaborationProtocolVersion: 3,
         roomEpoch,
@@ -384,6 +408,7 @@ describe('webSocketsService', () => {
 
       await expect(createService().authorizeCollaborationRoom('note-1')).resolves.toEqual({
         capability: 'capability-1',
+        expiresAt: expect.any(Number),
         serverUpdatedAtTimestamp: 123,
         collaborationProtocolVersion: 3,
         roomEpoch,

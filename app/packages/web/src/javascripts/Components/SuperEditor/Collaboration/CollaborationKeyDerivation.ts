@@ -274,6 +274,7 @@ export type PreparedCollaborationAccess =
       sourceId: string
       roomKey: CryptoKey
       capability: string
+      capabilityExpiresAt?: number
       roomEpoch: string
       serverUpdatedAtTimestamp: number
       userUuid: string
@@ -357,6 +358,7 @@ export async function prepareCollaborationAccess(
 
   const epochAuthorization = authorization as {
     capability?: unknown
+    expiresAt?: unknown
     roomEpoch?: unknown
     serverUpdatedAtTimestamp?: unknown
     collaborationProtocolVersion?: unknown
@@ -402,6 +404,9 @@ export async function prepareCollaborationAccess(
     sourceId: after.sourceId,
     roomKey,
     capability: epochAuthorization.capability,
+    ...(Number.isSafeInteger(epochAuthorization.expiresAt)
+      ? { capabilityExpiresAt: Number(epochAuthorization.expiresAt) }
+      : {}),
     roomEpoch: epochAuthorization.roomEpoch,
     serverUpdatedAtTimestamp: Number(epochAuthorization.serverUpdatedAtTimestamp),
     userUuid: after.userUuid,
