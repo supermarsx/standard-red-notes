@@ -1,5 +1,7 @@
 import ToolbarButton from './ToolbarButton'
 import TableOfContentsFormatButton from './TableOfContentsFormatButton'
+import TableOfContentsRibbon from './TableOfContentsRibbon'
+import { useSelectedTableOfContents } from './useSelectedTableOfContents'
 import { ReviewTools } from './ReviewTools'
 import { TableOfContentsBlock } from '../Blocks/TableOfContents'
 import Icon from '@/Components/Icon/Icon'
@@ -629,6 +631,7 @@ const ToolbarPlugin = ({
   // driving the dynamic contextual toolbar group. Feature #287: the key + label
   // of the active top-level block, used to zoom into it.
   const [contextualWidget, setContextualWidget] = useState<ContextualWidget | null>(null)
+  const tocSelection = useSelectedTableOfContents(editor)
   /**
    * Standard Red Notes — the selected Mermaid diagram, which gates the dedicated
    * "Mermaid" section.
@@ -1140,7 +1143,7 @@ const ToolbarPlugin = ({
   const isToolbarFixedRef = useStateRef(isToolbarFixedToTop)
 
   const updateToolbarFloatingPosition = useCallback(() => {
-    if (!editor.isEditable()) {
+    if (!editor.isEditable() || tocSelection) {
       return
     }
     const selection = $getSelection()
@@ -1195,7 +1198,7 @@ const ToolbarPlugin = ({
         containerElement.style.setProperty('display', 'block')
       }
     }
-  }, [editor, activeEditor, isMobile, isToolbarFixedRef])
+  }, [editor, activeEditor, isMobile, isToolbarFixedRef, tocSelection])
 
   const $updateToolbar = useCallback(() => {
     const selection = $getSelection()
@@ -1421,11 +1424,11 @@ const ToolbarPlugin = ({
   }, [])
 
   useEffect(() => {
-    if (!isEditable) {
+    if (!isEditable || tocSelection) {
       clearContainerFloatingStyles()
       containerRef.current?.style.removeProperty('display')
     }
-  }, [isEditable, clearContainerFloatingStyles])
+  }, [isEditable, clearContainerFloatingStyles, tocSelection])
 
   const clearFormatting = useCallback(() => {
     activeEditor.update(() => {
@@ -1895,7 +1898,7 @@ const ToolbarPlugin = ({
   const [isFocusInEditor, setIsFocusInEditor] = useState(false)
   const [isFocusInToolbar, setIsFocusInToolbar] = useState(false)
   const canShowToolbarOnMobile = isFocusInEditor || isFocusInToolbar
-  const canShowAllItems = !isEditable || isMobile || isToolbarFixedToTop
+  const canShowAllItems = Boolean(tocSelection) || !isEditable || isMobile || isToolbarFixedToTop
 
   useEffect(() => {
     const container = containerRef.current
@@ -1963,12 +1966,14 @@ const ToolbarPlugin = ({
   // toolbar never re-renders it (see `useToolbarAutoHide`).
   const storedToolbarAutoHide = usePreference(SUPER_TOOLBAR_AUTO_HIDE_PREF_KEY)
   const isToolbarCollapsePreferred = normalizeSuperToolbarAutoHide(storedToolbarAutoHide)
-  const isAutoHideActive = isSuperToolbarAutoHideActive({
-    storedPreference: storedToolbarAutoHide,
-    isMobile,
-    isToolbarFixedToTop,
-    isEditable,
-  })
+  const isAutoHideActive =
+    !tocSelection &&
+    isSuperToolbarAutoHideActive({
+      storedPreference: storedToolbarAutoHide,
+      isMobile,
+      isToolbarFixedToTop,
+      isEditable,
+    })
   const commandPanelRef = useRef<HTMLDivElement>(null)
   // Destructured rather than kept as one object: the callbacks are stable, the
   // object is new on every render, and the command handler below must not be
@@ -1993,7 +1998,7 @@ const ToolbarPlugin = ({
   // The collapse button is offered wherever the docked desktop ribbon is: it is
   // how the toolbar is collapsed in the first place, so it cannot wait for the
   // setting to be on. Mobile and the floating toolbar have nothing to collapse.
-  const canCollapseToolbar = isEditable && !isMobile && isToolbarFixedToTop
+  const canCollapseToolbar = isEditable && !isMobile && isToolbarFixedToTop && !tocSelection
   const toggleToolbarCollapsed = useCallback(() => {
     application.setPreference(SUPER_TOOLBAR_AUTO_HIDE_PREF_KEY, !isToolbarCollapsePreferred).catch(console.error)
   }, [application, isToolbarCollapsePreferred])
@@ -3041,24 +3046,10 @@ const ToolbarPlugin = ({
   const setActiveTabId = controlsState.setTab
   const checklistPreviousTabRef = useRef<string | null>(null)
 
-  /**
-   * Standard Red Notes (t120) — bookkeeping for the Mermaid contextual tab's
-   * auto-activation. Two refs, because the two things that make an auto-switch
-   * bearable rather than annoying are independent:
-   *
-   *  - `mermaidTabRestoreRef` remembers the tab the diagram displaced, so
-   *    deselecting hands it back instead of dumping the user on Home. `null` is
-   *    a MEANINGFUL value inside it ("they were on the implicit first tab"),
-   *    which is why it is a wrapper object and not a bare `string | null` ref:
-   *    a bare ref could not tell that apart from "nothing was displaced".
-   *  - `mermaidTabEngagedRef` latches for as long as one diagram stays
-   *    selected, so the activation fires ONCE, on the transition. Lexical
-   *    re-runs its update listener on every keystroke and selection nudge;
-   *    without the latch a user who clicked over to Home would be yanked back
-   *    to the Mermaid tab on the very next update.
-   */
-  const mermaidTabRestoreRef = useRef<{ previousTabId: string | null } | null>(null)
-  const mermaidTabEngagedRef = useRef(false)
+  // Preserve the displaced tab and activate once per focused diagram/index.
+  // Typing or explicitly choosing another tab must not keep reclaiming the ribbon.
+  const contextualTabRestoreRef = useRef<{ previousTabId: string | null } | null>(null)
+  const contextualTabEngagedRef = useRef<string | null>(null)
 
   /**
    * The one place a ribbon tab is chosen BY THE USER (the tab strip's onClick).
@@ -3075,7 +3066,7 @@ const ToolbarPlugin = ({
         checklistPreviousTabRef.current = activeTabId
       }
       if (tabId !== CONTEXTUAL_TAB_ID) {
-        mermaidTabRestoreRef.current = null
+        contextualTabRestoreRef.current = null
       }
       setActiveTabId(tabId)
     },
@@ -3187,17 +3178,14 @@ const ToolbarPlugin = ({
   type ContextualSegment = { key: string; caption: string; buttons: ReactNode[] }
   const contextualSegments: ContextualSegment[] = []
   const contextualButtons: ReactNode[] = []
-  /**
-   * Standard Red Notes: a selected Mermaid diagram wins, whatever the last RANGE
-   * selection left in `contextualWidget`. Derived rather than written into that
-   * state because `$updateToolbar` — which owns it — never runs for a node
-   * selection at all (see the mermaid selection listener above), so the two
-   * detections are independent and this is where they meet.
-   */
-  const effectiveContextualWidget: ContextualWidget | null = mermaidSelection
-    ? { kind: ContextualWidgetKind.Mermaid, label: 'Mermaid' }
-    : contextualWidget
-  if (effectiveContextualWidget) {
+  // Decorators have their own node-selection listeners; prefer their current
+  // selection over context retained from the previous text range.
+  const effectiveContextualWidget: ContextualWidget | null = tocSelection
+    ? { kind: ContextualWidgetKind.TableOfContents, label: 'Table of contents' }
+    : mermaidSelection
+      ? { kind: ContextualWidgetKind.Mermaid, label: 'Mermaid' }
+      : contextualWidget
+  if (effectiveContextualWidget && effectiveContextualWidget.kind !== ContextualWidgetKind.TableOfContents) {
     switch (effectiveContextualWidget.kind) {
       case ContextualWidgetKind.Table:
         contextualSegments.push(
@@ -3472,7 +3460,11 @@ const ToolbarPlugin = ({
   // were on and may click into it themselves. A selected MERMAID diagram is the
   // one exception; see the activation effect below. (The separate line is kept
   // only for the non-ribbon floating selection toolbar, further below.)
-  const hasContextualTab = isEditable && canShowAllItems && !!effectiveContextualWidget && contextualButtons.length > 0
+  const hasContextualTab =
+    (isEditable || Boolean(tocSelection)) &&
+    canShowAllItems &&
+    !!effectiveContextualWidget &&
+    (Boolean(tocSelection) || contextualButtons.length > 0)
   const showToolbarControls =
     isEditable ||
     resolvedGroups.length > 0 ||
@@ -3524,46 +3516,36 @@ const ToolbarPlugin = ({
     checklistPreviousTabRef.current = null
   }, [hasChecklistSelection, activeTabId, setActiveTabId, note, superGroupTabs])
 
-  /**
-   * Standard Red Notes (t120) — tab ownership around the contextual tab.
-   *
-   * A selected MERMAID diagram auto-activates the contextual tab; every other
-   * contextual widget keeps the old behaviour of being merely *available*. The
-   * asymmetry is deliberate: a table / link / image contextual tab appears
-   * while the caret sits in ordinary prose the user is still typing, so
-   * stealing the ribbon there would fight them. A mermaid node, by contrast,
-   * can only become the selected node by being clicked, and since t119 the
-   * toolbar section is the ONLY place a diagram is configurable at all — so
-   * that click IS the request for its controls, and making it cost a second
-   * click on the tab was the regression this closes.
-   *
-   * Undocked there is no tab strip at all (`hasContextualTab` folds in
-   * `canShowAllItems`), so `shouldAutoActivateContextualTab` is false and the
-   * floating toolbar's flat "Mermaid tools" row is reached untouched.
-   *
-   * This single effect owns every programmatic tab change, deliberately. Split
-   * across two effects the deactivation rules race: whichever ran first would
-   * blank `activeTabId` and the other would then see a tab it did not expect.
-   */
-  const shouldAutoActivateContextualTab = hasContextualTab && mermaidSelection !== null
+  // Focused contents blocks and diagrams activate their dedicated tools. Other
+  // contextual tabs remain optional while the user edits text. One effect owns
+  // activation and restoration so those transitions cannot race each other.
+  const autoActivateContextualKey = hasContextualTab
+    ? tocSelection
+      ? `toc:${tocSelection}`
+      : mermaidSelection
+        ? `mermaid:${mermaidSelection.nodeKey}`
+        : null
+    : null
   useEffect(() => {
-    if (shouldAutoActivateContextualTab) {
+    if (autoActivateContextualKey) {
       // Latched: once per selected diagram, NOT once per Lexical update.
-      if (mermaidTabEngagedRef.current) {
+      if (contextualTabEngagedRef.current === autoActivateContextualKey) {
         return
       }
-      mermaidTabEngagedRef.current = true
+      contextualTabEngagedRef.current = autoActivateContextualKey
       // Already standing on a contextual tab? Then nothing of theirs is being
       // displaced, and `null` (fall back to the first tab) is what deselecting
       // should give back — which is also exactly the pre-t120 behaviour.
-      mermaidTabRestoreRef.current = { previousTabId: activeTabId === CONTEXTUAL_TAB_ID ? null : activeTabId }
+      if (activeTabId !== CONTEXTUAL_TAB_ID || !contextualTabRestoreRef.current) {
+        contextualTabRestoreRef.current = { previousTabId: activeTabId === CONTEXTUAL_TAB_ID ? null : activeTabId }
+      }
       setActiveTabId(CONTEXTUAL_TAB_ID)
       return
     }
 
-    mermaidTabEngagedRef.current = false
-    const restore = mermaidTabRestoreRef.current
-    mermaidTabRestoreRef.current = null
+    contextualTabEngagedRef.current = null
+    const restore = contextualTabRestoreRef.current
+    contextualTabRestoreRef.current = null
 
     if (restore) {
       // Hand back exactly the tab the diagram displaced — but only to someone
@@ -3582,7 +3564,7 @@ const ToolbarPlugin = ({
     if (!hasContextualTab) {
       setActiveTabId((prev) => (prev === CONTEXTUAL_TAB_ID ? null : prev))
     }
-  }, [shouldAutoActivateContextualTab, hasContextualTab, activeTabId, setActiveTabId])
+  }, [autoActivateContextualKey, hasContextualTab, activeTabId, setActiveTabId])
 
   // Standard Red Notes — Word-like floating selection mini-toolbar.
   //
@@ -3757,7 +3739,7 @@ const ToolbarPlugin = ({
           isEditable && isMobile && !canShowToolbarOnMobile ? 'hidden' : '',
           !isMobile && 'border-border bg-default border-b',
           !isMobile
-            ? !isToolbarFixedToTop && isEditable
+            ? !isToolbarFixedToTop && isEditable && !tocSelection
               ? 'z-tooltip translucent-ui:border-(--popover-border-color) translucent-ui:bg-(--popover-background-color) translucent-ui:[backdrop-filter:var(--popover-backdrop-filter)] fixed top-0 left-0 hidden translate-x-(--translate-x) translate-y-(--translate-y) rounded border py-0.5'
               : 'w-full px-1 py-1'
             : '',
@@ -3901,7 +3883,9 @@ const ToolbarPlugin = ({
                 'data-[super-toolbar-autohide=revealed]:pointer-events-auto data-[super-toolbar-autohide=revealed]:visible data-[super-toolbar-autohide=revealed]:opacity-100 data-[super-toolbar-autohide=revealed]:transition-opacity motion-reduce:data-[super-toolbar-autohide=revealed]:transition-none',
             )}
           >
-            {isReviewActive || !showToolbarControls ? null : isContextualActive ? (
+            {isReviewActive || !showToolbarControls ? null : isContextualActive && tocSelection ? (
+              <TableOfContentsRibbon key={tocSelection} nodeKey={tocSelection} />
+            ) : isContextualActive ? (
               <Toolbar
                 // Mirror the normal super-group layout: spaced, captioned segment
                 // blocks instead of one flat run of buttons.

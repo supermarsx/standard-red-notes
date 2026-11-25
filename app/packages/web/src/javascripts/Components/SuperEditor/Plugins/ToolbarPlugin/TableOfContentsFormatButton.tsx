@@ -319,6 +319,7 @@ export default function TableOfContentsFormatButton() {
                     ...DEFAULT_TABLE_OF_CONTENTS_FORMAT,
                     title: target.format.title,
                     subtitle: target.format.subtitle,
+                    entryOrder: target.format.entryOrder,
                   })
                 }
               >

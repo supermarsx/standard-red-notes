@@ -29,6 +29,7 @@ export enum ContextualWidgetKind {
    * segment idiom as Table rather than the generic decorator-block bucket.
    */
   Mermaid = 'mermaid',
+  TableOfContents = 'table-of-contents',
   Image = 'image',
   Link = 'link',
   Code = 'code',
@@ -91,6 +92,7 @@ export type ContextualWidget = {
 const KIND_LABELS: Record<ContextualWidgetKind, string> = {
   [ContextualWidgetKind.Table]: 'Table',
   [ContextualWidgetKind.Mermaid]: 'Mermaid',
+  [ContextualWidgetKind.TableOfContents]: 'Table of contents',
   [ContextualWidgetKind.Image]: 'Image',
   [ContextualWidgetKind.Link]: 'Link',
   [ContextualWidgetKind.Code]: 'Code Block',
@@ -133,6 +135,9 @@ export function resolveContextualWidget(input: {
   // Table so a diagram inside a table cell still edits the table.
   if (isMermaid === true || activeBlockType === MERMAID_NODE_TYPE) {
     return { kind: ContextualWidgetKind.Mermaid, label: KIND_LABELS[ContextualWidgetKind.Mermaid] }
+  }
+  if (activeBlockType === ContextualWidgetKind.TableOfContents) {
+    return { kind: ContextualWidgetKind.TableOfContents, label: KIND_LABELS[ContextualWidgetKind.TableOfContents] }
   }
   if (isImage) {
     return { kind: ContextualWidgetKind.Image, label: KIND_LABELS[ContextualWidgetKind.Image] }

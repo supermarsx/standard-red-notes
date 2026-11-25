@@ -1,15 +1,21 @@
 import * as React from 'react'
 import {
   $getNodeByKey,
+  $createNodeSelection,
+  $getSelection,
+  $isNodeSelection,
+  $setSelection,
   DecoratorNode,
   EditorConfig,
   LexicalEditor,
   LexicalNode,
   NodeKey,
   SerializedLexicalNode,
+  SKIP_DOM_SELECTION_TAG,
 } from 'lexical'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
 import { TableOfContentsPlugin, TableOfContentsEntry } from '@lexical/react/LexicalTableOfContentsPlugin'
+import { $readTocHeadings, orderTocHeadings } from '../Utils/tableOfContentsOutline'
 
 /**
  * Standard Red Notes: live, clickable table-of-contents / index block.
@@ -48,6 +54,7 @@ export type TableOfContentsFormat = {
   entrySpacing: number
   wrapEntries: boolean
   appearance: 'card' | 'plain'
+  entryOrder: string[]
 }
 
 export const DEFAULT_TABLE_OF_CONTENTS_FORMAT: TableOfContentsFormat = {
@@ -71,6 +78,7 @@ export const DEFAULT_TABLE_OF_CONTENTS_FORMAT: TableOfContentsFormat = {
   entrySpacing: 2,
   wrapEntries: false,
   appearance: 'card',
+  entryOrder: [],
 }
 
 const boundedNumber = (value: unknown, fallback: number, min: number, max: number): number => {
@@ -105,12 +113,12 @@ export function normalizeTableOfContentsFormat(value?: Partial<TableOfContentsFo
     entrySpacing: boundedNumber(value?.entrySpacing, 2, 0, 24),
     wrapEntries: value?.wrapEntries === true,
     appearance: value?.appearance === 'plain' ? 'plain' : 'card',
+    entryOrder: Array.isArray(value?.entryOrder)
+      ? [
+          ...new Set(value.entryOrder.filter((id) => typeof id === 'string' && id.length > 0 && id.length <= 128)),
+        ].slice(0, 10_000)
+      : [],
   }
-}
-
-function levelOf(tag: string): number {
-  const level = parseInt(tag.slice(1), 10)
-  return Number.isFinite(level) && level >= 1 ? level : 1
 }
 
 function scrollToHeading(editor: LexicalEditor, key: NodeKey): void {
@@ -141,7 +149,11 @@ function TableOfContentsList({
   editor: LexicalEditor
   format: TableOfContentsFormat
 }): React.JSX.Element {
-  const headings = entries.filter(([, text, tag]) => text.trim().length > 0 && levelOf(tag) <= format.maxLevel)
+  const visible = new Set(entries.map(([key]) => key))
+  const headings = editor
+    .getEditorState()
+    .read(() => orderTocHeadings($readTocHeadings(), format.entryOrder))
+    .filter(({ key, text, level }) => visible.has(key) && text.trim().length > 0 && level <= format.maxLevel)
 
   if (headings.length === 0) {
     return (
@@ -153,15 +165,15 @@ function TableOfContentsList({
 
   // Smallest heading level present becomes the baseline (0 indent), so an index
   // that starts at h2 doesn't render with a stray leading indent.
-  const minLevel = headings.reduce((min, [, , tag]) => Math.min(min, levelOf(tag)), MAX_TOC_LEVEL)
+  const minLevel = headings.reduce((min, { level }) => Math.min(min, level), MAX_TOC_LEVEL)
 
   return (
     <ul
       className="text-foreground m-0 list-none p-0"
       style={{ textAlign: format.alignment, fontSize: format.entrySize, color: format.entryColor || undefined }}
     >
-      {headings.map(([key, text, tag], index) => {
-        const indent = levelOf(tag) - minLevel
+      {headings.map(({ key, text, level }, index) => {
+        const indent = level - minLevel
         return (
           <li
             key={key}
@@ -190,11 +202,44 @@ function TableOfContentsList({
   )
 }
 
-function TableOfContentsComponent({ format }: { format: TableOfContentsFormat }): React.JSX.Element {
+function TableOfContentsComponent({
+  format,
+  nodeKey,
+}: {
+  format: TableOfContentsFormat
+  nodeKey: NodeKey
+}): React.JSX.Element {
   const [editor] = useLexicalComposerContext()
+  const select = () =>
+    editor.update(
+      () => {
+        if (!$getNodeByKey(nodeKey)) {
+          return
+        }
+        const current = $getSelection()
+        if ($isNodeSelection(current) && current.getNodes().length === 1 && current.has(nodeKey)) {
+          return
+        }
+        const selection = $createNodeSelection()
+        selection.add(nodeKey)
+        $setSelection(selection)
+      },
+      { tag: SKIP_DOM_SELECTION_TAG },
+    )
   return (
     <div
-      className={`my-2 ${format.appearance === 'card' ? 'border-border bg-default rounded border' : ''}`}
+      className={`focus-visible:ring-info my-2 outline-none focus-visible:ring-2 ${format.appearance === 'card' ? 'border-border bg-default rounded border' : ''}`}
+      tabIndex={0}
+      role="group"
+      aria-label="Table of contents block"
+      onFocus={select}
+      onMouseDown={(event) => {
+        if (!(event.target as Element).closest('button')) {
+          event.preventDefault()
+          event.currentTarget.focus({ preventScroll: true })
+          select()
+        }
+      }}
       style={{
         fontFamily: {
           document: 'inherit',
@@ -302,7 +347,7 @@ export class TableOfContentsNode extends DecoratorNode<React.JSX.Element> {
   }
 
   decorate(_editor: LexicalEditor, _config: EditorConfig): React.JSX.Element {
-    return <TableOfContentsComponent format={this.getFormat()} />
+    return <TableOfContentsComponent format={this.getFormat()} nodeKey={this.getKey()} />
   }
 }
 
