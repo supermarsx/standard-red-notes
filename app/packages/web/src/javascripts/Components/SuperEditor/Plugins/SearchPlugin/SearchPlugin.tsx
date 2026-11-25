@@ -45,6 +45,14 @@ export function SearchPlugin() {
   const [editor] = useLexicalComposerContext()
 
   const [isSearchActive, setIsSearchActive] = useState(false)
+  const [fullscreenElement, setFullscreenElement] = useState<Element | null>(null)
+  useEffect(() => {
+    const ownerDocument = editor.getRootElement()?.ownerDocument ?? document
+    const update = () => setFullscreenElement(ownerDocument.fullscreenElement)
+    update()
+    ownerDocument.addEventListener('fullscreenchange', update)
+    return () => ownerDocument.removeEventListener('fullscreenchange', update)
+  }, [editor])
 
   const [query, setQuery] = useState('')
   const queryRef = useStateRef(query)
@@ -453,11 +461,17 @@ export function SearchPlugin() {
     'fixed z-modal select-none font-sans',
     isPositioned ? '' : 'left-1/2 top-16 -translate-x-1/2',
   )
+  // A z-index inside the editor cannot escape an ancestor stacking context.
+  // Keep the movable panel in the page overlay layer; highlights remain in
+  // their existing editor-relative portal below. Native fullscreen needs its
+  // own root, because body children outside it are not painted.
+  const ownerDocument = editor.getRootElement()?.ownerDocument ?? document
+  const panelHost = fullscreenElement ?? ownerDocument.body
 
   if (isMinimized) {
-    return (
+    return createPortal(
       <>
-        <div ref={setContainerRef} style={containerStyle} className={containerClassName}>
+        <div ref={setContainerRef} style={containerStyle} className={containerClassName} data-super-search-panel="true">
           <button
             type="button"
             onPointerDown={startDrag}
@@ -483,13 +497,17 @@ export function SearchPlugin() {
           <SearchHighlightRenderer shouldHighlightAll={shouldHighlightAll} ref={highlightRendererRef} />,
           editor.getRootElement()?.parentElement || document.body,
         )}
-      </>
+      </>,
+      panelHost,
     )
   }
 
-  return (
+  return createPortal(
     <>
       <div
+        role="dialog"
+        aria-label={isReplaceMode ? 'Find and replace in note' : 'Find in note'}
+        data-super-search-panel="true"
         ref={setContainerRef}
         style={containerStyle}
         className={classNames(containerClassName, 'max-w-[calc(100vw-1rem)]')}
@@ -709,6 +727,7 @@ export function SearchPlugin() {
         <SearchHighlightRenderer shouldHighlightAll={shouldHighlightAll} ref={highlightRendererRef} />,
         editor.getRootElement()?.parentElement || document.body,
       )}
-    </>
+    </>,
+    panelHost,
   )
 }
