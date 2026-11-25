@@ -1,4 +1,4 @@
-import { ReactNode, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
 import { useLexicalEditable } from '@lexical/react/useLexicalEditable'
 import { $getNodeByKey } from 'lexical'
@@ -16,22 +16,9 @@ import {
   tocSibling,
 } from '../../Lexical/Utils/tableOfContentsOutline'
 import { changeTableOfContents, moveContentsEntry, moveContentsNoteSection } from './tableOfContentsActions'
+import { RibbonGroup as Group } from './RibbonGroup'
 
 const inputClass = 'border-border bg-default text-text min-w-0 rounded border px-1.5 py-0.5 text-xs disabled:opacity-50'
-function Group({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div
-      role="group"
-      aria-label={label}
-      className="super-toolbar-group bg-contrast flex flex-shrink-0 flex-col rounded-lg px-2 py-1"
-    >
-      <div className="flex min-h-[6.25rem] flex-col justify-center gap-1">{children}</div>
-      <span aria-hidden className="text-passive-1 mt-1 text-center text-[10px] font-medium uppercase">
-        {label}
-      </span>
-    </div>
-  )
-}
 
 /** Full contextual ribbon, bound to one explicit index even in a multi-index note. */
 export default function TableOfContentsRibbon({ nodeKey }: { nodeKey: string }) {
@@ -79,7 +66,7 @@ export default function TableOfContentsRibbon({ nodeKey }: { nodeKey: string }) 
   const selected = headings.find(({ key }) => key === headingKey) ?? headings[0]
   const change = (patch: Partial<TableOfContentsFormat>) => changeTableOfContents(editor, nodeKey, patch)
   const text = (key: 'title' | 'subtitle', label: string, maxLength: number) => (
-    <label className="flex items-center justify-between gap-2 text-xs">
+    <label className={`flex items-center justify-between gap-2 text-xs ${key === 'subtitle' ? 'row-span-2' : ''}`}>
       {label}
       {key === 'subtitle' ? (
         <textarea
@@ -277,42 +264,40 @@ export default function TableOfContentsRibbon({ nodeKey }: { nodeKey: string }) 
             </option>
           ))}
         </select>
-        <div className="grid grid-cols-2 gap-3">
-          <div className="flex flex-col gap-0.5 text-xs">
-            <span>Contents order</span>
-            <div className="flex gap-1">
-              {([-1, 1] as const).map((direction) => (
-                <button
-                  key={direction}
-                  type="button"
-                  aria-label={`Move contents entry ${direction < 0 ? 'up' : 'down'}`}
-                  title="Move this entry and its nested entries in this contents block."
-                  className={`${buttonClass} w-8`}
-                  disabled={!editable || !selected || !tocSibling(headings, selected.key, direction)}
-                  onClick={() => selected && moveContentsEntry(editor, nodeKey, selected.key, direction)}
-                >
-                  {direction < 0 ? '↑' : '↓'}
-                </button>
-              ))}
-            </div>
+        <div className="flex items-center justify-between gap-2 text-xs">
+          <span>Contents order</span>
+          <div className="flex gap-1">
+            {([-1, 1] as const).map((direction) => (
+              <button
+                key={direction}
+                type="button"
+                aria-label={`Move contents entry ${direction < 0 ? 'up' : 'down'}`}
+                title="Move this entry and its nested entries in this contents block."
+                className={`${buttonClass} w-8`}
+                disabled={!editable || !selected || !tocSibling(headings, selected.key, direction)}
+                onClick={() => selected && moveContentsEntry(editor, nodeKey, selected.key, direction)}
+              >
+                {direction < 0 ? '↑' : '↓'}
+              </button>
+            ))}
           </div>
-          <div className="flex flex-col gap-0.5 text-xs">
-            <span>Note section</span>
-            <div className="flex gap-1">
-              {([-1, 1] as const).map((direction, index) => (
-                <button
-                  key={direction}
-                  type="button"
-                  aria-label={`Move note section ${direction < 0 ? 'up' : 'down'}`}
-                  title="Move this heading, its body, and nested subsections in the note."
-                  className={`${buttonClass} w-8`}
-                  disabled={!editable || !selected || !sectionMoves[selected.key]?.[index]}
-                  onClick={() => selected && moveContentsNoteSection(editor, nodeKey, selected.key, direction)}
-                >
-                  {direction < 0 ? '↑' : '↓'}
-                </button>
-              ))}
-            </div>
+        </div>
+        <div className="flex items-center justify-between gap-2 text-xs">
+          <span>Note section</span>
+          <div className="flex gap-1">
+            {([-1, 1] as const).map((direction, index) => (
+              <button
+                key={direction}
+                type="button"
+                aria-label={`Move note section ${direction < 0 ? 'up' : 'down'}`}
+                title="Move this heading, its body, and nested subsections in the note."
+                className={`${buttonClass} w-8`}
+                disabled={!editable || !selected || !sectionMoves[selected.key]?.[index]}
+                onClick={() => selected && moveContentsNoteSection(editor, nodeKey, selected.key, direction)}
+              >
+                {direction < 0 ? '↑' : '↓'}
+              </button>
+            ))}
           </div>
         </div>
         <div className="flex gap-1">

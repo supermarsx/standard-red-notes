@@ -30,7 +30,7 @@ export default function InsertImagesButton({ editor, fromUrl }: { editor: Lexica
         aria-expanded={open}
         active={open}
         onSelect={() => setOpen(!open)}
-        className="h-20 min-w-20 md:h-[7.375rem] [&>div]:h-full"
+        className="h-20 min-w-20 md:h-(--super-ribbon-command-height) [&>div]:h-full"
       >
         <span className="flex h-full flex-col items-center justify-center gap-1.5 px-1">
           <Icon type="image" size="custom" className="h-8 w-8" />

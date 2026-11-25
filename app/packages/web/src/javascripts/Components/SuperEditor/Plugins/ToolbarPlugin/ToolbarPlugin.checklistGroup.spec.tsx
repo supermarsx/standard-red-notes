@@ -254,7 +254,7 @@ it('gives images a dedicated large Insert control without duplicating URL insert
   expect(images).not.toBeNull()
   const button = images.querySelector<HTMLButtonElement>('[aria-label="Insert image"]')!
   expect(['true', 'menu']).toContain(button.getAttribute('aria-haspopup'))
-  expect(button.className).toContain('md:h-[7.375rem]')
+  expect(button.className).toContain('md:h-(--super-ribbon-command-height)')
   expect(container.querySelectorAll('[aria-label="Insert image"]')).toHaveLength(1)
   const media = container.querySelector('[role="group"][aria-label="blockCategoryMedia"]')!
   expect(media.textContent).not.toContain('blockImageFromUrl')

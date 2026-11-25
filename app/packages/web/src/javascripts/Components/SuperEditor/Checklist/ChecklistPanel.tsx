@@ -181,14 +181,21 @@ export function ChecklistPanel({
         className="super-toolbar-group bg-contrast flex flex-shrink-0 flex-col rounded-lg px-1 py-0.5 text-sm"
       >
         {row ? (
-          <div
-            className="flex flex-col items-start justify-center gap-0.5 md:min-h-[6.25rem]"
-            role="group"
-            aria-label="Selected checklist item"
-          >
-            <span className="text-passive-1 max-w-40 truncate text-xs" title={row.text}>
-              {row.text}
-            </span>
+          <div className="super-ribbon-commands" role="group" aria-label="Selected checklist item">
+            <div className="text-passive-1 flex max-w-48 flex-col text-xs">
+              <span className="truncate" title={row.text}>
+                {row.text}
+              </span>
+              {row.perPerson && (
+                <span
+                  className="truncate"
+                  title={row.ticks.map(tickName).join(', ')}
+                  aria-label={`Ticks for ${row.text}`}
+                >
+                  {row.ticks.length ? `Ticked by ${row.ticks.map(tickName).join(', ')}` : 'No one has ticked this yet'}
+                </span>
+              )}
+            </div>
             <div className="flex items-center gap-0.5">
               <ToolbarButton
                 name={`Complete ${row.text}`}
@@ -247,15 +254,6 @@ export function ChecklistPanel({
                 popoverPlacement="bottom-start"
               />
             </div>
-            {row.perPerson && (
-              <span
-                className="text-passive-1 max-w-48 truncate text-xs"
-                title={row.ticks.map(tickName).join(', ')}
-                aria-label={`Ticks for ${row.text}`}
-              >
-                {row.ticks.length ? `Ticked by ${row.ticks.map(tickName).join(', ')}` : 'No one has ticked this yet'}
-              </span>
-            )}
           </div>
         ) : (
           <p className="text-passive-1 text-xs">Place the cursor in a checklist item to change its settings.</p>
@@ -272,7 +270,7 @@ export function ChecklistPanel({
         aria-label="Checklist organization"
         className="super-toolbar-group bg-contrast flex flex-shrink-0 flex-col rounded-lg px-1 py-0.5 text-sm"
       >
-        <div className="flex flex-1 items-center justify-center md:min-h-[6.25rem]">
+        <div className="flex flex-1 items-center justify-center">
           <ChecklistOrganizeMenu flushChanges={flushChanges} />
         </div>
         <span aria-hidden className="text-passive-1 hidden text-center text-[10px] font-medium uppercase md:block">

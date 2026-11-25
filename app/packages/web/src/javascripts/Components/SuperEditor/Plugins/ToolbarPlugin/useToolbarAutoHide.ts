@@ -160,6 +160,8 @@ export type ToolbarAutoHideOptions = ToolbarAutoHideCallbacks & {
 }
 
 export type ToolbarAutoHide = {
+  /** Reveal contextual tools without moving the editor selection or focus. */
+  reveal: () => void
   /** Open the panel now and move keyboard focus into it. */
   revealAndFocus: () => void
   /** Whether keyboard focus is inside the panel. */
@@ -444,6 +446,7 @@ function createToolbarAutoHideController(
   write()
 
   return {
+    reveal: () => open('held', true),
     setHasOpenDialog: (isOpen) => keep('openDialog', isOpen),
     release: () => open('held', false),
     containsFocus: () => isInsidePanel(document.activeElement),
@@ -522,7 +525,8 @@ export function useToolbarAutoHide({
 
   const release = useCallback(() => controllerRef.current?.release(), [])
   const revealAndFocus = useCallback(() => controllerRef.current?.revealAndFocus(), [])
+  const reveal = useCallback(() => controllerRef.current?.reveal(), [])
   const containsFocus = useCallback(() => controllerRef.current?.containsFocus() ?? false, [])
 
-  return { revealAndFocus, containsFocus, release }
+  return { reveal, revealAndFocus, containsFocus, release }
 }

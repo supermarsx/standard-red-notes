@@ -1,0 +1,49 @@
+#super-mobile-toolbar {
+  --super-ribbon-row-height: calc(var(--super-toolbar-icon-size, 0.875rem) + 1.125rem);
+  --super-ribbon-command-height: calc(3 * var(--super-ribbon-row-height) + 0.25rem);
+
+  &:not(.fixed) {
+    position: relative;
+  }
+
+  &:has(> [data-super-toolbar-collapse-corner]) .super-toolbar-utility-bar {
+    padding-inline-end: 2rem;
+  }
+}
+
+.super-ribbon-commands {
+  display: grid;
+  grid-auto-flow: column;
+  grid-template-rows: repeat(3, minmax(0, 1fr));
+  align-items: center;
+  column-gap: 0.75rem;
+  row-gap: 0.125rem;
+}
+
+@media (min-width: 768px) {
+  #super-mobile-toolbar .super-toolbar-group {
+    flex-shrink: 0;
+    align-self: flex-start;
+    box-sizing: border-box;
+    padding: 0.125rem 0.25rem;
+
+    // Every renderer shares one fixed command area and one caption baseline.
+    // Extra controls flow into columns or remain scrollable within this area.
+    > :first-child {
+      box-sizing: border-box;
+      height: var(--super-ribbon-command-height);
+      min-height: var(--super-ribbon-command-height);
+      max-height: var(--super-ribbon-command-height);
+      flex-shrink: 0;
+      overflow: auto;
+    }
+
+    > span[aria-hidden='true'] {
+      height: 0.875rem;
+      line-height: 0.875rem;
+      margin-top: 0.125rem;
+      padding-top: 0;
+      padding-bottom: 0;
+    }
+  }
+}

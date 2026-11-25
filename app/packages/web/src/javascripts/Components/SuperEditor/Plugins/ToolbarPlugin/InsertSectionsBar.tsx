@@ -19,6 +19,7 @@
 import { Fragment, ReactElement, ReactNode } from 'react'
 
 export type InsertSectionsBarSection = {
+  fullHeight?: boolean
   /** Stable React key (the section id). */
   key: string
   /** Localized caption shown beneath the segment. */
@@ -45,9 +46,12 @@ const InsertSectionsBar = ({ sections }: InsertSectionsBarProps): ReactElement =
         aria-label={section.caption}
         className="super-toolbar-group bg-contrast flex flex-shrink-0 flex-col rounded-lg px-1 py-0.5"
       >
-        <div className="flex flex-col items-start justify-center gap-0.5 md:min-h-[7.375rem]">
+        <div className="super-ribbon-commands flex flex-col items-start justify-center gap-0.5">
           {section.rows.map((rowButtons, rowIndex) => (
-            <div key={rowIndex} className="flex items-center justify-start gap-0.5">
+            <div
+              key={rowIndex}
+              className={`flex items-center justify-start gap-0.5 ${section.fullHeight ? 'row-span-3' : ''}`}
+            >
               {rowButtons.map((button, buttonIndex) => (
                 <Fragment key={buttonIndex}>{button}</Fragment>
               ))}

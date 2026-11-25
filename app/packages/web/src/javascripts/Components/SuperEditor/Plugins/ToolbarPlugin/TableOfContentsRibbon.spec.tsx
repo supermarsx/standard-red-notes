@@ -33,8 +33,9 @@ jest.mock('@/Components/Panes/ResponsivePaneProvider', () => ({
 jest.setTimeout(30000)
 let docked = true
 const fakeApp = {
-  getPreference: (key: string, fallback: unknown) =>
-    key === PrefKey.AlwaysShowSuperToolbar ? docked : (PrefDefaults[key as PrefKey] ?? fallback),
+  getPreference: (key: string, fallback: unknown) => {
+    return key === PrefKey.AlwaysShowSuperToolbar ? docked : (PrefDefaults[key as PrefKey] ?? fallback)
+  },
   preferences: {
     getLocalValue: (key: string, fallback: unknown) => LocalPrefDefaults[key as never] ?? fallback,
     setLocalValue: () => undefined,
@@ -247,6 +248,16 @@ it('opens on keyboard focus and retires the ribbon when the selected contents bl
   await act(async () => editor.update(() => $getNodeByKey(indexKeys[0])!.remove(), { discrete: true }))
   expect(ribbon()).toBeNull()
   expect(tabs().map((tab) => tab.textContent)).not.toContain('Table of contents')
+})
+
+it('retains the floating right collapse control when the contextual contents ribbon opens', async () => {
+  await mount()
+  await focusIndex()
+  const toolbar = container.querySelector('#super-mobile-toolbar')!
+  const corner = toolbar.querySelector('[data-super-toolbar-collapse-corner]')!
+  expect(corner.parentElement).toBe(toolbar)
+  expect(corner.querySelector('button[data-super-toolbar-collapse]')).not.toBeNull()
+  expect(corner.closest('[inert]')).toBeNull()
 })
 
 it('applies ribbon formatting and resets appearance while preserving the contents order', async () => {

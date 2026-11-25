@@ -386,27 +386,42 @@ describe('expanded (the default)', () => {
     expect(tabRow(tile).querySelector('[data-super-toolbar-collapse]')).toBeNull()
   })
 
-  it('adds exactly one thing to the panel — the collapse button, in a box at its end', async () => {
+  it('keeps the collapse button outside the command panel, including its inert state', async () => {
     const tile = await mountTile()
     const children = Array.from(panel(tile).children)
-    const corner = children[children.length - 1]
+    const corner = bar(tile).querySelector('[data-super-toolbar-collapse-corner]')!
     expect(corner.hasAttribute('data-super-toolbar-collapse-corner')).toBe(true)
     // Before the feature the panel held one thing on desktop: the toolbar of groups.
-    expect(children).toHaveLength(2)
+    expect(children).toHaveLength(1)
     expect(children[0].getAttribute('role')).toBe('toolbar')
     expect(corner.querySelectorAll('button')).toHaveLength(1)
     expect(corner.querySelector('button')).toBe(collapseButton(tile))
+    expect(panel(tile).contains(corner)).toBe(false)
+    expect(corner.parentElement).toBe(bar(tile))
     expect(tile.superEditor.querySelectorAll('[data-super-toolbar-collapse]')).toHaveLength(1)
   })
 
-  it('draws the button in the corner from a zero-width box, so no command has less room than it had', async () => {
+  it('pins the control to the right edge of the whole toolbar', async () => {
     const tile = await mountTile()
-    const corner = panel(tile).querySelector('[data-super-toolbar-collapse-corner]') as Element
+    const corner = bar(tile).querySelector('[data-super-toolbar-collapse-corner]') as Element
     // The box takes no width in the row of groups, and is what the button is placed against.
-    expect(classes(corner)).toEqual(expect.arrayContaining(['w-0', 'relative', 'flex-shrink-0']))
-    expect(classes(collapseButton(tile) as Element)).toEqual(
-      expect.arrayContaining(['absolute', 'right-0', 'bottom-0']),
-    )
+    expect(classes(corner)).toEqual(expect.arrayContaining(['absolute', 'right-1', 'top-1']))
+    expect(corner.closest('[inert]')).toBeNull()
+  })
+
+  it('keeps the same reachable collapse control while switching between every ribbon tab', async () => {
+    const tile = await mountTile()
+    const control = collapseButton(tile)!
+    for (const label of ['Home', 'Insert', 'Layout', 'AI', 'Tools']) {
+      await click(tab(tile, label))
+      expect(collapseButton(tile)).toBe(control)
+      expect(control.closest('[data-super-toolbar-collapse-corner]')?.parentElement).toBe(bar(tile))
+      await click(control)
+      expect(state(tile)).toBe('hidden')
+      expect(control.closest('[inert]')).toBeNull()
+      await click(control)
+      expect(state(tile)).toBeNull()
+    }
   })
 
   it('names the button for what it will do, and draws it as an icon', async () => {

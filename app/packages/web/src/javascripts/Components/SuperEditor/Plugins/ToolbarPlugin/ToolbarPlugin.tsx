@@ -1,4 +1,5 @@
 import ToolbarButton from './ToolbarButton'
+import './Ribbon.scss'
 import TableOfContentsFormatButton from './TableOfContentsFormatButton'
 import TableOfContentsRibbon from './TableOfContentsRibbon'
 import { useSelectedTableOfContents } from './useSelectedTableOfContents'
@@ -1966,19 +1967,18 @@ const ToolbarPlugin = ({
   // toolbar never re-renders it (see `useToolbarAutoHide`).
   const storedToolbarAutoHide = usePreference(SUPER_TOOLBAR_AUTO_HIDE_PREF_KEY)
   const isToolbarCollapsePreferred = normalizeSuperToolbarAutoHide(storedToolbarAutoHide)
-  const isAutoHideActive =
-    !tocSelection &&
-    isSuperToolbarAutoHideActive({
-      storedPreference: storedToolbarAutoHide,
-      isMobile,
-      isToolbarFixedToTop,
-      isEditable,
-    })
+  const isAutoHideActive = isSuperToolbarAutoHideActive({
+    storedPreference: storedToolbarAutoHide,
+    isMobile,
+    isToolbarFixedToTop: isToolbarFixedToTop || Boolean(tocSelection),
+    isEditable,
+  })
   const commandPanelRef = useRef<HTMLDivElement>(null)
   // Destructured rather than kept as one object: the callbacks are stable, the
   // object is new on every render, and the command handler below must not be
   // re-registered each time this component renders.
   const {
+    reveal: revealContextualToolbar,
     revealAndFocus: revealAutoHiddenToolbar,
     containsFocus: autoHideContainsFocus,
     release: releaseAutoHideHold,
@@ -1998,7 +1998,7 @@ const ToolbarPlugin = ({
   // The collapse button is offered wherever the docked desktop ribbon is: it is
   // how the toolbar is collapsed in the first place, so it cannot wait for the
   // setting to be on. Mobile and the floating toolbar have nothing to collapse.
-  const canCollapseToolbar = isEditable && !isMobile && isToolbarFixedToTop && !tocSelection
+  const canCollapseToolbar = isEditable && !isMobile && (isToolbarFixedToTop || Boolean(tocSelection))
   const toggleToolbarCollapsed = useCallback(() => {
     application.setPreference(SUPER_TOOLBAR_AUTO_HIDE_PREF_KEY, !isToolbarCollapsePreferred).catch(console.error)
   }, [application, isToolbarCollapsePreferred])
@@ -3540,6 +3540,7 @@ const ToolbarPlugin = ({
         contextualTabRestoreRef.current = { previousTabId: activeTabId === CONTEXTUAL_TAB_ID ? null : activeTabId }
       }
       setActiveTabId(CONTEXTUAL_TAB_ID)
+      revealContextualToolbar()
       return
     }
 
@@ -3564,7 +3565,7 @@ const ToolbarPlugin = ({
     if (!hasContextualTab) {
       setActiveTabId((prev) => (prev === CONTEXTUAL_TAB_ID ? null : prev))
     }
-  }, [autoActivateContextualKey, hasContextualTab, activeTabId, setActiveTabId])
+  }, [autoActivateContextualKey, hasContextualTab, activeTabId, setActiveTabId, revealContextualToolbar])
 
   // Standard Red Notes — Word-like floating selection mini-toolbar.
   //
@@ -3790,7 +3791,7 @@ const ToolbarPlugin = ({
               right edge. Keep container-query classes literal for Tailwind. */}
           {canShowAllItems && (
             <div
-              className="super-toolbar-utility-bar border-border @container/utility-bar flex w-full flex-nowrap items-center gap-2 border-b px-2 py-1"
+              className="super-toolbar-utility-bar border-border @container/utility-bar flex w-full flex-nowrap items-center gap-1 border-b px-1.5 py-0.5"
               data-super-toolbar-utility-bar=""
             >
               {(ribbonTabs.length > 1 || Boolean(note)) && (
@@ -3809,7 +3810,7 @@ const ToolbarPlugin = ({
                     // space before flex-grow runs, which would starve the trailing
                     // spacer and pin the strip to the right again. Position is the
                     // two flexible siblings' job.
-                    className="super-toolbar-tabs flex max-w-full min-w-0 flex-shrink-0 items-center gap-1 overflow-x-auto @max-4xl/utility-bar:shrink"
+                    className="super-toolbar-tabs border-border bg-contrast flex max-w-full min-w-0 flex-shrink-0 items-center gap-0 overflow-x-auto rounded-md border p-0.5 @max-4xl/utility-bar:shrink"
                     role="tablist"
                     aria-label="Formatting groups"
                   >
@@ -3821,17 +3822,18 @@ const ToolbarPlugin = ({
                           key={tab.id}
                           role="tab"
                           aria-selected={isActive}
+                          title={tab.label}
                           onMouseDown={(event) => event.preventDefault()}
                           onClick={() => selectRibbonTab(tab.id)}
                           className={classNames(
-                            'rounded-md border-b-2 px-2.5 py-0.5 text-xs font-semibold whitespace-nowrap transition-colors',
+                            'focus-visible:ring-info min-h-5 rounded border px-1.5 py-px text-[0.6875rem] leading-4 font-medium whitespace-nowrap transition-colors focus-visible:ring-1 focus-visible:outline-none',
                             isContextualTab
                               ? isActive
-                                ? 'border-info bg-info text-info-contrast'
-                                : 'border-info/40 text-info hover:bg-contrast'
+                                ? 'border-info/30 bg-info-backdrop text-info'
+                                : 'text-info hover:bg-info-backdrop border-transparent'
                               : isActive
-                                ? 'border-info bg-contrast text-info'
-                                : 'text-passive-1 hover:text-text border-transparent',
+                                ? 'border-info/30 bg-info-backdrop text-info'
+                                : 'text-passive-1 hover:text-text hover:bg-default border-transparent',
                           )}
                         >
                           {tab.label}
@@ -3903,9 +3905,7 @@ const ToolbarPlugin = ({
                     aria-label={segment.caption}
                     className="super-toolbar-group bg-contrast flex flex-shrink-0 flex-col rounded-lg px-1 py-0.5"
                   >
-                    <div className="flex flex-col items-start justify-center gap-0.5 md:min-h-[6.25rem]">
-                      <div className="flex items-center justify-start gap-0.5">{segment.buttons}</div>
-                    </div>
+                    <div className="super-ribbon-commands">{segment.buttons}</div>
                     <span
                       aria-hidden
                       className="text-passive-1 mt-px hidden truncate text-center text-[10px] leading-none font-medium tracking-wide uppercase select-none md:block"
@@ -3962,7 +3962,7 @@ const ToolbarPlugin = ({
                             className="super-toolbar-group bg-contrast flex min-w-[12rem] flex-grow flex-col rounded-lg px-1 py-0.5"
                             style={{ maxWidth: `min(100%, ${maximumWidth}px)` }}
                           >
-                            <div className="flex flex-col items-stretch justify-center gap-1 md:min-h-[6.25rem]">
+                            <div className="super-ribbon-gallery-commands flex flex-col items-stretch justify-center gap-1">
                               {/* History and clipboard actions share Home's compact first row. */}
                               <div className="flex min-w-0 flex-wrap items-center gap-1.5">
                                 {HOME_PRIMARY_BUTTON_IDS.filter((id) => visibleUtilityButtonIds.has(id)).map((id) => (
@@ -4067,6 +4067,7 @@ const ToolbarPlugin = ({
                                 {
                                   key: 'images',
                                   caption: 'Images',
+                                  fullHeight: true,
                                   rows: [
                                     [
                                       <InsertImagesButton
@@ -4088,15 +4089,11 @@ const ToolbarPlugin = ({
                       // beneath it. Buttons wrap into up to `rows` (1–3) compact rows
                       // so a button-heavy group becomes a tidy 2–3 row block instead
                       // of a long single row.
-                      // On desktop every group is a uniform three-icon-tall block so the
-                      // segmented toolbar keeps a consistent height regardless of how many
-                      // buttons a group holds: buttons pack top-heavy into 3 rows and the
-                      // button area reserves the height of three icon-button rows (≈38px
-                      // each + two 2px gaps = 118px) via md:min-height, with shorter groups
-                      // leaving empty space below. Icons are left-aligned within the group.
+                      // Ribbon.scss gives all render paths the same three command rows
+                      // and caption baseline, including groups with fewer controls.
                       const TOOLBAR_GROUP_ROWS = 3
                       // Default to a full 3-row pack; a per-group override (Customize
-                      // Toolbar) still tunes how buttons stack, while md:min-height keeps
+                      // Toolbar) still tunes how buttons stack, while the shared height keeps
                       // every group the same height regardless.
                       const rows = Math.min(TOOLBAR_GROUP_ROWS, Math.max(1, group.rows ?? TOOLBAR_GROUP_ROWS))
                       // Groups can opt into an EXPLICIT row layout (ids per row); we
@@ -4121,7 +4118,7 @@ const ToolbarPlugin = ({
                           aria-label={group.label}
                           className="super-toolbar-group bg-contrast flex flex-shrink-0 flex-col rounded-lg px-1 py-0.5"
                         >
-                          <div className="flex flex-col items-start justify-center gap-0.5 md:min-h-[6.25rem]">
+                          <div className="super-ribbon-commands flex flex-col items-start justify-center gap-0.5">
                             {buttonRows.map((rowButtons, rowIndex) => (
                               <div key={rowIndex} className="flex items-center justify-start gap-0.5">
                                 {rowButtons.map((button, buttonIndex) => {
@@ -4172,53 +4169,6 @@ const ToolbarPlugin = ({
                 <Icon type="keyboard-close" size="medium" />
               </button>
             )}
-            {/* Standard Red Notes: collapse the ribbon to its tab row, or keep it
-                open — the one control, where Word keeps it: the lower-right
-                corner of the command panel. It writes the same preference as
-                the switch in Preferences, so the two cannot disagree. While
-                the ribbon is collapsed the panel is only there temporarily,
-                and this is the pin that brings it back for good.
-
-                It is fixed chrome, deliberately not one of the buttons
-                Customize Toolbar can hide: a user who hid it would have hidden
-                the way back.
-
-                WHERE IT SITS costs the rest of the toolbar nothing, which the
-                tab row could not offer: on a bar of ordinary width that row is
-                already overfull, and a button there clipped the utility
-                actions by its own width. Here it is drawn in the corner from a
-                zero-width box at the end of the panel, so no command has less
-                room than it had. The corner it covers is the caption band
-                under the last row of buttons — a strip of labels, with nothing
-                in it to click.
-
-                mousedown is cancelled for the same reason as on every toolbar
-                button: clicking it must not take the caret out of the note. */}
-            {canCollapseToolbar && (
-              <div className="relative w-0 flex-shrink-0 self-stretch" data-super-toolbar-collapse-corner="">
-                <StyledTooltip
-                  showOnHover
-                  label={isToolbarCollapsePreferred ? t('keepToolbarOpen') : t('collapseToolbar')}
-                  side="top"
-                >
-                  <button
-                    type="button"
-                    data-super-toolbar-collapse=""
-                    aria-label={isToolbarCollapsePreferred ? t('keepToolbarOpen') : t('collapseToolbar')}
-                    aria-pressed={isToolbarCollapsePreferred}
-                    className="border-border bg-default text-passive-1 hover:bg-contrast hover:text-text focus-visible:bg-contrast focus-visible:text-text absolute right-0 bottom-0 flex h-4 w-5 items-center justify-center rounded border transition-colors focus:shadow-none focus:outline-none pointer-coarse:h-6 pointer-coarse:w-7"
-                    onMouseDown={(event) => event.preventDefault()}
-                    onClick={toggleToolbarCollapsed}
-                  >
-                    <Icon
-                      type={isToolbarCollapsePreferred ? 'pin-filled' : 'chevron-up'}
-                      size="custom"
-                      className="h-3 w-3"
-                    />
-                  </button>
-                </StyledTooltip>
-              </div>
-            )}
             {note && canShowAllItems && (
               <>
                 {isReviewActive && (
@@ -4234,7 +4184,7 @@ const ToolbarPlugin = ({
                         aria-label={group.label}
                         className="super-toolbar-group bg-contrast flex flex-shrink-0 flex-col rounded-lg px-1 py-0.5"
                       >
-                        <div className="flex flex-col items-start justify-center gap-0.5 md:min-h-[6.25rem]">
+                        <div className="super-ribbon-commands flex flex-col items-start justify-center gap-0.5">
                           {splitIntoRows(group.buttons, Math.min(3, Math.max(1, group.rows ?? 3))).map((row, index) => (
                             <div key={index} className="flex items-center gap-0.5">
                               {row.map((button) => (
@@ -4257,6 +4207,32 @@ const ToolbarPlugin = ({
             )}
           </div>
         </div>
+        {/* Fixed to the bar, outside every tab panel and its overflow/inert state. */}
+        {canCollapseToolbar && (
+          <div className="absolute top-1 right-1 z-20 flex" data-super-toolbar-collapse-corner="">
+            <StyledTooltip
+              showOnHover
+              label={isToolbarCollapsePreferred ? t('keepToolbarOpen') : t('collapseToolbar')}
+              side="top"
+            >
+              <button
+                type="button"
+                data-super-toolbar-collapse=""
+                aria-label={isToolbarCollapsePreferred ? t('keepToolbarOpen') : t('collapseToolbar')}
+                aria-pressed={isToolbarCollapsePreferred}
+                className="border-border bg-default text-passive-1 hover:bg-contrast hover:text-text focus-visible:bg-contrast focus-visible:text-text relative flex h-5 w-5 items-center justify-center rounded border transition-colors focus:shadow-none focus:outline-none pointer-coarse:h-6 pointer-coarse:w-7"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={toggleToolbarCollapsed}
+              >
+                <Icon
+                  type={isToolbarCollapsePreferred ? 'pin-filled' : 'chevron-up'}
+                  size="custom"
+                  className="h-3 w-3"
+                />
+              </button>
+            </StyledTooltip>
+          </div>
+        )}
         {/* Element-specific tooling on its own line: when a table/image/link/etc.
             is active, its tailored actions get a dedicated row labelled with the
             element type. In ribbon mode this surfaces as a ribbon tab instead, so
