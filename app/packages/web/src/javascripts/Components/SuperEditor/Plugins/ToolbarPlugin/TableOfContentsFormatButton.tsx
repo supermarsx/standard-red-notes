@@ -6,6 +6,7 @@ import Icon from '@/Components/Icon/Icon'
 import ToolbarButton from './ToolbarButton'
 import {
   $isTableOfContentsNode,
+  DEFAULT_TABLE_OF_CONTENTS_FORMAT,
   TableOfContentsNode,
   TableOfContentsFormat,
 } from '../../Lexical/Nodes/TableOfContentsNode'
@@ -63,7 +64,78 @@ export default function TableOfContentsFormatButton() {
       },
       { tag: SKIP_DOM_SELECTION_TAG },
     )
-  const fieldClass = 'border-border bg-default text-text rounded border px-2 py-1 text-sm'
+  const fieldClass = 'border-border bg-default text-text min-w-0 w-full rounded border px-2 py-1 text-sm'
+  const numberField = (
+    key: 'titleSize' | 'subtitleSize' | 'entrySize' | 'indentation' | 'entrySpacing',
+    label: string,
+    min: number,
+    max: number,
+  ) =>
+    target && (
+      <label className="flex flex-col gap-1">
+        {label}
+        <input
+          aria-label={`Table of contents ${label.toLowerCase()}`}
+          type="number"
+          min={min}
+          max={max}
+          className={fieldClass}
+          value={target.format[key]}
+          onChange={(event) => {
+            if (event.target.value !== '') {
+              change({ [key]: Number(event.target.value) })
+            }
+          }}
+        />
+      </label>
+    )
+  const selectField = (
+    key: 'font' | 'alignment' | 'titleWeight' | 'appearance',
+    label: string,
+    options: [string, string][],
+  ) =>
+    target && (
+      <label className="flex flex-col gap-1">
+        {label}
+        <select
+          aria-label={`Table of contents ${label.toLowerCase()}`}
+          className={fieldClass}
+          value={target.format[key]}
+          onChange={(event) => change({ [key]: event.target.value })}
+        >
+          {options.map(([value, text]) => (
+            <option key={value} value={value}>
+              {text}
+            </option>
+          ))}
+        </select>
+      </label>
+    )
+  const colorField = (key: 'titleColor' | 'subtitleColor' | 'entryColor', label: string) =>
+    target && (
+      <label className="flex items-center justify-between gap-2">
+        {label}
+        <span className="flex items-center gap-2">
+          <input
+            aria-label={`Table of contents ${label.toLowerCase()}`}
+            type="color"
+            value={target.format[key] || '#808080'}
+            onChange={(event) => change({ [key]: event.target.value })}
+          />
+          <button
+            type="button"
+            className="text-info text-xs underline"
+            aria-label={`Use theme ${label.toLowerCase()}`}
+            onClick={(event) => {
+              event.preventDefault()
+              change({ [key]: '' })
+            }}
+          >
+            Use theme
+          </button>
+        </span>
+      </label>
+    )
   return (
     <>
       <ToolbarButton
@@ -88,7 +160,7 @@ export default function TableOfContentsFormatButton() {
       >
         <div
           ref={focusFirstControl}
-          className="flex min-w-56 flex-col gap-3 p-3 text-sm"
+          className="flex max-h-[75vh] w-80 max-w-[90vw] flex-col gap-3 overflow-y-auto p-3 text-sm"
           onMouseDown={(event) => event.stopPropagation()}
           onKeyDown={(event) => {
             // Native form controls own their arrows/Space, not ribbon roving
@@ -114,9 +186,9 @@ export default function TableOfContentsFormatButton() {
                     value={targetKey}
                     onChange={(event) => setTargetKey(event.target.value)}
                   >
-                    {targets.map(({ key }, index) => (
+                    {targets.map(({ key, format }, index) => (
                       <option value={key} key={key}>
-                        Table of contents {index + 1}
+                        {format.title.trim() || 'Table of contents'} ({index + 1})
                       </option>
                     ))}
                   </select>
@@ -153,6 +225,105 @@ export default function TableOfContentsFormatButton() {
                 />
                 Show title
               </label>
+              <label className="flex flex-col gap-1">
+                Title
+                <input
+                  aria-label="Table of contents title"
+                  className={fieldClass}
+                  maxLength={256}
+                  value={target.format.title}
+                  onChange={(event) => change({ title: event.target.value })}
+                />
+              </label>
+              <label className="flex flex-col gap-1">
+                Subtitle <span className="text-passive-1 text-xs">Optional</span>
+                <textarea
+                  aria-label="Table of contents subtitle"
+                  className={fieldClass}
+                  rows={2}
+                  maxLength={1000}
+                  value={target.format.subtitle}
+                  placeholder="Add a short description…"
+                  onChange={(event) => change({ subtitle: event.target.value })}
+                />
+              </label>
+              <details className="border-border border-t pt-2">
+                <summary className="cursor-pointer font-semibold">Typography and colors</summary>
+                <div className="mt-3 flex flex-col gap-3">
+                  {selectField('font', 'Font', [
+                    ['document', 'Document font'],
+                    ['sans', 'Sans serif'],
+                    ['serif', 'Serif'],
+                    ['mono', 'Monospace'],
+                  ])}
+                  {selectField('alignment', 'Alignment', [
+                    ['start', 'Start'],
+                    ['center', 'Center'],
+                    ['end', 'End'],
+                  ])}
+                  <div className="grid grid-cols-2 gap-3">
+                    {numberField('titleSize', 'Title size', 8, 48)}
+                    {numberField('subtitleSize', 'Subtitle size', 8, 32)}
+                    {numberField('entrySize', 'Entry size', 8, 32)}
+                    {selectField('titleWeight', 'Title weight', [
+                      ['normal', 'Normal'],
+                      ['semibold', 'Semibold'],
+                      ['bold', 'Bold'],
+                    ])}
+                  </div>
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={target.format.titleItalic}
+                      onChange={(event) => change({ titleItalic: event.target.checked })}
+                    />
+                    Italic title
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={target.format.uppercaseTitle}
+                      onChange={(event) => change({ uppercaseTitle: event.target.checked })}
+                    />
+                    Uppercase title
+                  </label>
+                  {colorField('titleColor', 'Title color')}
+                  {colorField('subtitleColor', 'Subtitle color')}
+                  {colorField('entryColor', 'Entry color')}
+                </div>
+              </details>
+              <details className="border-border border-t pt-2">
+                <summary className="cursor-pointer font-semibold">Layout and spacing</summary>
+                <div className="mt-3 flex flex-col gap-3">
+                  {selectField('appearance', 'Appearance', [
+                    ['card', 'Bordered card'],
+                    ['plain', 'Plain text'],
+                  ])}
+                  {numberField('indentation', 'Nested heading indent', 0, 64)}
+                  {numberField('entrySpacing', 'Entry spacing', 0, 24)}
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={target.format.wrapEntries}
+                      onChange={(event) => change({ wrapEntries: event.target.checked })}
+                    />
+                    Wrap long entries
+                  </label>
+                </div>
+              </details>
+              <button
+                type="button"
+                className="text-info self-start text-sm underline"
+                onClick={() =>
+                  change({
+                    ...DEFAULT_TABLE_OF_CONTENTS_FORMAT,
+                    title: target.format.title,
+                    subtitle: target.format.subtitle,
+                  })
+                }
+              >
+                Reset formatting
+              </button>
               <p className="text-passive-1 text-xs">Entries update automatically when headings change.</p>
             </>
           )}

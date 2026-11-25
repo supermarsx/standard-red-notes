@@ -11,7 +11,11 @@ import {
   SKIP_DOM_SELECTION_TAG,
 } from 'lexical'
 import TableOfContentsFormatButton from './TableOfContentsFormatButton'
-import { $createTableOfContentsNode, TableOfContentsNode } from '../../Lexical/Nodes/TableOfContentsNode'
+import {
+  $createTableOfContentsNode,
+  DEFAULT_TABLE_OF_CONTENTS_FORMAT,
+  TableOfContentsNode,
+} from '../../Lexical/Nodes/TableOfContentsNode'
 import type { ToolbarButtonProps } from './ToolbarButton'
 
 let mockEditor: LexicalEditor
@@ -103,7 +107,7 @@ it('persists heading depth, numbering, and title changes through the actual cont
   const checkboxes = element.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')
   await act(async () => checkboxes[0].click())
   await act(async () => checkboxes[1].click())
-  expect(formats()).toEqual([{ maxLevel: 3, numbered: true, showTitle: false }])
+  expect(formats()).toEqual([{ ...DEFAULT_TABLE_OF_CONTENTS_FORMAT, maxLevel: 3, numbered: true, showTitle: false }])
 })
 
 it('does not reclaim editor focus while a user changes a formatting control', async () => {
@@ -118,13 +122,68 @@ it('does not reclaim editor focus while a user changes a formatting control', as
   stop()
 })
 
+async function typeField(label: string, value: string) {
+  const field = element.querySelector<HTMLInputElement | HTMLTextAreaElement>(`[aria-label="${label}"]`)!
+  const prototype = field instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(prototype, 'value')!.set!.call(field, value)
+    field.dispatchEvent(new Event('input', { bubbles: true }))
+    field.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+}
+
+it('edits a custom title, subtitle, typography, colors and spacing through native controls', async () => {
+  const button = await mount(1)
+  await act(async () => button.click())
+  await typeField('Table of contents title', 'Research guide')
+  await typeField('Table of contents subtitle', 'Find your way through the findings')
+  await changeSelect('Table of contents font', 'serif')
+  await changeSelect('Table of contents alignment', 'center')
+  await changeSelect('Table of contents title weight', 'bold')
+  await typeField('Table of contents title size', '26')
+  await typeField('Table of contents subtitle size', '16')
+  await typeField('Table of contents entry size', '18')
+  await typeField('Table of contents title color', '#123456')
+  await typeField('Table of contents subtitle color', '#456789')
+  await typeField('Table of contents entry color', '#789abc')
+  await changeSelect('Table of contents appearance', 'plain')
+  await typeField('Table of contents nested heading indent', '24')
+  await typeField('Table of contents entry spacing', '8')
+  expect(formats()[0]).toMatchObject({
+    title: 'Research guide',
+    subtitle: 'Find your way through the findings',
+    font: 'serif',
+    alignment: 'center',
+    titleWeight: 'bold',
+    titleSize: 26,
+    subtitleSize: 16,
+    entrySize: 18,
+    titleColor: '#123456',
+    subtitleColor: '#456789',
+    entryColor: '#789abc',
+    appearance: 'plain',
+    indentation: 24,
+    entrySpacing: 8,
+  })
+  await act(async () => element.querySelector<HTMLButtonElement>('[aria-label="Use theme title color"]')!.click())
+  expect(formats()[0]?.titleColor).toBe('')
+  await act(async () =>
+    Array.from(element.querySelectorAll('button'))
+      .find((node) => node.textContent === 'Reset formatting')!
+      .click(),
+  )
+  expect(formats()).toEqual([
+    { ...DEFAULT_TABLE_OF_CONTENTS_FORMAT, title: 'Research guide', subtitle: 'Find your way through the findings' },
+  ])
+})
+
 it('refuses mutations if the editor becomes read-only while the menu is open', async () => {
   const button = await mount(1)
   await act(async () => button.click())
   mockEditor.setEditable(false)
   await changeSelect('Table of contents heading depth', '2')
   await act(async () => element.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click())
-  expect(formats()).toEqual([{ maxLevel: 6, numbered: false, showTitle: true }])
+  expect(formats()).toEqual([DEFAULT_TABLE_OF_CONTENTS_FORMAT])
 })
 
 it('keeps the explicitly chosen index as the formatting target despite a different node selection', async () => {
@@ -137,8 +196,8 @@ it('keeps the explicitly chosen index as the formatting target despite a differe
   expect(targetSelect.value).toBe(secondKey)
   await act(async () => element.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click())
   expect(formats()).toEqual([
-    { maxLevel: 6, numbered: false, showTitle: true },
-    { maxLevel: 2, numbered: true, showTitle: true },
+    DEFAULT_TABLE_OF_CONTENTS_FORMAT,
+    { ...DEFAULT_TABLE_OF_CONTENTS_FORMAT, maxLevel: 2, numbered: true, showTitle: true },
   ])
   mockEditor.getEditorState().read(() => {
     expect(
