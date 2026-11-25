@@ -325,7 +325,6 @@ describe('Foldable stylesheet: the control leads its text', () => {
     // negative inset reaching into it.
     expect(compiledCss).not.toMatch(/\.Lexical__foldToggle[^{]*\{[^}]*(^|[^-])right:/s)
     expect(compiledCss).not.toMatch(/\.Lexical__foldToggle[^{]*\{[^}]*(^|[^-])left:/s)
-    expect(compiledCss).not.toMatch(/inset-inline-start:\s*-/)
     expect(compiledCss).not.toMatch(/padding-right:/)
     expect(compiledCss).not.toContain('.draggable-block-menu')
   })
@@ -366,13 +365,12 @@ describe('Foldable stylesheet: the control leads its text', () => {
 
   it('reveals the control with opacity alone, so nothing reflows on hover or focus', () => {
     const revealRule = compiledCss.slice(
-      compiledCss.indexOf('.Lexical__foldable:hover > .Lexical__foldToggle'),
+      compiledCss.indexOf('.Lexical__foldable:not(.Lexical__foldable--heading):hover > .Lexical__foldToggle'),
       compiledCss.indexOf('.Lexical__foldCollapsed > .Lexical__foldToggle::before'),
     )
 
-    expect(revealRule).toMatch(/\.Lexical__foldable:hover > \.Lexical__foldToggle/)
-    expect(revealRule).toMatch(/\.Lexical__foldable:focus-within > \.Lexical__foldToggle/)
-    expect(revealRule).toMatch(/\.Lexical__foldCollapsed > \.Lexical__foldToggle/)
+    expect(revealRule).toContain('.Lexical__foldable--heading:has([data-lexical-text]:hover) > .Lexical__foldToggle')
+    expect(revealRule).toContain('.Lexical__foldToggle--heading:hover')
     expect(revealRule).toMatch(/\.Lexical__foldToggle:focus-visible/)
     expect(revealRule).toMatch(/opacity:\s*1;/)
     // Never `display` or `visibility`: the reveal must not change any box.
@@ -417,93 +415,42 @@ describe('Foldable stylesheet: the control leads its text', () => {
   })
 })
 
-describe('Foldable stylesheet: the reserved slot keeps headings aligned', () => {
-  const HEADING_RESERVATION = '.ContentEditable__root:has('
-
-  it('reserves the rail on EVERY top-level heading of a fold-enabled surface, foldable or not', () => {
-    const { selector, body } = ruleContaining(HEADING_RESERVATION)
-
-    // What the rule DECLARES, not merely that a rule with this selector exists.
-    expect(body).toMatch(/^padding-inline-start:\s*var\(--sn-fold-rail\);$/)
-
-    const surface = document.createElement('div')
-    surface.className = 'ContentEditable__root'
-    surface.innerHTML = [
-      '<h2 class="Lexical__h2 Lexical__foldable Lexical__foldable--heading"><span>With a section under it</span></h2>',
-      '<p class="Lexical__paragraph"><span>Body</span></p>',
-      '<h2 class="Lexical__h2"><span>With nothing under it</span></h2>',
-      '<blockquote class="Lexical__quote"><h2 class="Lexical__h2"><span>Inside a quote</span></h2></blockquote>',
-    ].join('')
-    document.body.appendChild(surface)
-
-    try {
-      const [foldable, plain] = Array.from(surface.querySelectorAll(':scope > h2'))
-      const nested = surface.querySelector('blockquote h2') as HTMLElement
-
-      // Both top-level headings of the same level reserve the same slot, so
-      // their text starts at the same x whether or not they fold anything.
-      expect(foldable.matches(selector)).toBe(true)
-      expect(plain.matches(selector)).toBe(true)
-      // A heading inside another container keeps that container's text column.
-      expect(nested.matches(selector)).toBe(false)
-    } finally {
-      surface.remove()
-    }
-  })
-
-  it('reserves the rail on the foldable host itself, so the control never sits on its own text', () => {
-    // Belt and braces for any surface the `:has()` rule above does not reach:
-    // the block that OWNS a control always reserves that control's slot.
-    for (const kind of ['heading', 'list']) {
-      expect(compiledCss).toMatch(
-        new RegExp(
-          `\\.Lexical__foldable\\.Lexical__foldable--${kind}[^{]*\\{\\s*padding-inline-start:\\s*var\\(--sn-fold-rail\\);`,
-          's',
-        ),
-      )
-    }
-    // A checklist wrapper's nested list already carries a flat 1rem indent, so
-    // only the remainder is reserved — but it is still the LEADING side.
-    expect(compiledCss).toMatch(
-      /\.Lexical__foldable\.Lexical__foldable--checklist[^{]*\{\s*padding-inline-start:\s*max\(0px, var\(--sn-fold-rail\) - 1rem\);/s,
-    )
-    expect(compiledCss).not.toMatch(/padding-inline-end:/)
-  })
-
-  it('reserves nothing on a surface that never mounts the plugin, such as the share viewer', () => {
-    const { selector } = ruleContaining(HEADING_RESERVATION)
-    const surface = document.createElement('div')
-    surface.className = 'ContentEditable__root blocks-editor'
-    surface.innerHTML =
-      '<h1 class="Lexical__h1"><span>Shared note</span></h1><h2 class="Lexical__h2"><span>Part</span></h2>'
-    document.body.appendChild(surface)
-
-    try {
-      for (const heading of Array.from(surface.children)) {
-        expect(heading.matches(selector)).toBe(false)
-      }
-    } finally {
-      surface.remove()
-    }
-  })
-
-  it('reserves the rail the real plugin output actually needs', () => {
-    const { selector, body } = ruleContaining(HEADING_RESERVATION)
-    expect(body).toContain('padding-inline-start: var(--sn-fold-rail)')
+describe('Foldable stylesheet: headings keep their text position', () => {
+  it('reserves no extra padding on any heading, whether foldable, collapsed, or plain', () => {
+    expect(compiledCss).not.toMatch(/\.Lexical__foldable\.Lexical__foldable--heading\s*\{[^}]*padding-inline-start/s)
+    expect(compiledCss).not.toContain('.ContentEditable__root:has(')
     const mounted = mountFoldableEditor()
-
     try {
-      const root = mounted.container.querySelector('.ContentEditable__root') as HTMLElement
-      const headings = Array.from(root.querySelectorAll(':scope > h1'))
-
+      const headings = mounted.container.querySelectorAll('.ContentEditable__root > h1')
       expect(headings).toHaveLength(2)
-      for (const heading of headings) {
-        expect(heading.matches(selector)).toBe(true)
-        expect(heading.matches('.Lexical__foldable--heading')).toBe(true)
+      for (const heading of Array.from(headings)) {
+        expect((heading as HTMLElement).style.paddingInlineStart).toBe('')
+        expect(heading.querySelector('[data-fold-toggle]')).not.toBeNull()
       }
     } finally {
       mounted.teardown()
     }
+  })
+
+  it('positions the heading control inside the existing gutter without changing list or checkbox spacing', () => {
+    const heading = ruleContaining('.Lexical__foldToggle.Lexical__foldToggle--heading')
+    expect(heading.body).toContain('inset-inline-start: calc(-1 * var(--sn-heading-fold-control-size))')
+    expect(heading.body).toContain('width: var(--sn-heading-fold-control-size)')
+    expect(compiledCss).toMatch(
+      /\.Lexical__foldable\.Lexical__foldable--list[^{]*\{\s*padding-inline-start:\s*var\(--sn-fold-rail\);/s,
+    )
+    expect(compiledCss).toMatch(
+      /\.Lexical__foldable\.Lexical__foldable--checklist[^{]*\{\s*padding-inline-start:\s*max\(0px, var\(--sn-fold-rail\) - 1rem\);/s,
+    )
+  })
+
+  it('does not force heading controls visible when collapsed, typing, or using a narrow viewport', () => {
+    const reveal = ruleContaining('.Lexical__foldable:not(.Lexical__foldable--heading):hover')
+    expect(reveal.selector).toContain('.Lexical__foldable--heading:has([data-lexical-text]:hover)')
+    expect(reveal.selector).toContain('.Lexical__foldToggle--heading:hover')
+    expect(reveal.selector).toContain('.Lexical__foldToggle:focus-visible')
+    expect(reveal.selector).not.toContain('.Lexical__foldCollapsed >')
+    expect(reveal.selector).not.toContain('.Lexical__foldable:focus-within >')
   })
 })
 

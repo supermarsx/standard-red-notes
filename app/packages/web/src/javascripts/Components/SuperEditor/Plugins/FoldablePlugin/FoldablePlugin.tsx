@@ -39,11 +39,8 @@ const TOGGLE_RAIL_ATTR = 'data-fold-control-rail'
 /**
  * The rail the stylesheet positions the control in. `inline-start` is LOGICAL:
  * the disclosure sits immediately before the block's own text (physical left in
- * LTR, physical right in RTL) inside a rail reserved by the host's
- * `padding-inline-start`. It used to read `opposite-drag-handle`, from when the
- * control was pinned to the block's physical right edge to stay clear of the
- * portal-positioned reorder handle; that handle lives in the editor's GUTTER,
- * outside the block, so an in-block leading rail clears it just as well.
+ * LTR, physical right in RTL). Headings overlay the existing editor gutter;
+ * lists reserve their own rail to clear bullet and checkbox markers.
  */
 const TOGGLE_RAIL_VALUE = 'inline-start'
 const PRINT_EXCLUDE_ATTR = 'data-srn-print-exclude'

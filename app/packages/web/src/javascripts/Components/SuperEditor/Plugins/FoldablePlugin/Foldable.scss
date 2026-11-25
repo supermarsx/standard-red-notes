@@ -10,12 +10,10 @@
  * `syncFoldControl` appends it AFTER Lexical's managed text children so Home /
  * click-at-column-zero can never seat the caret around a non-editable child.
  * Taking it out of flow is also what makes the hover reveal free of reflow — the
- * rail below is reserved permanently, so fading the control in cannot move text.
+ * list rail below is reserved permanently; headings use the existing editor gutter.
  *
- * The editor's left GUTTER is not available: DraggableBlockPlugin portals its
- * reorder handle to the editor container's physical left edge. The fold rail is
- * therefore reserved INSIDE the host block, so the two hit targets can never
- * cover one another.
+ * Heading controls occupy the existing 1rem editor gutter. The draggable block
+ * handle moves outside that control, keeping both hit targets separate.
  *
  * Everything positional here is LOGICAL (`inset-inline-start`,
  * `padding-inline-start`), so an RTL block mirrors the control to its own
@@ -53,6 +51,7 @@
   --sn-fold-control-size: 1.5rem;
   --sn-fold-control-gap: 0.25rem;
   --sn-fold-rail: calc(var(--sn-fold-control-size) + var(--sn-fold-control-gap));
+  --sn-heading-fold-control-size: 1rem;
 }
 
 .Lexical__foldable {
@@ -60,28 +59,8 @@
   box-sizing: border-box;
 }
 
-// Reserve the rail inside the foldable block itself, so the control is never on
-// top of the text it belongs to even on a surface the rules below do not reach.
-.Lexical__foldable.Lexical__foldable--heading {
-  padding-inline-start: var(--sn-fold-rail);
-}
-
-/**
- * ...and reserve the SAME slot on every other top-level heading of a surface
- * that has fold controls, whether or not that heading is foldable. Without this
- * a heading's text would shift by one rail depending on whether it happens to
- * have content under it, and headings would stop lining up down the page.
- *
- * Keyed off a foldable heading actually being present, so a read-only surface
- * that never mounts FoldablePlugin (the public share viewer) keeps its headings
- * flush and reserves nothing for a control it does not draw. The child
- * combinators are deliberate: only root-level blocks can be heading-foldable, so
- * a heading nested in a quote, table cell or collapsible keeps its container's
- * own text column.
- */
-.ContentEditable__root:has(> .Lexical__foldable--heading) > :is(h1, h2, h3, h4, h5, h6) {
-  padding-inline-start: var(--sn-fold-rail);
-}
+// Headings retain their ordinary text position, including user-set indentation.
+// The disclosure overlays the existing gutter and reserves no heading padding.
 
 /**
  * A list fold is hosted by Lexical's STRUCTURAL wrapper item — the textless
@@ -186,15 +165,21 @@
   }
 }
 
-// Show the chevron while its block is hovered, whenever it is collapsed, while
-// the editor is moving focus through the block, and whenever the control itself
-// is keyboard-focused. Opacity only: the rail above is reserved permanently, so
-// revealing the control never reflows the line.
-.Lexical__foldable:hover > .Lexical__foldToggle,
-.Lexical__foldable:focus-within > .Lexical__foldToggle,
-.Lexical__foldCollapsed > .Lexical__foldToggle,
+// Heading controls appear over text hover, control hover, or keyboard focus.
+// List controls also remain visible while collapsed. Opacity changes never
+// change heading layout or reserve another column.
+.Lexical__foldable:not(.Lexical__foldable--heading):hover > .Lexical__foldToggle,
+.Lexical__foldable:not(.Lexical__foldable--heading):focus-within > .Lexical__foldToggle,
+.Lexical__foldCollapsed:not(.Lexical__foldable--heading) > .Lexical__foldToggle,
+.Lexical__foldable--heading:has([data-lexical-text]:hover) > .Lexical__foldToggle,
+.Lexical__foldToggle--heading:hover,
 .Lexical__foldToggle:focus-visible {
   opacity: 1;
+}
+
+.Lexical__foldToggle.Lexical__foldToggle--heading[data-fold-control-rail='inline-start'] {
+  inset-inline-start: calc(-1 * var(--sn-heading-fold-control-size));
+  width: var(--sn-heading-fold-control-size);
 }
 
 // It is a real button, so it gets a real focus ring. Inset, so the ring stays
@@ -227,7 +212,7 @@
     --sn-fold-control-size: 1.75rem;
   }
 
-  .Lexical__foldToggle {
+  .Lexical__foldToggle:not(.Lexical__foldToggle--heading) {
     opacity: 0.72;
   }
 }
@@ -240,7 +225,7 @@
     --sn-fold-control-size: 2rem;
   }
 
-  .Lexical__foldToggle {
+  .Lexical__foldToggle:not(.Lexical__foldToggle--heading) {
     opacity: 1;
 
     &::before {

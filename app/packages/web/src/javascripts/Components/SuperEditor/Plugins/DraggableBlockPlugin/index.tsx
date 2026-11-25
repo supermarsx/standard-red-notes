@@ -158,7 +158,12 @@ function setMenuPosition(targetElem: HTMLElement | null, floatingElem: HTMLEleme
   const top =
     targetRect.top + (parseInt(targetStyle.lineHeight, 10) - floatingElemRect.height) / 2 - anchorElementRect.top
 
-  const left = DRAGGABLE_BLOCK_MENU_LEFT_SPACE
+  // Headings keep their text flush and put their fold control in the existing
+  // gutter. Place the reorder handle beside it rather than over its hit area.
+  const headingToggle = targetElem.querySelector<HTMLElement>(':scope > .Lexical__foldToggle--heading')
+  const foldClearance =
+    headingToggle && targetStyle.direction !== 'rtl' ? headingToggle.getBoundingClientRect().width : 0
+  const left = DRAGGABLE_BLOCK_MENU_LEFT_SPACE - foldClearance
 
   floatingElem.style.opacity = '1'
   floatingElem.style.transform = `translate(${left}px, ${top}px)`
