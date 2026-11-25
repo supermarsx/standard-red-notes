@@ -52,6 +52,7 @@ import ResponsivePaneProvider from '../Panes/ResponsivePaneProvider'
 import AndroidBackHandlerProvider from '@/NativeMobileWeb/useAndroidBackHandler'
 import ConfirmDeleteAccountContainer from '@/Components/ConfirmDeleteAccountModal/ConfirmDeleteAccountModal'
 import ApplicationProvider from '../ApplicationProvider'
+import { useUiScale } from '@/View/uiScale'
 import KeyboardServiceProvider from '../KeyboardServiceProvider'
 import PanesSystemComponent from '../Panes/PanesSystemComponent'
 import LinkingControllerProvider from '@/Controllers/LinkingControllerProvider'
@@ -185,6 +186,7 @@ const ensureRobustStorage = async (application: WebApplication): Promise<void> =
 }
 
 const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicationGroup }) => {
+  useUiScale(application)
   const platformString = getPlatformString()
   const [launched, setLaunched] = useState(false)
   useEffect(() => (launched ? watchStoragePressure(estimateStorage) : undefined), [launched])

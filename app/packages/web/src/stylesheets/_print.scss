@@ -405,3 +405,8 @@
     text-decoration: underline !important;
   }
 }
+@media print {
+  html {
+    font-size: 100% !important;
+  }
+}

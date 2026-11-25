@@ -18,6 +18,7 @@ import CustomThemesSection from './Appearance/CustomThemes/CustomThemesSection'
 import StyleProfiles from './Appearance/StyleProfiles/StyleProfiles'
 import NoteCovers from './Appearance/NoteCovers'
 import SidebarMini from './Appearance/SidebarMini'
+import InterfaceScale from './Appearance/InterfaceScale'
 import { useTabState } from '@/Components/Tabs/useTabState'
 import { useLocalPreference } from '@/Hooks/usePreference'
 import { loadNewTabBehavior, NewTabBehavior, saveNewTabBehavior } from '@/Tabs/newTabSettings'
@@ -68,34 +69,37 @@ const Appearance: FunctionComponent<Props> = ({ application }) => {
           </div>
         </PreferencesSegment>
       </PreferencesGroup>
-      <PreferencesGroup>
-        <PreferencesSegment>
-          <Title>Editor tabs</Title>
-          <div className="mt-2">
-            <Subtitle>New tab opens</Subtitle>
-            <Text>
-              What the editor tab bar's "+" button does. "New note" creates a fresh note (the default); "Empty tab"
-              opens a blank placeholder you can turn into a note or fill from the notes list.
-            </Text>
+      <div className="grid grid-cols-1 items-start gap-x-6 xl:grid-cols-2">
+        <InterfaceScale />
+        <PreferencesGroup>
+          <PreferencesSegment>
+            <Title>Editor tabs</Title>
             <div className="mt-2">
-              <Dropdown
-                label="Select what the new tab button opens"
-                items={newTabBehaviorOptions}
-                value={newTabBehavior}
-                onChange={changeNewTabBehavior}
-              />
+              <Subtitle>New tab opens</Subtitle>
+              <Text>
+                What the editor tab bar's "+" button does. "New note" creates a fresh note (the default); "Empty tab"
+                opens a blank placeholder you can turn into a note or fill from the notes list.
+              </Text>
+              <div className="mt-2">
+                <Dropdown
+                  label="Select what the new tab button opens"
+                  items={newTabBehaviorOptions}
+                  value={newTabBehavior}
+                  onChange={changeNewTabBehavior}
+                />
+              </div>
             </div>
-          </div>
-        </PreferencesSegment>
-      </PreferencesGroup>
-      {/*
+          </PreferencesSegment>
+        </PreferencesGroup>
+        {/*
         Standard Red Notes (t111 §3): two settings whose only findable home is
         here. Covers sit directly after "Editor tabs" as the plan specifies, and
         the tags-panel rail follows — both are "what the interface looks like",
         which is what this subtab is.
       */}
-      <NoteCovers application={application} />
-      <SidebarMini />
+        <NoteCovers application={application} />
+        <SidebarMini />
+      </div>
       <EditorAppearance application={application} />
     </>
   )
