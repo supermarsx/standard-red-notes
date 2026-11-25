@@ -60,6 +60,10 @@
 .Lexical__listItem {
   margin: 0 0px;
 }
+
+.ContentEditable__root .Lexical__listItem[style*='--sn-profile-marker-color']::marker {
+  color: var(--sn-profile-marker-color);
+}
 .Lexical__listItemChecked,
 .Lexical__listItemUnchecked {
   position: relative;

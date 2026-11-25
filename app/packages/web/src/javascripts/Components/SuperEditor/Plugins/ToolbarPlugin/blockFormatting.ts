@@ -18,6 +18,7 @@
 import { $isElementNode, $isRootOrShadowRoot, ElementNode, LexicalNode, RangeSelection } from 'lexical'
 import { $findMatchingParent } from '@lexical/utils'
 import { $patchStyleText } from '@lexical/selection'
+import { $readBlockStyle, $writeBlockStyle } from './persistedBlockStyle'
 
 /* ------------------------------------------------------------------ presets */
 
@@ -116,7 +117,7 @@ export const mergeBlockStyle = (current: string, property: string, value: string
 const $patchBlockStyle = (selection: RangeSelection, property: string, value: string): number => {
   const blocks = $collectFormatBlocks(selection)
   for (const block of blocks) {
-    block.setStyle(mergeBlockStyle(block.getStyle(), property, value))
+    $writeBlockStyle(block, mergeBlockStyle($readBlockStyle(block), property, value))
   }
   return blocks.length
 }
@@ -162,11 +163,11 @@ export const $applyBlockStyleEntries = (
 ): number => {
   const blocks = $collectFormatBlocks(selection)
   for (const block of blocks) {
-    let style = block.getStyle()
+    let style = $readBlockStyle(block)
     for (const [property, value] of entries) {
       style = mergeBlockStyle(style, property, value)
     }
-    block.setStyle(style)
+    $writeBlockStyle(block, style)
   }
   return blocks.length
 }
@@ -178,14 +179,14 @@ export const $applyBlockStyleEntries = (
 export const $setBlockMargins = (selection: RangeSelection, margins: { left?: string; right?: string }): number => {
   const blocks = $collectFormatBlocks(selection)
   for (const block of blocks) {
-    let style = block.getStyle()
+    let style = $readBlockStyle(block)
     if (margins.left !== undefined) {
       style = mergeBlockStyle(style, 'margin-left', margins.left)
     }
     if (margins.right !== undefined) {
       style = mergeBlockStyle(style, 'margin-right', margins.right)
     }
-    block.setStyle(style)
+    $writeBlockStyle(block, style)
   }
   return blocks.length
 }

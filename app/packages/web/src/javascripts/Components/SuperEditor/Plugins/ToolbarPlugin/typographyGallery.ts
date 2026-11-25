@@ -6,16 +6,18 @@
  * the ACTIVE typography profile. Clicking a square (a) converts the
  * current selection to that block TYPE — reusing the existing block ops in
  * `Plugins/Blocks/*` — and (b) stamps the active profile's style for that block
- * as a PER-BLOCK override via blockFormatting's `$applyBlockStyleEntries` (#77),
- * which persists onto the Styled* node inline style.
+ * as a complete per-block replacement, clearing prior block and inline overrides.
  *
  * This module owns no React — it is the pure metadata + editor-side handler so
  * the rendering (BlockStyleGallery.tsx) stays a thin presentational layer.
  */
-import { $getSelection, $isRangeSelection, LexicalEditor } from 'lexical'
+import { $getSelection, $isRangeSelection, HISTORY_PUSH_TAG, LexicalEditor } from 'lexical'
+import { $isListItemNode, $isListNode } from '@lexical/list'
 import type { BlockStyle, BlockTypeKey, TypographyProfile } from '@standardnotes/models'
-import { blockStyleToStyleEntries } from '@/Utils/typographyProfiles'
-import { $applyBlockStyleEntries, parseStyleString } from './blockFormatting'
+import { blockStyleToStyleEntries, isSafeCssValue } from '@/Utils/typographyProfiles'
+import { $collectFormatBlocks, parseStyleString, serializeStyleMap } from './blockFormatting'
+import { $writeBlockStyle } from './persistedBlockStyle'
+import { $replaceListMarkerStyle } from './listStyle'
 import { ParagraphBlock } from '../Blocks/Paragraph'
 import { H1Block, H2Block, H3Block, H4Block, H5Block } from '../Blocks/Headings'
 import { QuoteBlock } from '../Blocks/Quote'
@@ -327,9 +329,8 @@ const PARAGRAPH_VARIANT_PRIORITY: BlockTypeKey[] = ['title', 'accented', 'normal
  *   block's current inline style string. Checked most-specific-first; if none
  *   match, the block is plain Normal (`'paragraph'`).
  *
- * Best-effort: `$applyBlockStyleEntries` merges (never clears) prior properties,
- * so switching styles can leave a stale signature on a block — detection returns
- * the most-specific still-matching variant. See the plan's flagged limitation.
+ * Applying a gallery style replaces prior formatting, so an earlier variant's
+ * signature cannot survive a switch to Normal or a different variant.
  */
 export const resolveActiveGalleryKey = (args: {
   blockType: string
@@ -432,34 +433,62 @@ export function computeGalleryFit({
 /**
  * Apply a gallery square to the current selection: first convert the block TYPE
  * (reusing the block op), then — if the active profile styles that block —
- * stamp its style as a per-block inline override that persists via #77. When the
- * profile has no style for the block, only the type is set.
+ * replace its visual formatting with the chosen profile's stored values. Empty
+ * styles clear old overrides so the original inherited defaults apply again.
  *
- * The two steps run as separate editor updates because the list block ops
- * dispatch their own commands; by the time the style update runs the selection
- * sits inside the freshly-created block(s), so the override lands on them.
+ * Type conversion and replacement share one transaction and one undo step.
  */
 export const applyTypographyBlockToSelection = (
   editor: LexicalEditor,
   descriptor: GalleryBlockDescriptor,
   profile: TypographyProfile | null | undefined,
 ): void => {
-  descriptor.setType(editor)
-
-  // Effective style = built-in `baseStyle` (paragraph-variant identity) with the
-  // active profile's override layered on top per property. Real block types have
-  // no baseStyle, so this reduces to the profile style alone.
   const profileStyle = getProfileBlockStyle(profile, descriptor.key)
   const merged = { ...(descriptor.baseStyle ?? {}), ...(profileStyle ?? {}) }
   const entries = blockStyleToStyleEntries(merged)
-  if (entries.length === 0) {
-    return
+  if (isSafeCssValue(merged.markerColor)) {
+    entries.push(['--sn-profile-marker-color', merged.markerColor.trim()])
   }
-
-  editor.update(() => {
-    const selection = $getSelection()
-    if ($isRangeSelection(selection)) {
-      $applyBlockStyleEntries(selection, entries)
-    }
-  })
+  const replacement = serializeStyleMap(new Map(entries))
+  editor.update(
+    () => {
+      if (!editor.isEditable() || !$isRangeSelection($getSelection())) {
+        return
+      }
+      descriptor.setType(editor)
+      // Type-conversion helpers can queue nested updates. Queue this after them
+      // in the same transaction, so formatting targets the converted blocks and
+      // one Undo restores both their type and their previous formatting.
+      editor.update(() => {
+        const selection = $getSelection()
+        if ($isRangeSelection(selection)) {
+          const styledLists = new Set<string>()
+          for (const block of $collectFormatBlocks(selection)) {
+            $writeBlockStyle(block, replacement)
+            block.setFormat('')
+            // A list item's indent is structural nesting; changing it moves rows.
+            if (!$isListItemNode(block)) {
+              block.setIndent(0)
+            }
+            if ($isListItemNode(block)) {
+              const list = block.getParent()
+              if ($isListNode(list) && !styledLists.has(list.getKey())) {
+                styledLists.add(list.getKey())
+                $replaceListMarkerStyle(list, merged.listMarkerStyle)
+              }
+            }
+            block.setTextFormat(0)
+            block.setTextStyle('')
+            for (const text of block.getAllTextNodes()) {
+              text.setFormat(0)
+              text.setStyle('')
+            }
+          }
+          selection.setFormat(0)
+          selection.setStyle('')
+        }
+      })
+    },
+    { tag: HISTORY_PUSH_TAG },
+  )
 }

@@ -596,3 +596,13 @@ export const $setListStyleByKey = (nodeKey: string, styleValue: string): ListNod
   applyListStyleToDOM(writable)
   return writable
 }
+
+/** A typography preset replaces custom glyphs and multilevel marker overrides. */
+export const $replaceListMarkerStyle = (list: ListNode, styleValue?: string): void => {
+  $writeListStyle(list, '')
+  persistMarker(
+    list.getWritable(),
+    styleValue || (list.getListType() === 'number' ? 'decimal' : list.getListType() === 'check' ? 'none' : 'disc'),
+  )
+  applyListStyleToDOM(list)
+}

@@ -14,6 +14,11 @@
  */
 import { act, createElement } from 'react'
 import { createRoot, Root } from 'react-dom/client'
+import { createHeadlessEditor } from '@lexical/headless'
+import { $createParagraphNode, $createTextNode, $getRoot, $isElementNode } from 'lexical'
+import { HeadingNode, QuoteNode } from '@lexical/rich-text'
+import { STYLED_BLOCK_NODE_OVERRIDES } from '../../Lexical/Nodes/StyledBlockNodes'
+import { applyTypographyBlockToSelection } from './typographyGallery'
 import BlockStyleGalleryBar from '@/Components/SuperEditor/Plugins/ToolbarPlugin/BlockStyleGallery'
 import {
   GALLERY_BLOCKS,
@@ -90,7 +95,12 @@ afterEach(() => {
 })
 
 const render = (
-  extraProps: { activeBlockType?: string; activeBlockStyle?: string; blocks?: GalleryBlockDescriptor[] } = {},
+  extraProps: {
+    activeBlockType?: string
+    activeBlockStyle?: string
+    blocks?: GalleryBlockDescriptor[]
+    onApplyBlock?: (descriptor: GalleryBlockDescriptor) => void
+  } = {},
 ) => {
   act(() => {
     root.render(
@@ -110,6 +120,33 @@ const render = (
 }
 
 describe('BlockStyleGalleryBar (post-restack)', () => {
+  it('applies the complete chosen style through an actual gallery click', async () => {
+    const editor = createHeadlessEditor({
+      nodes: [HeadingNode, QuoteNode, ...STYLED_BLOCK_NODE_OVERRIDES],
+      onError: (error) => {
+        throw error
+      },
+    })
+    editor.update(
+      () => {
+        const text = $createTextNode('Original text').setFormat('italic').setStyle('font-size: 40px;')
+        $getRoot().append($createParagraphNode().append(text).setStyle('color: red; font-style: italic;'))
+        text.select(3, 3)
+      },
+      { discrete: true },
+    )
+    render({ onApplyBlock: (descriptor) => applyTypographyBlockToSelection(editor, descriptor, null) })
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Strong"]')!.click())
+    editor.update(() => undefined, { discrete: true })
+    editor.getEditorState().read(() => {
+      const block = $getRoot().getFirstChild()
+      expect($isElementNode(block) && block.getStyle()).toBe('font-weight: 700')
+      expect(
+        $isElementNode(block) &&
+          block.getAllTextNodes().every((text) => text.getFormat() === 0 && text.getStyle() === ''),
+      ).toBe(true)
+    })
+  })
   it('renders every block-style preview square inline when the track is wide', () => {
     render()
     // Each square is a <button> titled with its block label; a wide track fits
