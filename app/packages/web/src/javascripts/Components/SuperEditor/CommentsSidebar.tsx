@@ -1,4 +1,6 @@
 import Dropdown from '@/Components/Dropdown/Dropdown'
+import { useLexicalEditable } from '@lexical/react/useLexicalEditable'
+import { useNoteViewPreferences } from './View/useNoteViewPreferences'
 import { Component, lazy, ReactNode, Suspense, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
 import { $getRoot, $getNodeByKey, $isElementNode, LexicalNode } from 'lexical'
@@ -37,6 +39,8 @@ class CommentsBoundary extends Component<{ children: ReactNode }, { failed: bool
 }
 
 export function CommentsSidebar({ note }: { note: SNNote }) {
+  const editable = useLexicalEditable()
+  const view = useNoteViewPreferences(note.uuid, editable)
   const [editor] = useLexicalComposerContext()
   const application = useApplication()
   const controls = useEditorControlsState()
@@ -256,7 +260,10 @@ export function CommentsSidebar({ note }: { note: SNNote }) {
               type="button"
               className={control}
               aria-label="Close comments sidebar"
-              onClick={() => controls.setCommentsLayout({ commentsOpen: false })}
+              onClick={() => {
+                controls.setCommentsLayout({ commentsOpen: false })
+                view.update({ commentsVisible: false })
+              }}
             >
               ×
             </button>

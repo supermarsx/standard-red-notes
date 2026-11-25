@@ -39,6 +39,10 @@ jest.mock('../NoteView/NoteConflictResolutionModal/NoteConflictResolutionView', 
 jest.mock('./TilesToolbar', () => stub('tiles-toolbar'))
 jest.mock('./EmptyTabView', () => stub('empty-tab-view'))
 jest.mock('./PaneViewTabRoutes', () => ({ __esModule: true, PANE_VIEW_TAB_ROUTES: {} }))
+jest.mock('@/Hooks/useLifecycleAnimation', () => {
+  const setElement = () => undefined
+  return { useLifecycleAnimation: ({ open }: { open: boolean }) => [open, setElement] }
+})
 
 import NoteGroupView from './NoteGroupView'
 import ApplicationProvider from '../ApplicationProvider'
@@ -228,6 +232,52 @@ describe('editor tab bar with a tab open', () => {
     const split = splitButton()
     expect((split as HTMLButtonElement).disabled).toBe(true)
     expect((split as HTMLButtonElement).getAttribute('title')).toBe('Splitting is unavailable on small screens')
+  })
+})
+
+describe('compact workspace controls', () => {
+  beforeEach(() => {
+    global.ResizeObserver = class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    } as unknown as typeof ResizeObserver
+  })
+  it('compacts during body focus and input, and expands when the tab strip receives focus', () => {
+    const { application } = makeApplication([{ runtimeId: 'a', item: { uuid: 'a', title: 'Alpha' } }])
+    mount(createElement(NoteGroupView, { application }), application)
+    const body = document.createElement('div')
+    body.setAttribute('data-note-editor-body', '')
+    const input = document.createElement('textarea')
+    body.append(input)
+    container.querySelector('.grid')!.append(body)
+    act(() => input.focus())
+    expect(container.querySelector('.note-tab-bar')?.getAttribute('data-compact')).toBe('true')
+    act(() => (addButton() as HTMLButtonElement).focus())
+    expect(container.querySelector('.note-tab-bar')?.hasAttribute('data-compact')).toBe(false)
+    act(() => input.dispatchEvent(new Event('input', { bubbles: true })))
+    expect(container.querySelector('.note-tab-bar')?.getAttribute('data-compact')).toBe('true')
+  })
+
+  it('offers all layouts next to Split without a second toolbar row and preserves mounted note views', () => {
+    const { application } = makeApplication([
+      { runtimeId: 'a', item: { uuid: 'a', title: 'Alpha' } },
+      { runtimeId: 'b', item: { uuid: 'b', title: 'Beta' } },
+    ])
+    mount(createElement(NoteGroupView, { application }), application)
+    const split = splitButton()!
+    const menu = container.querySelector<HTMLButtonElement>('[aria-label="Tab and tile layouts"]')!
+    expect(split.nextElementSibling).toBe(menu)
+    expect(container.querySelector('[data-testid="tiles-toolbar"]')).toBeNull()
+    act(() => menu.click())
+    const rows = [...document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')].find((button) =>
+      button.textContent?.startsWith('Rows'),
+    )!
+    expect(rows).toBeDefined()
+    act(() => rows.click())
+    expect(localStorage.getItem('srn_editor_tile_layout')).toBe('rows')
+    expect(container.querySelectorAll('[data-testid="file-view"]')).toHaveLength(2)
+    expect(container.querySelectorAll('[role="tab"]')).toHaveLength(2)
   })
 })
 

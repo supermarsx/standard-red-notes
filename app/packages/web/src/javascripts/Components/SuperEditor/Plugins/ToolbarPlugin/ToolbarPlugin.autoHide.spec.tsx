@@ -412,7 +412,7 @@ describe('expanded (the default)', () => {
   it('keeps the same reachable collapse control while switching between every ribbon tab', async () => {
     const tile = await mountTile()
     const control = collapseButton(tile)!
-    for (const label of ['Home', 'Insert', 'Layout', 'AI', 'Tools']) {
+    for (const label of ['Home', 'Insert', 'Layout', 'AI', 'Tools', 'View']) {
       await click(tab(tile, label))
       expect(collapseButton(tile)).toBe(control)
       expect(control.closest('[data-super-toolbar-collapse-corner]')?.parentElement).toBe(bar(tile))
@@ -513,6 +513,7 @@ describe('collapsed', () => {
         'Layout',
         'AI',
         'Tools',
+        'View',
       ])
       expect(tabRow(tile).querySelector('[aria-label="AI change tools"]')).not.toBeNull()
       expect(tabRow(tile).querySelector('[aria-label="Clipboard and history tools"]')).toBeNull()

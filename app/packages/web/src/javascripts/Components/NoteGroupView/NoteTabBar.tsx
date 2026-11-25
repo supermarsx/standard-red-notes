@@ -9,6 +9,7 @@ import Menu from '../Menu/Menu'
 import MenuItem from '../Menu/MenuItem'
 import MenuItemSeparator from '../Menu/MenuItemSeparator'
 import { resolveTabLabel, TabCustomNames } from '@/Tabs/tabCustomNames'
+import PaneLayoutMenu, { PaneLayoutOptions } from './PaneLayoutMenu'
 
 type Controller = NoteViewController | FileViewController
 
@@ -21,6 +22,8 @@ type Controller = NoteViewController | FileViewController
 export type TabTarget = { kind: 'view'; id: string } | { kind: 'controller'; runtimeId: string }
 
 type Props = {
+  compact?: boolean
+  layoutOptions?: PaneLayoutOptions
   controllers: Controller[]
   pendingControllerRuntimeIds?: ReadonlySet<string>
   activeControllerRuntimeId?: string
@@ -147,6 +150,8 @@ const NoteTabBar: FunctionComponent<Props> = ({
   onRenameTab,
   lockedTabUuids,
   onToggleTabLock,
+  compact = false,
+  layoutOptions,
 }) => {
   const [contextMenuOpen, setContextMenuOpen] = useState(false)
   const [contextMenuPosition, setContextMenuPosition] = useState({ x: 0, y: 0 })
@@ -243,6 +248,7 @@ const NoteTabBar: FunctionComponent<Props> = ({
       style={{ WebkitOverflowScrolling: 'touch' }}
       role="tablist"
       aria-label="Open notes"
+      data-compact={compact && !renamingRuntimeId && !contextMenuOpen ? 'true' : undefined}
     >
       {viewTabs.map((tab) => {
         const isActive = tab.id === activeViewTabId
@@ -281,7 +287,9 @@ const NoteTabBar: FunctionComponent<Props> = ({
             title={tab.title}
           >
             <Icon type={tab.icon} size="small" className="flex-shrink-0" />
-            <span className="max-w-[8rem] truncate md:max-w-[10rem]">{tab.title}</span>
+            <span className="max-w-[8rem] truncate md:max-w-[10rem]" data-note-tab-label="">
+              {tab.title}
+            </span>
             <button
               type="button"
               className="hover:bg-contrast -mr-1 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded md:h-auto md:w-auto md:p-0.5"
@@ -290,6 +298,7 @@ const NoteTabBar: FunctionComponent<Props> = ({
                 onCloseViewTab(tab)
               }}
               aria-label={`Close ${tab.title}`}
+              data-note-tab-action="close"
               title={`Close ${tab.title}`}
             >
               <Icon type="close" size="small" />
@@ -369,7 +378,9 @@ const NoteTabBar: FunctionComponent<Props> = ({
                 }}
               />
             ) : (
-              <span className="max-w-[8rem] truncate md:max-w-[10rem]">{title}</span>
+              <span className="max-w-[8rem] truncate md:max-w-[10rem]" data-note-tab-label="">
+                {title}
+              </span>
             )}
             {pendingControllerRuntimeIds?.has(controller.runtimeId) && (
               <span
@@ -397,6 +408,7 @@ const NoteTabBar: FunctionComponent<Props> = ({
                   onToggleTabLock?.(controller)
                 }}
                 aria-pressed={isLocked}
+                data-note-tab-action="lock"
                 aria-label={isLocked ? `Unlock ${title}` : `Lock ${title}`}
                 title={
                   isLocked
@@ -415,6 +427,7 @@ const NoteTabBar: FunctionComponent<Props> = ({
                 onClose(controller)
               }}
               aria-label="Close note"
+              data-note-tab-action="close"
               title="Close note"
             >
               <Icon type="close" size="small" />
@@ -451,6 +464,7 @@ const NoteTabBar: FunctionComponent<Props> = ({
       >
         <Icon type="open-in" size="small" />
       </button>
+      {layoutOptions && <PaneLayoutMenu {...layoutOptions} canSplit={canSplit} />}
 
       <Popover
         title="Tab options"

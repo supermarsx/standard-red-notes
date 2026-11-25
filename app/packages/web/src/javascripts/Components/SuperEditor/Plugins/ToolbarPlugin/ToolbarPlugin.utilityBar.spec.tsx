@@ -233,7 +233,7 @@ describe('the merged clipboard + formatting-tabs bar', () => {
 
   it('still renders every formatting tab', async () => {
     await mount()
-    expect(tabLabels()).toEqual(['Home', 'Insert', 'Layout', 'AI', 'Tools'])
+    expect(tabLabels()).toEqual(['Home', 'Insert', 'Layout', 'AI', 'Tools', 'View'])
   })
 
   it('still switches the ribbon groups when a tab is clicked', async () => {
@@ -321,7 +321,7 @@ describe('collaborative ribbon recovery', () => {
     expect(toolbar.classList.contains('hidden')).toBe(false)
     expect(toolbar.hasAttribute('inert')).toBe(false)
     expect(tabStrip()).toBe(strip)
-    expect(tabLabels()).toEqual(['Home', 'Review', 'Tools'])
+    expect(tabLabels()).toEqual(['Home', 'Review', 'Tools', 'View'])
     expect(container.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Home')
     expect(container.querySelector('button[aria-label="copy"]')).not.toBeNull()
     expect(container.querySelector('button[aria-label="Print"]')).not.toBeNull()
@@ -334,7 +334,7 @@ describe('collaborative ribbon recovery', () => {
   it('offers viewing tools on an initially read-only collaborative note', async () => {
     await mount(true, true)
     expect(container.querySelector('#super-mobile-toolbar')?.classList.contains('hidden')).toBe(false)
-    expect(tabLabels()).toEqual(['Home', 'Review', 'Tools'])
+    expect(tabLabels()).toEqual(['Home', 'Review', 'Tools', 'View'])
     await clickTab('Tools')
     expect(group('Find')).not.toBeNull()
     expect(group('Selection')).not.toBeNull()
@@ -353,7 +353,7 @@ describe('collaborative ribbon recovery', () => {
     await mount()
     await act(async () => mountedEditor.setEditable(false))
     expect(container.querySelector('#super-mobile-toolbar')?.classList.contains('hidden')).toBe(false)
-    expect(tabLabels()).toEqual(['Home', 'Review', 'Tools'])
+    expect(tabLabels()).toEqual(['Home', 'Review', 'Tools', 'View'])
   })
 
   it('selects all and copies the note through real read-mode toolbar buttons', async () => {

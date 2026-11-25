@@ -1,17 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
+import { useLexicalEditable } from '@lexical/react/useLexicalEditable'
+import { useNoteViewPreferences } from '../../View/useNoteViewPreferences'
+import { useOutlineGeometry } from '../../View/useOutlineGeometry'
 import { SNNote, VectorIconNameOrEmoji } from '@standardnotes/snjs'
 import { classNames } from '@standardnotes/utils'
 import Icon from '@/Components/Icon/Icon'
 import { useApplication } from '@/Components/ApplicationProvider'
 import { useMediaQuery, MutuallyExclusiveMediaQueryBreakpoints } from '@/Hooks/useMediaQuery'
 import { DEFAULT_BOOKMARK_ICON, getNoteBookmarks } from '@/Bookmarks/bookmarks'
-import {
-  NavigationSettings,
-  loadNoteLayout,
-  saveNoteLayout,
-  NOTE_LAYOUT_SETTINGS_CHANGED_EVENT,
-} from '../../Layout/layoutSettings'
+import { NavigationSettings, loadNoteLayout, saveNoteLayout } from '../../Layout/layoutSettings'
 import { bookmarkAnchorDomId } from '../../Lexical/Nodes/BookmarkAnchorNode'
 import { $buildDocumentOutline, DocumentOutline } from './outline'
 
@@ -40,32 +38,29 @@ export type NavigationLayoutChangedDetail = NavigationSettings
 /** How often the outline recomputes while the document changes (throttle window). */
 const OUTLINE_THROTTLE_MS = 300
 
-const NavigationSidebar = () => {
+const NavigationSidebar = ({ noteUuid }: { noteUuid?: string }) => {
   const [editor] = useLexicalComposerContext()
   const application = useApplication()
   const isMobile = useMediaQuery(MutuallyExclusiveMediaQueryBreakpoints.sm)
 
-  const activeNoteUuid = application.itemListController.activeControllerItem?.uuid
+  const activeNoteUuid = noteUuid ?? application.itemListController?.activeControllerItem?.uuid
+  const editable = useLexicalEditable()
+  const view = useNoteViewPreferences(activeNoteUuid, editable)
+  const updateView = view.update
+  const geometry = useOutlineGeometry(view.settings, updateView)
+  const navigation = useMemo(
+    () => ({ visible: view.settings.tocVisible, showBookmarks: view.settings.bookmarks }),
+    [view.settings.tocVisible, view.settings.bookmarks],
+  )
 
   // Visibility / options — seeded from the persisted per-note layout, kept live
   // via the popover's DOM-event bridge and re-read when the active note changes.
-  const [navigation, setNavigation] = useState<NavigationSettings>(() => loadNoteLayout(activeNoteUuid).navigation)
-  useEffect(() => {
-    const reload = () => setNavigation(loadNoteLayout(activeNoteUuid).navigation)
-    reload()
-    window.addEventListener(NOTE_LAYOUT_SETTINGS_CHANGED_EVENT, reload)
-    window.addEventListener('storage', reload)
-    return () => {
-      window.removeEventListener(NOTE_LAYOUT_SETTINGS_CHANGED_EVENT, reload)
-      window.removeEventListener('storage', reload)
-    }
-  }, [activeNoteUuid])
 
   // Live outline of the document (headings + bookmark anchors), throttled so
   // large-doc typing doesn't churn.
   const [outline, setOutline] = useState<DocumentOutline>({ headings: [], bookmarks: [] })
   useEffect(() => {
-    if (!navigation.visible || isMobile) {
+    if (!navigation.visible) {
       return
     }
     setOutline(editor.getEditorState().read($buildDocumentOutline))
@@ -107,7 +102,7 @@ const NavigationSidebar = () => {
     const handler = (event: Event) => {
       const detail = (event as CustomEvent<NavigationLayoutChangedDetail>).detail
       if (detail && typeof detail === 'object') {
-        setNavigation({ visible: detail.visible === true, showBookmarks: detail.showBookmarks !== false })
+        updateView({ tocVisible: detail.visible === true, bookmarks: detail.showBookmarks !== false })
       }
     }
     // The root element may not be attached yet on first run; registerRootListener
@@ -116,7 +111,7 @@ const NavigationSidebar = () => {
       prevRootElement?.removeEventListener(NAVIGATION_LAYOUT_CHANGED_EVENT, handler)
       rootElement?.addEventListener(NAVIGATION_LAYOUT_CHANGED_EVENT, handler)
     })
-  }, [editor])
+  }, [editor, updateView])
 
   // Bookmark id → label/icon/color, joined from the note's appData. Best-effort
   // and refreshed on each render tick (labels live outside the Lexical tree).
@@ -128,7 +123,11 @@ const NavigationSidebar = () => {
     try {
       const note = application.items.findItem<SNNote>(activeNoteUuid)
       if (note) {
+        const visibleIds = new Set(outline.bookmarks.map((bookmark) => bookmark.bookmarkId))
         for (const bookmark of getNoteBookmarks(note)) {
+          if (!visibleIds.has(bookmark.id)) {
+            continue
+          }
           map.set(bookmark.id, { label: bookmark.label, icon: bookmark.icon, color: bookmark.color })
         }
       }
@@ -162,36 +161,80 @@ const NavigationSidebar = () => {
 
   const persistNavigation = useCallback(
     (patch: Partial<NavigationSettings>) => {
-      setNavigation((prev) => {
-        const next: NavigationSettings = { ...prev, ...patch }
-        const layout = loadNoteLayout(activeNoteUuid)
-        saveNoteLayout(activeNoteUuid, { ...layout, navigation: next })
-        editor
-          .getRootElement()
-          ?.dispatchEvent(
-            new CustomEvent<NavigationLayoutChangedDetail>(NAVIGATION_LAYOUT_CHANGED_EVENT, { detail: next }),
-          )
-        return next
-      })
+      const next: NavigationSettings = { ...navigation, ...patch }
+      const layout = loadNoteLayout(activeNoteUuid)
+      saveNoteLayout(activeNoteUuid, { ...layout, navigation: next })
+      updateView({ tocVisible: next.visible, bookmarks: next.showBookmarks })
     },
-    [activeNoteUuid, editor],
+    [activeNoteUuid, navigation, updateView],
   )
 
-  if (!navigation.visible || isMobile) {
-    return null
+  if (!navigation.visible) {
+    return view.settings.tocToggle ? (
+      <button
+        type="button"
+        aria-label="Show table of contents"
+        title="Table of contents"
+        className="border-border bg-default text-info absolute top-2 right-2 z-20 flex h-8 w-8 items-center justify-center rounded-md border shadow-sm"
+        onClick={() => persistNavigation({ visible: true })}
+      >
+        <Icon type="toc" size="small" />
+      </button>
+    ) : null
   }
 
   const showBookmarks = navigation.showBookmarks && outline.bookmarks.length > 0
+  const floating = isMobile || view.settings.tocMode === 'floating'
+  const side = view.settings.tocMode
 
   return (
     <aside
       data-navigation-sidebar="true"
-      className="border-border bg-default flex w-60 flex-shrink-0 flex-col overflow-y-auto border-r"
+      ref={geometry.panel}
+      aria-label="Table of contents"
+      data-outline-placement={floating ? 'floating' : side}
+      className={classNames(
+        'border-border bg-default flex min-h-0 flex-shrink-0 flex-col border',
+        floating
+          ? 'z-dropdown-menu absolute overflow-hidden rounded-lg shadow-lg'
+          : side === 'right'
+            ? 'relative order-3 border-l'
+            : 'relative order-first border-r',
+      )}
+      style={{
+        width: geometry.geometry.tocWidth,
+        maxWidth: 'calc(100% - 1rem)',
+        ...(floating
+          ? {
+              left: Math.min(
+                geometry.geometry.tocX,
+                Math.max(
+                  0,
+                  (geometry.panel.current?.parentElement?.clientWidth || window.innerWidth) -
+                    geometry.geometry.tocWidth,
+                ),
+              ),
+              top: Math.min(
+                geometry.geometry.tocY,
+                Math.max(0, (geometry.panel.current?.parentElement?.clientHeight || window.innerHeight) - 48),
+              ),
+              height: geometry.geometry.tocHeight,
+              maxHeight: 'calc(100% - 1rem)',
+            }
+          : {}),
+      }}
     >
-      <div className="border-border bg-contrast flex items-center justify-between border-b px-3 py-2">
+      <div
+        className={classNames(
+          'border-border bg-contrast flex items-center justify-between border-b px-3 py-2',
+          floating && 'cursor-move touch-none',
+        )}
+        onPointerDown={floating ? geometry.drag : undefined}
+        {...geometry.pointer}
+      >
         <div className="flex min-w-0 items-center gap-2">
           <Icon type="list-bulleted" className="text-info flex-shrink-0" size="small" />
-          <span className="truncate text-sm font-bold">Navigation</span>
+          <span className="truncate text-sm font-bold">Contents</span>
         </div>
         <button
           className="hover:bg-default rounded p-1"
@@ -202,6 +245,19 @@ const NavigationSidebar = () => {
           <Icon type="close" size="small" />
         </button>
       </div>
+      <label className="border-border flex items-center justify-between gap-2 border-b px-2 py-1 text-xs">
+        Placement
+        <select
+          aria-label="Contents panel placement"
+          className="bg-default text-text min-w-0 rounded border px-1"
+          value={view.settings.tocMode}
+          onChange={(event) => view.update({ tocMode: event.target.value as 'left' | 'right' | 'floating' })}
+        >
+          <option value="left">Left sidebar</option>
+          <option value="right">Right sidebar</option>
+          <option value="floating">Floating popup</option>
+        </select>
+      </label>
 
       <div className="min-h-0 flex-grow overflow-y-auto py-1">
         {outline.headings.length === 0 ? (
@@ -256,6 +312,33 @@ const NavigationSidebar = () => {
           </div>
         )}
       </div>
+      <button
+        type="button"
+        aria-label="Resize table of contents"
+        className="text-passive-1 absolute right-0 bottom-0 h-5 w-5 cursor-se-resize touch-none"
+        onPointerDown={geometry.resize}
+        {...geometry.pointer}
+        onKeyDown={(event) => {
+          const step = event.shiftKey ? 50 : 10
+          if (event.key.startsWith('Arrow')) {
+            event.preventDefault()
+            view.update({
+              tocWidth:
+                geometry.geometry.tocWidth +
+                (event.key === 'ArrowLeft' ? -step : event.key === 'ArrowRight' ? step : 0),
+              tocHeight:
+                geometry.geometry.tocHeight + (event.key === 'ArrowUp' ? -step : event.key === 'ArrowDown' ? step : 0),
+            })
+          }
+        }}
+      >
+        ↘
+      </button>
+      {view.error && (
+        <p role="alert" className="text-danger p-2 text-xs">
+          {view.error}
+        </p>
+      )}
     </aside>
   )
 }

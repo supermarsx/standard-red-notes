@@ -87,6 +87,7 @@ import Icon from '../Icon/Icon'
 import { EditorContentWithSafeAreaPadding } from './EditorContentWithSafeAreaPadding'
 import { getNoteCustomBackgroundColor, getNoteCustomTextColor } from '@/Utils/NoteAppearance'
 import HeroHeaderBanner from '../../HeroHeader/HeroHeaderBanner'
+import { readEditorView } from '@/View/editorViewPreferences'
 import { getNoteHeroHeader, HeroHeader } from '../../HeroHeader/heroHeader'
 import { readNoteCoversEnabled, writeNoteCoversEnabled } from '../../HeroHeader/noteCoversPreference'
 import { addToast, ToastType } from '@standardnotes/toast'
@@ -128,6 +129,7 @@ type State = {
   ligaturesEnabled?: boolean
   customEditorFont?: string
   editorFocused?: boolean
+  headerCompact: boolean
   paneGestureEnabled?: boolean
   updateSavingIndicator?: boolean
   editorFeatureIdentifier?: string
@@ -193,6 +195,7 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
       availableStackComponents: [],
       editorStateDidLoad: false,
       editorTitle: '',
+      headerCompact: false,
       editorLineWidth: PrefDefaults[LocalPrefKey.EditorLineWidth],
       isDesktop: isDesktopApplication(),
       noteStatus: undefined,
@@ -885,6 +888,9 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
   }
 
   onTitleFocus = (event: FocusEvent<HTMLInputElement>) => {
+    if (this.state.headerCompact) {
+      this.setState({ headerCompact: false })
+    }
     this.titleEditedSinceFocus = false
     event.target.select()
   }
@@ -1291,7 +1297,17 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
   }
 
   onEditorFocus = () => {
-    this.setState({ editorFocused: true })
+    this.setState({ editorFocused: true, headerCompact: readEditorView(this.note, this.application).compactTitle })
+  }
+
+  private onNoteBodyInteraction = (event: FocusEvent | import('react').FormEvent) => {
+    if (
+      this.editorContentRef.current?.contains(event.target as Node) &&
+      !this.state.headerCompact &&
+      readEditorView(this.note, this.application).compactTitle
+    ) {
+      this.setState({ headerCompact: true })
+    }
   }
 
   onEditorBlur = (event: FocusEvent) => {
@@ -1325,7 +1341,8 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
       )
     }
 
-    const renderHeaderOptions = isMobileScreen() ? !this.state.editorFocused : true
+    const compactHeader = this.state.headerCompact && readEditorView(this.note, this.application).compactTitle
+    const renderHeaderOptions = isMobileScreen() ? !this.state.editorFocused && !compactHeader : true
 
     const editorMode =
       this.note.editorIdentifier === CanvasEditorIdentifier
@@ -1367,6 +1384,8 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
         // specific note must narrow to one tile first or it will mix two notes together.
         // ./Print/PrintNote.ts does exactly that.
         data-srn-note-view={this.note.uuid}
+        onFocusCapture={this.onNoteBodyInteraction}
+        onInputCapture={this.onNoteBodyInteraction}
       >
         {this.note && (
           <NoteViewFileDropTarget
@@ -1427,6 +1446,7 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
         {this.note && (
           <div
             id="editor-title-bar"
+            data-note-header-compact={compactHeader ? 'true' : undefined}
             // No `pt-*` here: `.content-title-bar` in _editor.scss is unlayered and
             // Tailwind v4 utilities are not, so the SCSS padding wins regardless of
             // specificity. A utility here would read as setting the top padding and
@@ -1436,14 +1456,14 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
           >
             <div
               className={classNames(
-                'mb-2 flex justify-between md:mb-0 md:flex-nowrap md:gap-4 xl:items-center',
+                'note-title-row mb-2 flex min-w-0 justify-between md:mb-0 md:flex-nowrap md:gap-4 xl:items-center',
                 shouldShowConflictsButton ? 'items-center' : 'items-start',
                 !renderHeaderOptions ? 'flex-nowrap gap-4' : 'flex-wrap gap-2',
               )}
             >
-              <div className={classNames(this.state.noteLocked && 'locked', 'flex flex-grow items-center')}>
+              <div className={classNames(this.state.noteLocked && 'locked', 'flex min-w-0 flex-grow items-center')}>
                 <MobileItemsListButton />
-                <div className="title flex-grow overflow-auto">
+                <div className="title min-w-0 flex-grow overflow-hidden">
                   {/**
                    * `id` is shared by every mounted tile's title input (see ElementIDs.ts);
                    * `data-srn-note-uuid` is what identifies THIS note's field, and
@@ -1458,7 +1478,9 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
                     title={
                       this.state.collaborationTitleReadonly
                         ? 'The room’s saving device can change the title'
-                        : undefined
+                        : this.state.headerCompact
+                          ? this.state.editorTitle
+                          : undefined
                     }
                     id={ElementIds.NoteTitleEditor}
                     onChange={this.onTitleChange}
@@ -1537,10 +1559,10 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
                 />
               </div>
             </div>
-            <div className="mt-2.5 mb-1 md:hidden">
+            <div className="mt-2.5 mb-1 md:hidden" data-note-title-details="">
               <CollaborationInfoHUD item={this.note} />
             </div>
-            <div className="hidden md:block">
+            <div className="hidden md:block" data-note-title-details="">
               <LinkedItemBubblesContainer
                 item={this.note}
                 linkingController={this.application.linkingController}

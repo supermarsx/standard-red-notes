@@ -95,6 +95,76 @@ $heading-height: 75px;
     overflow: visible;
     position: relative;
   }
+
+  // Retain the same title input, status and controls while writing. Only layout
+  // changes: focus, the title draft and editor selection stay on their owners.
+  &[data-note-header-compact='true'] {
+    padding-top: 2px;
+    padding-bottom: 2px;
+
+    .note-title-row {
+      flex-wrap: nowrap;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 0;
+    }
+
+    .title {
+      padding-right: 6px;
+
+      > .input {
+        font-size: var(--sn-stylekit-font-size-p);
+        font-weight: 500;
+        line-height: 1.5;
+        padding-top: 0;
+        padding-bottom: 0;
+      }
+    }
+
+    .note-view-options-buttons {
+      gap: 4px;
+    }
+
+    [data-note-title-details] {
+      display: none;
+    }
+  }
+}
+
+// The tab strip expands on pointer hover or keyboard focus. Locked-tab state
+// remains visible in the compact strip, and full names remain accessible.
+@media (min-width: 768px) {
+  .note-tab-bar[data-compact='true']:not(:hover):not(:focus-within):not(:has([aria-expanded='true'])) {
+    padding-top: 2px;
+    padding-bottom: 2px;
+    gap: 2px;
+
+    [role='tab'] {
+      padding: 1px 5px;
+      gap: 3px;
+      min-height: 22px;
+      font-size: 0.6875rem;
+    }
+
+    [data-note-tab-label] {
+      max-width: 3.5rem;
+    }
+
+    [role='tab'][aria-selected='true'] [data-note-tab-label] {
+      max-width: 8rem;
+    }
+
+    [data-note-tab-action='close'],
+    [data-note-tab-action='lock'][aria-pressed='false'] {
+      display: none;
+    }
+
+    > button {
+      height: 22px;
+      min-width: 22px;
+      padding: 2px;
+    }
+  }
 }
 
 .editor-content,

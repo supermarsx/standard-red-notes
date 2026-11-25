@@ -23,6 +23,7 @@ import ChecklistRecurrence from './ChecklistRecurrence'
 import MermaidSourceHighlighting from './MermaidSourceHighlighting'
 import CommentsPreferences from './CommentsPreferences'
 import PageLayoutDefaults from './PageLayoutDefaults'
+import EditorViewDefaults from './EditorViewDefaults'
 import { useApplication } from '@/Components/ApplicationProvider'
 import { useTabState } from '@/Components/Tabs/useTabState'
 
@@ -52,22 +53,31 @@ const General: FunctionComponent = () => {
       icon: 'pencil',
       content: (
         <>
-          <Defaults application={application} />
-          <NewNoteDefaults />
-          {/*
+          <div className="grid grid-cols-1 items-start gap-x-6 xl:grid-cols-2">
+            <Defaults application={application} />
+            <NewNoteDefaults />
+            {/*
             Standard Red Notes (t111 §3): the two heading-derived Todos settings
             and the two recurring-checklist settings. Each also has a surface next
             to the thing it controls (the Todos filter bar, the editor's Checklists
             panel); these are the findable copies, and they share one stored value
             with their counterpart rather than forking it.
           */}
-          <TodoHeadings application={application} />
-          <ChecklistRecurrence application={application} />
-          <MermaidSourceHighlighting application={application} />
-          <CommentsPreferences />
-          <PageLayoutDefaults />
-          <Spellcheck application={application} />
-          <SmartViews application={application} featuresController={application.featuresController} />
+            <TodoHeadings application={application} />
+            <ChecklistRecurrence application={application} />
+            <MermaidSourceHighlighting application={application} />
+            <CommentsPreferences />
+            <div className="xl:col-span-2">
+              <EditorViewDefaults />
+            </div>
+            <div className="xl:col-span-2">
+              <PageLayoutDefaults />
+            </div>
+            <Spellcheck application={application} />
+            <div className="xl:col-span-2">
+              <SmartViews application={application} featuresController={application.featuresController} />
+            </div>
+          </div>
         </>
       ),
     },

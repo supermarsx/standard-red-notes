@@ -844,6 +844,29 @@ export class NotesController
     })
   }
 
+  async patchNoteViewPreferences(
+    note: SNNote,
+    patch: Partial<import('@/View/editorViewPreferences').EditorViewPreferences>,
+  ) {
+    if (note.locked || this.application.sessions.isCurrentSessionReadOnly()) {
+      throw new Error('This note is read only.')
+    }
+    const { NOTE_VIEW_KEY, noteViewOverrides, normalizeViewOverrides } = await import('@/View/editorViewPreferences')
+    const result = await this.rehydrateLiteNotesForMutation([note])
+    if (result.failed.length > 0) {
+      throw new Error('The note must finish loading before its view can be saved.')
+    }
+    await this.application.mutator.changeItem<NoteMutator>(
+      note,
+      (mutator) => {
+        const current = this.application.items.findItem<SNNote>(note.uuid) ?? note
+        mutator.setAppDataItem(NOTE_VIEW_KEY, normalizeViewOverrides({ ...noteViewOverrides(current), ...patch }))
+      },
+      MutationType.NoUpdateUserTimestamps,
+    )
+    this.application.sync.sync().catch(console.error)
+  }
+
   async resetNoteAppearance(note: SNNote) {
     await this.setNoteAppearanceColors(note, { backgroundColor: undefined, textColor: undefined })
   }

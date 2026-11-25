@@ -2,6 +2,7 @@ import ToolbarButton from './ToolbarButton'
 import './Ribbon.scss'
 import TableOfContentsFormatButton from './TableOfContentsFormatButton'
 import TableOfContentsRibbon from './TableOfContentsRibbon'
+import ViewRibbon from '../../View/ViewRibbon'
 import { useSelectedTableOfContents } from './useSelectedTableOfContents'
 import { ReviewTools } from './ReviewTools'
 import { TableOfContentsBlock } from '../Blocks/TableOfContents'
@@ -3477,6 +3478,7 @@ const ToolbarPlugin = ({
     ...superGroupTabs
       .filter((tab) => showToolbarControls && tab.id === 'checklistTab')
       .map((tab) => ({ id: tab.id as string, label: tab.label })),
+    ...(showToolbarControls ? [{ id: 'view', label: 'View' }] : []),
     ...(hasContextualTab && showToolbarControls
       ? [{ id: CONTEXTUAL_TAB_ID, label: effectiveContextualWidget!.label }]
       : []),
@@ -3484,10 +3486,11 @@ const ToolbarPlugin = ({
   const effectiveTabId =
     activeTabId && ribbonTabs.some((tab) => tab.id === activeTabId) ? activeTabId : (ribbonTabs[0]?.id ?? null)
   const isContextualActive = effectiveTabId === CONTEXTUAL_TAB_ID
+  const isViewActive = effectiveTabId === 'view'
   const isReviewActive = isEditable && effectiveTabId === 'review'
   const reviewGroups = superGroupTabs.find((tab) => tab.id === 'review')?.groups ?? []
   const activeGroups =
-    isContextualActive || isReviewActive
+    isContextualActive || isReviewActive || isViewActive
       ? []
       : (superGroupTabs.find((tab) => tab.id === effectiveTabId)?.groups ?? resolvedGroups)
   const activeRibbonGroups = activeGroups.filter((group) => !isEditable || !TOOLBAR_UTILITY_GROUP_IDS.has(group.id))
@@ -3885,7 +3888,9 @@ const ToolbarPlugin = ({
                 'data-[super-toolbar-autohide=revealed]:pointer-events-auto data-[super-toolbar-autohide=revealed]:visible data-[super-toolbar-autohide=revealed]:opacity-100 data-[super-toolbar-autohide=revealed]:transition-opacity motion-reduce:data-[super-toolbar-autohide=revealed]:transition-none',
             )}
           >
-            {isReviewActive || !showToolbarControls ? null : isContextualActive && tocSelection ? (
+            {isReviewActive || !showToolbarControls ? null : isViewActive ? (
+              <ViewRibbon noteUuid={activeNoteUuid} />
+            ) : isContextualActive && tocSelection ? (
               <TableOfContentsRibbon key={tocSelection} nodeKey={tocSelection} />
             ) : isContextualActive ? (
               <Toolbar

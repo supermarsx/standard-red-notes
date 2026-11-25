@@ -55,6 +55,7 @@ import { AssistantChangeDecorationsPlugin } from './Plugins/AssistantChangeDecor
 import { EditorResumePlugin } from './Plugins/EditorResume/EditorResumePlugin'
 import { editorResumeStorageKey } from './Plugins/EditorResume/EditorResumeStorage'
 import { CommentsSidebar } from './CommentsSidebar'
+import { NoteViewPreferencesBridge } from './View/ViewRibbon'
 import { EditorNavigationAids } from './Plugins/EditorNavigationAids/EditorNavigationAids'
 
 type BlocksEditorProps = {
@@ -357,7 +358,7 @@ export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
         sidebar renders null when hidden or on mobile.
       */}
       <div className="relative flex min-h-0 flex-grow flex-row overflow-hidden">
-        <NavigationSidebar />
+        <NavigationSidebar noteUuid={noteUuid} />
         <EditorNavigationAids noteUuid={noteUuid}>
           <RichTextPlugin
             contentEditable={
@@ -388,6 +389,7 @@ export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
         </EditorNavigationAids>
         {commentNote && <CommentsSidebar note={commentNote} />}
       </div>
+      {noteUuid && <NoteViewPreferencesBridge noteUuid={noteUuid} />}
       {isMobile && (
         <ToolbarPlugin
           noteUuid={noteUuid}

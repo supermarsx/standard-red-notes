@@ -19,6 +19,7 @@ export const EditorContentWithSafeAreaPadding = forwardRef(function EditorConten
   return (
     <div
       id={ElementIds.EditorContent}
+      data-note-editor-body=""
       className={classNames(
         ElementIds.EditorContent,
         'z-editor-content overflow-auto sm:[&>*]:mx-[var(--editor-margin)] sm:[&>*]:max-w-[var(--editor-max-width)]',

@@ -11,7 +11,8 @@ import { NoteViewController } from '../NoteView/Controller/NoteViewController'
 import { FileViewController } from '../NoteView/Controller/FileViewController'
 import { WebApplication } from '@/Application/WebApplication'
 import Icon from '../Icon/Icon'
-import TilesToolbar from './TilesToolbar'
+import { FocusEvent, FormEvent } from 'react'
+import { readEditorView } from '@/View/editorViewPreferences'
 import NoteTabBar, { TabTarget } from './NoteTabBar'
 import { getTileGridStyle, TileLayout } from './TileLayout'
 import { decisionForConflictTab } from './conflictTabDecision'
@@ -55,6 +56,7 @@ const persistTileLayout = (layout: TileLayout): void => {
 }
 
 type State = {
+  compactTabs: boolean
   showMultipleSelectedNotes: boolean
   showMultipleSelectedFiles: boolean
   openingController: boolean
@@ -112,6 +114,7 @@ class NoteGroupView extends AbstractComponent<Props, State> {
     const lgMatches = typeof window !== 'undefined' ? window.matchMedia(MediaQueryBreakpoints.lg).matches : true
     const { itemControllerGroup, paneController, notesController, itemListController } = props.application
     this.state = {
+      compactTabs: false,
       showMultipleSelectedNotes: (notesController?.selectedNotesCount ?? 0) > 1,
       showMultipleSelectedFiles: (itemListController?.selectedFilesCount ?? 0) > 1,
       controllers: itemControllerGroup.itemControllers.slice(),
@@ -253,6 +256,17 @@ class NoteGroupView extends AbstractComponent<Props, State> {
     this.setState({ tileLayout: layout })
   }
 
+  private onWorkspaceFocus = (event: FocusEvent | FormEvent) => {
+    const target = event.target as Element
+    const uuid = target.closest('[data-srn-note-view]')?.getAttribute('data-srn-note-view')
+    const item = this.state.controllers.find((controller) => controller.item?.uuid === uuid)?.item
+    const compactTabs =
+      Boolean(target.closest('[data-note-editor-body]')) && readEditorView(item, this.application).compactTabs
+    if (compactTabs !== this.state.compactTabs) {
+      this.setState({ compactTabs })
+    }
+  }
+
   private setActiveController = (controller: NoteViewController | FileViewController) => {
     // Selecting a note tab takes over the content area, so deactivate any view tab.
     this.application.paneController.setActiveViewTab(undefined)
@@ -373,6 +387,9 @@ class NoteGroupView extends AbstractComponent<Props, State> {
    */
   private addTile = () => {
     void this.application.itemListController.openNoteInNewTile()
+    if (this.state.tileLayout === TileLayout.Single) {
+      this.setTileLayout(TileLayout.Columns)
+    }
   }
 
   /**
@@ -398,9 +415,14 @@ class NoteGroupView extends AbstractComponent<Props, State> {
       return
     }
 
-    if (controllers.length > 1) {
+    this.chooseTileLayout(TileLayout.Columns)
+  }
+
+  private chooseTileLayout = (layout: TileLayout) => {
+    const controllers = this.state.controllers
+    if (layout === TileLayout.Single || controllers.length > 1) {
       // Already multiple tiles open, just collapsed to Single: expand into a split.
-      this.setTileLayout(TileLayout.Columns)
+      this.setTileLayout(layout)
       return
     }
 
@@ -417,7 +439,7 @@ class NoteGroupView extends AbstractComponent<Props, State> {
         await itemListController.openNewNoteInNewTile()
       }
 
-      this.setTileLayout(TileLayout.Columns)
+      this.setTileLayout(layout)
     })()
   }
 
@@ -511,8 +533,20 @@ class NoteGroupView extends AbstractComponent<Props, State> {
          * wherever the notes list is not on screen (mobile, collapsed list).
          */}
         {shouldNotShowMultipleSelectedItems && (
-          <div className="flex h-full w-full flex-col">
+          <div
+            className="flex h-full w-full flex-col"
+            onFocusCapture={this.onWorkspaceFocus}
+            onInputCapture={this.onWorkspaceFocus}
+          >
             <NoteTabBar
+              compact={this.state.compactTabs}
+              layoutOptions={{
+                layout: this.state.tileLayout,
+                tileCount: visibleControllers.length,
+                onLayoutChange: this.chooseTileLayout,
+                onAddTile: this.addTile,
+                canAddTile: Boolean(this.application.itemListController.firstSelectedItem),
+              }}
               controllers={controllers}
               pendingControllerRuntimeIds={
                 new Set(
@@ -545,16 +579,6 @@ class NoteGroupView extends AbstractComponent<Props, State> {
             />
 
             {activeViewTab && this.renderActiveViewTab(activeViewTab)}
-
-            {!activeViewTab && isTiling && (
-              <TilesToolbar
-                layout={this.state.tileLayout}
-                onLayoutChange={this.setTileLayout}
-                tileCount={visibleControllers.length}
-                onAddTile={this.addTile}
-                canAddTile={!!this.application.itemListController.firstSelectedItem}
-              />
-            )}
 
             {/* Keep every retained editor mounted in the same keyed parent. Hiding a
                 pending room must not destroy its Y.Doc or its server save fence. */}
