@@ -8,8 +8,6 @@ import useModal from '../../Lexical/Hooks/useModal'
 import { InsertTableDialog } from '../TablePlugin'
 import { getSelectedNode } from '../../Lexical/Utils/getSelectedNode'
 import {
-  $createRangeSelection,
-  $getRoot,
   $getSelection,
   $isRangeSelection,
   $setSelection,
@@ -145,7 +143,8 @@ import {
   ToolbarButtonId,
   ToolbarGroupId,
 } from './ToolbarConfig'
-import { $selectAllText } from './selectAllText'
+import { selectNoteContents } from '../NoteSelectionPlugin'
+import { readonlyToolbarGroups } from './readonlyTools'
 import { findFontByCss, filterFonts, groupFontsByCategory } from '../../fonts/fontCatalog'
 import CustomizeToolbarDialog from './CustomizeToolbarDialog'
 import { NavigationLayoutSubsection, applyNavigationPatch } from './NavigationLayoutSubsection'
@@ -585,7 +584,7 @@ const ToolbarPlugin = ({
   noteUuid?: string
   note?: SNNote
   flushChanges?: () => void
-  /** Keep an established collaborative ribbon stable during recovery, with all controls inert. */
+  /** Keep an established collaborative ribbon stable during recovery. */
   retainWhileReadonly?: boolean
 }) => {
   const { t } = useTranslation('editor')
@@ -1141,6 +1140,9 @@ const ToolbarPlugin = ({
   const isToolbarFixedRef = useStateRef(isToolbarFixedToTop)
 
   const updateToolbarFloatingPosition = useCallback(() => {
+    if (!editor.isEditable()) {
+      return
+    }
     const selection = $getSelection()
     if (!$isRangeSelection(selection)) {
       return
@@ -1193,7 +1195,7 @@ const ToolbarPlugin = ({
         containerElement.style.setProperty('display', 'block')
       }
     }
-  }, [activeEditor, isMobile, isToolbarFixedRef])
+  }, [editor, activeEditor, isMobile, isToolbarFixedRef])
 
   const $updateToolbar = useCallback(() => {
     const selection = $getSelection()
@@ -1417,6 +1419,13 @@ const ToolbarPlugin = ({
     containerElement.style.removeProperty('transform-origin')
     containerElement.style.removeProperty('opacity')
   }, [])
+
+  useEffect(() => {
+    if (!isEditable) {
+      clearContainerFloatingStyles()
+      containerRef.current?.style.removeProperty('display')
+    }
+  }, [isEditable, clearContainerFloatingStyles])
 
   const clearFormatting = useCallback(() => {
     activeEditor.update(() => {
@@ -1886,7 +1895,7 @@ const ToolbarPlugin = ({
   const [isFocusInEditor, setIsFocusInEditor] = useState(false)
   const [isFocusInToolbar, setIsFocusInToolbar] = useState(false)
   const canShowToolbarOnMobile = isFocusInEditor || isFocusInToolbar
-  const canShowAllItems = isMobile || isToolbarFixedToTop
+  const canShowAllItems = !isEditable || isMobile || isToolbarFixedToTop
 
   useEffect(() => {
     const container = containerRef.current
@@ -1984,7 +1993,7 @@ const ToolbarPlugin = ({
   // The collapse button is offered wherever the docked desktop ribbon is: it is
   // how the toolbar is collapsed in the first place, so it cannot wait for the
   // setting to be on. Mobile and the floating toolbar have nothing to collapse.
-  const canCollapseToolbar = !isMobile && isToolbarFixedToTop
+  const canCollapseToolbar = isEditable && !isMobile && isToolbarFixedToTop
   const toggleToolbarCollapsed = useCallback(() => {
     application.setPreference(SUPER_TOOLBAR_AUTO_HIDE_PREF_KEY, !isToolbarCollapsePreferred).catch(console.error)
   }, [application, isToolbarCollapsePreferred])
@@ -2203,14 +2212,7 @@ const ToolbarPlugin = ({
       <ToolbarButton
         name={t('selectAll')}
         onSelect={() => {
-          editor.update(() => {
-            const root = $getRoot()
-            const selection = $createRangeSelection()
-            selection.anchor.set(root.getKey(), 0, 'element')
-            selection.focus.set(root.getKey(), root.getChildrenSize(), 'element')
-            $setSelection(selection)
-          })
-          editor.focus()
+          selectNoteContents(editor)
         }}
       >
         <Icon type="select-all" size="custom" className="super-toolbar-icon" />
@@ -2224,10 +2226,7 @@ const ToolbarPlugin = ({
           // Select only the TEXT content (first text start → last text end), as
           // distinct from "Select all" (which selects every root child including
           // decorator/embed blocks). Safe no-op on an empty/text-less document.
-          editor.update(() => {
-            $selectAllText()
-          })
-          editor.focus()
+          selectNoteContents(editor, true)
         }}
       >
         <Icon type="select-all-text" size="custom" className="super-toolbar-icon" />
@@ -3007,7 +3006,7 @@ const ToolbarPlugin = ({
 
   // Resolve the config into the ordered, filtered groups to render, then emit
   // each group's buttons with a separator between non-empty groups.
-  const resolvedGroups = applyToolbarConfig(toolbarConfig).filter(
+  const configuredGroups = applyToolbarConfig(toolbarConfig).filter(
     (group) =>
       // The Block-style group has no per-button renderer: its sole config button
       // (TypographyGallery) is drawn by the dedicated special-case in the group
@@ -3024,6 +3023,7 @@ const ToolbarPlugin = ({
       group.id === ToolbarGroupId.Insert ||
       group.buttons.some((button) => buttonRenderers[button.id] != null),
   )
+  const resolvedGroups = isEditable ? configuredGroups : readonlyToolbarGroups(configuredGroups)
   const visibleUtilityButtonIds = new Set(
     resolvedGroups
       .filter((group) => TOOLBAR_UTILITY_GROUP_IDS.has(group.id))
@@ -3472,13 +3472,16 @@ const ToolbarPlugin = ({
   // were on and may click into it themselves. A selected MERMAID diagram is the
   // one exception; see the activation effect below. (The separate line is kept
   // only for the non-ribbon floating selection toolbar, further below.)
-  const hasContextualTab = canShowAllItems && !!effectiveContextualWidget && contextualButtons.length > 0
-  const showToolbarControls = isEditable || (retainWhileReadonly && hasBeenEditable && isToolbarFixedToTop && !isMobile)
+  const hasContextualTab = isEditable && canShowAllItems && !!effectiveContextualWidget && contextualButtons.length > 0
+  const showToolbarControls =
+    isEditable ||
+    resolvedGroups.length > 0 ||
+    (retainWhileReadonly && hasBeenEditable && isToolbarFixedToTop && !isMobile)
   const ribbonTabs = [
     ...superGroupTabs
-      .filter((tab) => showToolbarControls && tab.id !== 'review' && tab.id !== 'checklistTab')
+      .filter((tab) => showToolbarControls && (!isEditable || tab.id !== 'review') && tab.id !== 'checklistTab')
       .map((tab) => ({ id: tab.id as string, label: tab.label })),
-    ...(note && showToolbarControls ? [{ id: 'review', label: 'Review' }] : []),
+    ...(isEditable && note && showToolbarControls ? [{ id: 'review', label: 'Review' }] : []),
     ...superGroupTabs
       .filter((tab) => showToolbarControls && tab.id === 'checklistTab')
       .map((tab) => ({ id: tab.id as string, label: tab.label })),
@@ -3489,13 +3492,13 @@ const ToolbarPlugin = ({
   const effectiveTabId =
     activeTabId && ribbonTabs.some((tab) => tab.id === activeTabId) ? activeTabId : (ribbonTabs[0]?.id ?? null)
   const isContextualActive = effectiveTabId === CONTEXTUAL_TAB_ID
-  const isReviewActive = effectiveTabId === 'review'
+  const isReviewActive = isEditable && effectiveTabId === 'review'
   const reviewGroups = superGroupTabs.find((tab) => tab.id === 'review')?.groups ?? []
   const activeGroups =
     isContextualActive || isReviewActive
       ? []
       : (superGroupTabs.find((tab) => tab.id === effectiveTabId)?.groups ?? resolvedGroups)
-  const activeRibbonGroups = activeGroups.filter((group) => !TOOLBAR_UTILITY_GROUP_IDS.has(group.id))
+  const activeRibbonGroups = activeGroups.filter((group) => !isEditable || !TOOLBAR_UTILITY_GROUP_IDS.has(group.id))
 
   useEffect(() => {
     if (effectiveTabId !== 'home') {
@@ -3751,8 +3754,7 @@ const ToolbarPlugin = ({
         className={classNames(
           'bg-contrast',
           !showToolbarControls ? 'hidden opacity-0' : '',
-          showToolbarControls && !isEditable && 'opacity-60',
-          isMobile && !canShowToolbarOnMobile ? 'hidden' : '',
+          isEditable && isMobile && !canShowToolbarOnMobile ? 'hidden' : '',
           !isMobile && 'border-border bg-default border-b',
           !isMobile
             ? !isToolbarFixedToTop && isEditable
@@ -3769,20 +3771,6 @@ const ToolbarPlugin = ({
           // toolbar's class attribute is the same string it has always been.
           isAutoHideActive && 'relative !border-b-0 !pb-0',
         )}
-        inert={!isEditable}
-        aria-disabled={!isEditable || undefined}
-        onClickCapture={(event) => {
-          if (!isEditable) {
-            event.preventDefault()
-            event.stopPropagation()
-          }
-        }}
-        onKeyDownCapture={(event) => {
-          if (!isEditable) {
-            event.preventDefault()
-            event.stopPropagation()
-          }
-        }}
         id="super-mobile-toolbar"
         ref={containerRef}
         // Drive every toolbar icon's size from the user's SuperToolbarIconSize
@@ -3795,7 +3783,7 @@ const ToolbarPlugin = ({
         // different keys, so they don't clash with this custom property.
         style={{ ['--super-toolbar-icon-size' as string]: toolbarIconSize }}
       >
-        {linkNode && !isEditingLink && (
+        {isEditable && linkNode && !isEditingLink && (
           <LinkViewer
             key={linkNode.__key}
             linkNode={linkNode}
@@ -3804,7 +3792,7 @@ const ToolbarPlugin = ({
             editor={activeEditor}
           />
         )}
-        {isEditingLink && (
+        {isEditable && isEditingLink && (
           <LinkEditor
             editor={activeEditor}
             setIsEditingLink={setIsEditingLink}
@@ -4307,7 +4295,7 @@ const ToolbarPlugin = ({
       <Popover
         title={t('tableOfContentsLower')}
         anchorElement={tocAnchorRef}
-        open={isEditable && isTOCOpen}
+        open={isTOCOpen}
         togglePopover={() => setIsTOCOpen(!isTOCOpen)}
         side={isMobile ? 'top' : 'bottom'}
         align="start"
@@ -5643,7 +5631,7 @@ const ToolbarPlugin = ({
       <Popover
         title={t('copyOptions')}
         anchorElement={copyAnchorRef}
-        open={isEditable && isCopyMenuOpen}
+        open={isCopyMenuOpen}
         togglePopover={() => setIsCopyMenuOpen(!isCopyMenuOpen)}
         side={isMobile ? 'top' : 'bottom'}
         align="start"

@@ -100,9 +100,6 @@ jest.setTimeout(60000)
  * The run of three spaces is real: `classNames` keeps empty strings.
  */
 const DOCKED_CLASS_BEFORE_THE_FEATURE = 'bg-contrast   border-border bg-default border-b w-full px-1 py-1'
-/** The same root for a locked note, which hides it. */
-const LOCKED_CLASS_BEFORE_THE_FEATURE =
-  'bg-contrast hidden opacity-0  border-border bg-default border-b w-full px-1 py-1'
 /** The command panel's class attribute before this feature existed. */
 // Checklist/Review sections occupy a full-width row within the ribbon panel.
 // Auto-hide must preserve this baseline when expanded.
@@ -479,10 +476,11 @@ describe('expanded (the default)', () => {
     expect(bar(tile).getAttribute('class')).toBe(DOCKED_CLASS_BEFORE_THE_FEATURE)
   })
 
-  it('still hides the toolbar of a locked note exactly as before', async () => {
+  it('offers viewing tools when a note becomes read-only', async () => {
     const tile = await mountTile()
     await act(async () => tile.editor.setEditable(false))
-    expect(bar(tile).getAttribute('class')).toBe(LOCKED_CLASS_BEFORE_THE_FEATURE)
+    expect(bar(tile).classList.contains('hidden')).toBe(false)
+    expect(bar(tile).querySelector('button[aria-label="Print"]')).not.toBeNull()
   })
 })
 
@@ -832,13 +830,16 @@ describe('collapsed', () => {
   })
 
   describe('where it does not apply', () => {
-    it('shows nothing of it on a locked note, and hides the toolbar exactly as before', async () => {
+    it('keeps viewing tools visible in read mode without auto-hide', async () => {
       const tile = await mountTile()
       expect(state(tile)).toBe('hidden')
 
       await act(async () => tile.editor.setEditable(false))
 
-      expect(bar(tile).getAttribute('class')).toBe(LOCKED_CLASS_BEFORE_THE_FEATURE)
+      expect(classes(bar(tile))).not.toContain('hidden')
+      expect(classes(bar(tile))).not.toContain('relative')
+      expect(bar(tile).hasAttribute('inert')).toBe(false)
+      expect(bar(tile).querySelector('button[aria-label="Print"]')).not.toBeNull()
       expect(panel(tile).getAttribute('class')).toBe(PANEL_CLASS_BEFORE_THE_FEATURE)
       expect(attributeNames(panel(tile))).toEqual(['class'])
     })
@@ -852,6 +853,17 @@ describe('collapsed', () => {
       expect(bar(tile).querySelector(`[${TOOLBAR_AUTO_HIDE_STATE_ATTRIBUTE}]`)).toBeNull()
       expect(bar(tile).querySelector('[inert]')).toBeNull()
       expect(bar(tile).querySelector('.invisible')).toBeNull()
+    })
+
+    it('offers viewing tools when a floating editor switches to read mode', async () => {
+      docked = false
+      const tile = await mountTile()
+      await act(async () => tile.editor.setEditable(false))
+      expect(isFloating(tile)).toBe(false)
+      expect(classes(bar(tile))).not.toContain('hidden')
+      expect(bar(tile).querySelector('button[aria-label="Print"]')).not.toBeNull()
+      await act(async () => tile.editor.setEditable(true))
+      expect(isFloating(tile)).toBe(true)
     })
 
     it('leaves the mobile toolbar alone', async () => {

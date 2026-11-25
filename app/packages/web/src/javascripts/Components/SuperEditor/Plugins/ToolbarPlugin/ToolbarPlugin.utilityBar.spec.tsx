@@ -22,13 +22,18 @@
  */
 import { act, useEffect } from 'react'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
-import type { LexicalEditor } from 'lexical'
+import { RichTextPlugin } from '@lexical/react/LexicalRichTextPlugin'
+import { ContentEditable } from '@lexical/react/LexicalContentEditable'
+import { LexicalErrorBoundary } from '@lexical/react/LexicalErrorBoundary'
+import { $createParagraphNode, $createTextNode, $getRoot, COMMAND_PRIORITY_EDITOR, LexicalEditor } from 'lexical'
 import { createRoot, Root } from 'react-dom/client'
 import { LocalPrefDefaults, PrefDefaults, PrefKey } from '@standardnotes/snjs'
 import { BlocksEditorComposer } from '../../BlocksEditorComposer'
 import ToolbarPlugin from './ToolbarPlugin'
 import ApplicationProvider from '@/Components/ApplicationProvider'
 import AndroidBackHandlerProvider from '@/NativeMobileWeb/useAndroidBackHandler'
+import { OPEN_SUPER_SEARCH_COMMAND } from '../SearchPlugin/searchCommands'
+import NoteSelectionPlugin from '../NoteSelectionPlugin'
 jest.mock('./AssistantChangesToolbar', () => ({
   __esModule: true,
   default: () => <button aria-label="AI changes">AI changes</button>,
@@ -101,14 +106,33 @@ const CaptureEditor = () => {
   }, [editor])
   return null
 }
-const mount = async (retainWhileReadonly = false, readonly = false) => {
+const mount = async (retainWhileReadonly = false, readonly = false, withContents = false) => {
   await act(async () => {
     root.render(
       <ApplicationProvider application={fakeApp}>
         <AndroidBackHandlerProvider application={fakeApp}>
-          <BlocksEditorComposer initialValue={undefined} readonly={readonly}>
-            <CaptureEditor />
-            <ToolbarPlugin retainWhileReadonly={retainWhileReadonly} />
+          <BlocksEditorComposer
+            initialValue={
+              withContents
+                ? () => $getRoot().append($createParagraphNode().append($createTextNode('Read this note')))
+                : undefined
+            }
+            readonly={readonly}
+          >
+            <div id="super-editor">
+              <CaptureEditor />
+              <ToolbarPlugin retainWhileReadonly={retainWhileReadonly} />
+              {withContents && (
+                <>
+                  <RichTextPlugin
+                    contentEditable={<ContentEditable className="ContentEditable__root" />}
+                    placeholder={null}
+                    ErrorBoundary={LexicalErrorBoundary}
+                  />
+                  <NoteSelectionPlugin />
+                </>
+              )}
+            </div>
           </BlocksEditorComposer>
         </AndroidBackHandlerProvider>
       </ApplicationProvider>,
@@ -287,35 +311,76 @@ describe('the merged clipboard + formatting-tabs bar', () => {
 })
 
 describe('collaborative ribbon recovery', () => {
-  it('keeps the same established ribbon and tab visible but inert until editing resumes', async () => {
+  it('keeps viewing tools available while editing is suspended and restores the editing tab', async () => {
     await mount(true)
     await clickTab('Layout')
     const toolbar = container.querySelector('#super-mobile-toolbar')!
     const strip = tabStrip()
-    const labels = tabLabels()
     await act(async () => mountedEditor.setEditable(false))
     expect(container.querySelector('#super-mobile-toolbar')).toBe(toolbar)
     expect(toolbar.classList.contains('hidden')).toBe(false)
-    expect(toolbar.hasAttribute('inert')).toBe(true)
+    expect(toolbar.hasAttribute('inert')).toBe(false)
     expect(tabStrip()).toBe(strip)
-    expect(tabLabels()).toEqual(labels)
-    expect(container.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Layout')
-    // jsdom does not implement inert; the capture guard also protects portals.
-    await clickTab('Home')
-    expect(container.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Layout')
+    expect(tabLabels()).toEqual(['Home', 'Review', 'Tools'])
+    expect(container.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Home')
+    expect(container.querySelector('button[aria-label="copy"]')).not.toBeNull()
+    expect(container.querySelector('button[aria-label="Print"]')).not.toBeNull()
+    expect(container.querySelector('button[aria-label="cut"]')).toBeNull()
+    expect(group('Font')).toBeNull()
     await act(async () => mountedEditor.setEditable(true))
     expect(toolbar.hasAttribute('inert')).toBe(false)
     expect(container.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Layout')
   })
-  it('does not expose a ribbon for an initially read-only collaborative note', async () => {
+  it('offers viewing tools on an initially read-only collaborative note', async () => {
     await mount(true, true)
-    expect(container.querySelector('#super-mobile-toolbar')?.classList.contains('hidden')).toBe(true)
-    expect(tabLabels()).toEqual([])
+    expect(container.querySelector('#super-mobile-toolbar')?.classList.contains('hidden')).toBe(false)
+    expect(tabLabels()).toEqual(['Home', 'Review', 'Tools'])
+    await clickTab('Tools')
+    expect(group('Find')).not.toBeNull()
+    expect(group('Selection')).not.toBeNull()
+    expect(group('Find')!.textContent).not.toContain('replace')
+    const find = jest.fn(() => true)
+    const stop = mountedEditor.registerCommand(OPEN_SUPER_SEARCH_COMMAND, find, COMMAND_PRIORITY_EDITOR)
+    try {
+      const button = [...group('Find')!.querySelectorAll('button')].find((button) => button.textContent === 'Find')!
+      await act(async () => button.click())
+      expect(find).toHaveBeenCalledTimes(1)
+    } finally {
+      stop()
+    }
   })
-  it('preserves ordinary read-only behavior outside collaboration', async () => {
+  it('offers viewing tools outside collaboration too', async () => {
     await mount()
     await act(async () => mountedEditor.setEditable(false))
-    expect(container.querySelector('#super-mobile-toolbar')?.classList.contains('hidden')).toBe(true)
-    expect(tabLabels()).toEqual([])
+    expect(container.querySelector('#super-mobile-toolbar')?.classList.contains('hidden')).toBe(false)
+    expect(tabLabels()).toEqual(['Home', 'Review', 'Tools'])
+  })
+
+  it('selects all and copies the note through real read-mode toolbar buttons', async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
+    const writeText = jest.fn(async () => undefined)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    try {
+      await mount(false, true, true)
+      const before = mountedEditor.getEditorState().toJSON()
+      await clickTab('Tools')
+      const select = [...group('Selection')!.querySelectorAll('button')].find(
+        (button) => button.textContent === 'selectAll',
+      )!
+      await act(async () => select.click())
+      expect(document.getSelection()?.toString()).toBe('Read this note')
+      await clickTab('Home')
+      const copy = container.querySelector<HTMLButtonElement>('button[aria-label="copy"]')!
+      expect(copy.getAttribute('aria-disabled')).not.toBe('true')
+      await act(async () => copy.click())
+      expect(writeText).toHaveBeenCalledWith('Read this note')
+      expect(mountedEditor.getEditorState().toJSON()).toEqual(before)
+    } finally {
+      if (descriptor) {
+        Object.defineProperty(navigator, 'clipboard', descriptor)
+      } else {
+        Reflect.deleteProperty(navigator, 'clipboard')
+      }
+    }
   })
 })

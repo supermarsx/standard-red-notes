@@ -31,6 +31,7 @@ import TableActionMenuPlugin from './Plugins/TableCellActionMenuPlugin'
 import ToolbarPlugin from './Plugins/ToolbarPlugin/ToolbarPlugin'
 import ListStylePlugin from './Plugins/ListStylePlugin/ListStylePlugin'
 import BlockStylePlugin from './Plugins/BlockStylePlugin'
+import NoteSelectionPlugin from './Plugins/NoteSelectionPlugin'
 import { useMediaQuery, MutuallyExclusiveMediaQueryBreakpoints } from '@/Hooks/useMediaQuery'
 import RemoteImagePlugin from './Plugins/RemoteImagePlugin/RemoteImagePlugin'
 import CodeOptionsPlugin from './Plugins/CodeOptionsPlugin/CodeOptions'
@@ -398,6 +399,7 @@ export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
       <ListPlugin />
       <ListStylePlugin />
       <BlockStylePlugin />
+      <NoteSelectionPlugin />
       <MarkdownShortcutPlugin transformers={MarkdownTransformers} />
       <TablePlugin hasCellMerge hasHorizontalScroll />
       <TableWidgetLayoutPlugin />

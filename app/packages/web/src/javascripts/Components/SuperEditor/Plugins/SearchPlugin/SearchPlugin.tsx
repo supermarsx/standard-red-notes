@@ -1,4 +1,5 @@
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
+import { useLexicalEditable } from '@lexical/react/useLexicalEditable'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useApplication } from '../../../ApplicationProvider'
 import {
@@ -43,6 +44,7 @@ import Icon from '../../../Icon/Icon'
 export function SearchPlugin() {
   const application = useApplication()
   const [editor] = useLexicalComposerContext()
+  const isEditable = useLexicalEditable()
 
   const [isSearchActive, setIsSearchActive] = useState(false)
   const [fullscreenElement, setFullscreenElement] = useState<Element | null>(null)
@@ -73,14 +75,21 @@ export function SearchPlugin() {
   const [regexError, setRegexError] = useState<string | null>(null)
 
   const [isReplaceMode, setIsReplaceMode] = useState(false)
+  const showReplaceMode = isEditable && isReplaceMode
   const revealReplaceMode = useCallback(() => {
+    if (!editor.isEditable()) {
+      return
+    }
     setIsSearchActive(true)
     setIsReplaceMode(true)
-  }, [])
+  }, [editor])
   const toggleReplaceMode = useCallback(() => {
+    if (!editor.isEditable()) {
+      return
+    }
     setIsSearchActive(true)
     setIsReplaceMode((enabled) => !enabled)
-  }, [])
+  }, [editor])
   const [replaceQuery, setReplaceQuery] = useState('')
 
   const highlightRendererRef = useRef<SearchHighlightRendererMethods>(null)
@@ -342,6 +351,9 @@ export function SearchPlugin() {
    */
   const runReplace = useCallback(
     (replaceAll: boolean) => {
+      if (!editor.isEditable()) {
+        return
+      }
       const options = currentOptions()
       const compiled = compileSearch(query, options, replaceAll)
       if (compiled.error) {
@@ -506,7 +518,7 @@ export function SearchPlugin() {
     <>
       <div
         role="dialog"
-        aria-label={isReplaceMode ? 'Find and replace in note' : 'Find in note'}
+        aria-label={showReplaceMode ? 'Find and replace in note' : 'Find in note'}
         data-super-search-panel="true"
         ref={setContainerRef}
         style={containerStyle}
@@ -519,7 +531,7 @@ export function SearchPlugin() {
             onPointerUp={endDrag}
             className="border-border flex cursor-grab touch-none items-center justify-between gap-4 border-b px-2 py-1 active:cursor-grabbing"
           >
-            <span className="text-sm font-semibold">{isReplaceMode ? 'Find & Replace' : 'Find'}</span>
+            <span className="text-sm font-semibold">{showReplaceMode ? 'Find & Replace' : 'Find'}</span>
             <div className="flex items-center gap-1">
               <button
                 type="button"
@@ -540,7 +552,7 @@ export function SearchPlugin() {
             </div>
           </div>
           <div className="flex">
-            {editor.isEditable() && (
+            {isEditable && (
               <button
                 className="focus:ring-none border-border hover:bg-contrast focus:shadow-info border-r px-1 focus:shadow-inner"
                 onClick={toggleReplaceMode}
@@ -656,7 +668,7 @@ export function SearchPlugin() {
                   {regexError}
                 </div>
               )}
-              {isReplaceMode && (
+              {showReplaceMode && (
                 <div className="flex flex-wrap items-center gap-2 md:flex-nowrap">
                   <input
                     type="text"

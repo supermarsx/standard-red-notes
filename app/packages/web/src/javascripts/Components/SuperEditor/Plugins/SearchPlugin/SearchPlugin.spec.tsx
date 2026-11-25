@@ -92,6 +92,35 @@ it('opens Find above the editor context and keeps its highlight layer beside the
   expect(document.querySelector('[data-super-search-panel]')).toBeNull()
 })
 
+it('opens Find in read mode without offering replacement controls', async () => {
+  const before = editor.getEditorState().toJSON()
+  await act(async () => {
+    editor.setEditable(false)
+    editor.dispatchCommand(OPEN_SUPER_SEARCH_COMMAND, undefined)
+  })
+  const panel = document.querySelector<HTMLElement>('[data-super-search-panel]')!
+  expect(panel.getAttribute('aria-label')).toBe('Find in note')
+  expect(panel.querySelector('input')).not.toBeNull()
+  expect(panel.textContent).not.toContain('Replace')
+  expect(editor.getEditorState().toJSON()).toEqual(before)
+})
+
+it('retires replacement controls immediately when an open panel enters read mode', async () => {
+  await act(async () => {
+    editor.dispatchCommand(OPEN_SUPER_SEARCH_REPLACE_COMMAND, undefined)
+  })
+  expect(document.querySelector('[placeholder="Replace"]')).not.toBeNull()
+  await act(async () => {
+    editor.setEditable(false)
+  })
+  expect(document.querySelector('[placeholder="Replace"]')).toBeNull()
+  expect(document.querySelector('[data-super-search-panel]')?.getAttribute('aria-label')).toBe('Find in note')
+  await act(async () => {
+    editor.dispatchCommand(OPEN_SUPER_SEARCH_REPLACE_COMMAND, undefined)
+  })
+  expect(document.querySelector('[placeholder="Replace"]')).toBeNull()
+})
+
 it('keeps the minimized Find bubble in the overlay layer and restores Find and Replace', async () => {
   await act(async () => {
     editor.dispatchCommand(OPEN_SUPER_SEARCH_REPLACE_COMMAND, undefined)
