@@ -21,7 +21,13 @@ import { StorageLargestItem, StorageUsageSnapshot } from '@/Utils/Storage/storag
 import { PrefKey } from '@standardnotes/snjs'
 import { confirmDialog } from '@standardnotes/ui-services'
 import { BYTES_PER_GB, BYTES_PER_MB, resolveStorageCapState, STORAGE_CAP_UNLIMITED } from './storageCap'
-import { contentTypeLabel, loadCachedSnapshot, percentOf, saveCachedSnapshot } from './storageDisplay'
+import {
+  contentTypeDescription,
+  contentTypeLabel,
+  loadCachedSnapshot,
+  percentOf,
+  saveCachedSnapshot,
+} from './storageDisplay'
 import { deleteLargestItem, exportLargestItems, openLargestItem } from './storageItemActions'
 import {
   isDeletableStorageItem,
@@ -255,7 +261,7 @@ const Storage: FunctionComponent<Props> = ({ application }: Props) => {
       ? 'h-full bg-danger'
       : 'h-full bg-info'
 
-  const largest = snapshot?.largest ?? []
+  const largest = useMemo(() => snapshot?.largest ?? [], [snapshot?.largest])
 
   const toggleSelected = useCallback((uuid: string) => {
     setSelected((prev) => {
@@ -490,13 +496,15 @@ const Storage: FunctionComponent<Props> = ({ application }: Props) => {
               {snapshot?.itemCount ?? 0} item{(snapshot?.itemCount ?? 0) === 1 ? '' : 's'}.
             </Text>
 
-            <div className="mt-2 flex flex-col gap-3">
+            <div className="mt-2 grid grid-cols-1 gap-4 xl:grid-cols-2">
               {buckets.map((bucket) => {
                 const pct = percentOf(bucket.bytes, snapshot?.totalBytes ?? 0)
                 return (
                   <div key={bucket.contentType}>
                     <div className="flex items-baseline justify-between text-sm lg:text-xs">
-                      <span className="font-medium">{contentTypeLabel(bucket.contentType)}</span>
+                      <span className="font-medium" title={bucket.contentType}>
+                        {contentTypeLabel(bucket.contentType)}
+                      </span>
                       <span className="text-passive-1">
                         {formatBytes(bucket.bytes)} · {bucket.count} item{bucket.count === 1 ? '' : 's'} ·{' '}
                         {pct.toFixed(1)}%
@@ -505,6 +513,11 @@ const Storage: FunctionComponent<Props> = ({ application }: Props) => {
                     <div className="bg-passive-3 mt-1 h-1.5 w-full overflow-hidden rounded-full">
                       <div className="bg-info h-full" style={{ width: `${pct}%` }} />
                     </div>
+                    <p className="text-passive-1 mt-1 text-xs">{contentTypeDescription(bucket.contentType)}</p>
+                    <details className="text-passive-1 mt-0.5 text-[0.6875rem]">
+                      <summary className="cursor-pointer">Stored type</summary>
+                      <code>{bucket.contentType}</code>
+                    </details>
                   </div>
                 )
               })}
