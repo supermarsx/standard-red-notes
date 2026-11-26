@@ -12,6 +12,8 @@ import { ServerSyncPushContextualPayload } from '../../Abstract/Contextual/Serve
 import { payloadByFinalizingSyncState } from './Utilities/ApplyDirtyState'
 import { isStaleSelfEchoOfBase } from './Utilities/StaleSelfEcho'
 import { ItemsKeyDelta } from './ItemsKeyDelta'
+import { ServerSyncSavedContextualPayload } from '../../Abstract/Contextual/ServerSyncSaved'
+import { isLitePayload } from '../../Abstract/Payload/Lite/LitePayload'
 import { extendSyncDelta, SyncDeltaEmit } from './Abstract/DeltaEmit'
 import { SyncDeltaInterface } from './Abstract/SyncDeltaInterface'
 
@@ -22,6 +24,7 @@ export class DeltaRemoteRetrieved implements SyncDeltaInterface {
     private itemsSavedOrSaving: ServerSyncPushContextualPayload[],
     readonly historyMap: HistoryMap,
     readonly conflictPolicy?: SyncConflictPolicy,
+    readonly acknowledgedSaves: readonly ServerSyncSavedContextualPayload[] = [],
   ) {}
 
   private isUuidOfPayloadCurrentlySavingOrSaved(uuid: string): boolean {
@@ -36,6 +39,7 @@ export class DeltaRemoteRetrieved implements SyncDeltaInterface {
     }
 
     const conflicted: FullyFormedPayloadInterface[] = []
+    const acknowledgedByUuid = new Map(this.acknowledgedSaves.map((saved) => [saved.uuid, saved]))
 
     /**
      * If we have retrieved an item that was saved as part of this ongoing sync operation,
@@ -54,14 +58,43 @@ export class DeltaRemoteRetrieved implements SyncDeltaInterface {
       }
 
       const isSavedOrSaving = this.isUuidOfPayloadCurrentlySavingOrSaved(apply.uuid)
+      const base = this.baseCollection.find(apply.uuid)
+      const acknowledged = acknowledgedByUuid.get(apply.uuid)
+      if (
+        base &&
+        (base.dirty || isSavedOrSaving) &&
+        isDecryptedPayload(base) &&
+        !isLitePayload(base) &&
+        isDecryptedPayload(apply) &&
+        base.content_type === apply.content_type &&
+        base.shared_vault_uuid === apply.shared_vault_uuid &&
+        base.key_system_identifier === apply.key_system_identifier
+      ) {
+        // A pending upload does not turn an already-known older server row into a
+        // competing edit. A matching save ACK additionally proves progression past
+        // the pre-upload timestamp, even when the user edited again during transit.
+        const coveredByAcknowledgement =
+          isSavedOrSaving &&
+          acknowledged &&
+          !acknowledged.deleted &&
+          acknowledged.content_type === apply.content_type &&
+          acknowledged.shared_vault_uuid === apply.shared_vault_uuid &&
+          acknowledged.key_system_identifier === apply.key_system_identifier &&
+          Number.isSafeInteger(apply.updated_at_timestamp) &&
+          apply.updated_at_timestamp > 0 &&
+          Number.isSafeInteger(acknowledged.updated_at_timestamp) &&
+          apply.updated_at_timestamp <= acknowledged.updated_at_timestamp
+        if (isStaleSelfEchoOfBase(apply, base) || coveredByAcknowledgement) {
+          continue
+        }
+      }
 
-      if (isSavedOrSaving) {
+      if (isSavedOrSaving && (!base || base.dirty || !isDecryptedPayload(base))) {
         conflicted.push(apply)
 
         continue
       }
 
-      const base = this.baseCollection.find(apply.uuid)
       if (base?.dirty && !isErrorDecryptingPayload(base)) {
         /**
          * SELF-ECHO, NOT A CONFLICT.

@@ -12,7 +12,10 @@ import {
   DeltaRemoteRejected,
   DeltaEmit,
   type SyncConflictPolicy,
+  isDecryptedPayload,
+  isDeletedPayload,
 } from '@standardnotes/models'
+import { ContentType } from '@standardnotes/domain-core'
 import { DecryptedServerConflictMap } from './ServerConflictMap'
 
 type PayloadSet = {
@@ -49,7 +52,35 @@ export class ServerSyncResponseResolver {
   }
 
   private processSavedPayloads(): DeltaEmit {
-    const delta = new DeltaRemoteSaved(this.baseCollection, this.payloadSet.savedPayloads)
+    const retrievedNotes = new Map(
+      this.payloadSet.retrievedPayloads
+        .filter(
+          (payload) =>
+            payload.content_type === ContentType.TYPES.Note &&
+            (isDecryptedPayload(payload) || isDeletedPayload(payload)),
+        )
+        .map((payload) => [payload.uuid, payload]),
+    )
+    const savedPayloads = this.payloadSet.savedPayloads.filter((saved) => {
+      if (
+        saved.content_type !== ContentType.TYPES.Note ||
+        !Number.isSafeInteger(saved.updated_at_timestamp) ||
+        saved.updated_at_timestamp <= 0
+      ) {
+        return true
+      }
+      const newer = [this.baseCollection.find(saved.uuid), retrievedNotes.get(saved.uuid)].some(
+        (payload) =>
+          payload &&
+          Number.isSafeInteger(payload.updated_at_timestamp) &&
+          payload.updated_at_timestamp > saved.updated_at_timestamp,
+      )
+      // All deltas are computed against the pre-response collection. Applying an
+      // old ACK after a newer retrieval would restore the old body/timestamp and
+      // undo the conflict resolution that just preserved the competing edits.
+      return !newer
+    })
+    const delta = new DeltaRemoteSaved(this.baseCollection, savedPayloads)
 
     return delta.result()
   }
@@ -63,6 +94,7 @@ export class ServerSyncResponseResolver {
       this.payloadsSavedOrSaving,
       this.historyMap,
       this.conflictPolicy,
+      this.payloadSet.savedPayloads,
     )
 
     return delta.result()

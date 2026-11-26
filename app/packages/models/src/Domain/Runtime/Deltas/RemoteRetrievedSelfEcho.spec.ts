@@ -1,4 +1,5 @@
 import { ContentType } from '@standardnotes/domain-core'
+import { ServerSyncSavedContextualPayload } from '../../Abstract/Contextual/ServerSyncSaved'
 import { UuidGenerator } from '@standardnotes/utils'
 import { FillItemContent } from '../../Abstract/Content/ItemContent'
 import { AppDataField } from '../../Abstract/Item/Types/AppDataField'
@@ -7,6 +8,7 @@ import {
   DecryptedPayload,
   DecryptedPayloadInterface,
   FullyFormedPayloadInterface,
+  createLitePayloadFromDecrypted,
   PayloadTimestampDefaults,
 } from '../../Abstract/Payload'
 import { NoteContent } from '../../Syncable/Note'
@@ -103,13 +105,19 @@ describe('remote retrieved self-echo', () => {
   const run = (
     base: FullyFormedPayloadInterface | undefined,
     apply: FullyFormedPayloadInterface,
-    options: { savedOrSaving?: ServerSyncPushContextualPayload[]; historyMap?: HistoryMap } = {},
+    options: {
+      savedOrSaving?: ServerSyncPushContextualPayload[]
+      historyMap?: HistoryMap
+      acknowledged?: ServerSyncSavedContextualPayload[]
+    } = {},
   ) => {
     const delta = new DeltaRemoteRetrieved(
       base ? collectionOf(base) : collectionOf(),
       collectionOf(apply),
       options.savedOrSaving ?? [],
       options.historyMap ?? {},
+      undefined,
+      options.acknowledged ?? [],
     )
 
     const result = delta.result()
@@ -153,6 +161,125 @@ describe('remote retrieved self-echo', () => {
     it('declines when neither side has a comparable timestamp', () => {
       expect(isStaleSelfEchoOfBase(at(0), at(0))).toBe(false)
     })
+  })
+
+  it('ignores a retrieval covered by this response own save acknowledgement while a newer local edit stays dirty', () => {
+    const base = notePayload({
+      text: LOCAL_EDIT,
+      dirty: true,
+      updatedAtTimestamp: ACKNOWLEDGED_TS,
+      userModifiedMsAgo: SETTLED,
+    })
+    const echo = notePayload({
+      text: SERVER_TEXT,
+      dirty: false,
+      updatedAtTimestamp: ACKNOWLEDGED_TS + 100,
+      userModifiedMsAgo: SETTLED,
+    })
+    const acknowledged = {
+      uuid: NOTE_UUID,
+      content_type: base.content_type,
+      deleted: false,
+      updated_at_timestamp: ACKNOWLEDGED_TS + 100,
+    } as ServerSyncSavedContextualPayload
+    const result = run(base, echo, {
+      savedOrSaving: [{ uuid: NOTE_UUID }] as ServerSyncPushContextualPayload[],
+      acknowledged: [acknowledged],
+    })
+    expect(result.emits).toHaveLength(0)
+    expect(base.dirty).toBe(true)
+    expect(textOf(base)).toBe(LOCAL_EDIT)
+  })
+
+  it('ignores an older page echo after this operation has already acknowledged and cleaned the note', () => {
+    const base = notePayload({
+      text: LOCAL_EDIT,
+      dirty: false,
+      updatedAtTimestamp: ACKNOWLEDGED_TS + 100,
+      userModifiedMsAgo: SETTLED,
+    })
+    const echo = notePayload({
+      text: SERVER_TEXT,
+      dirty: false,
+      updatedAtTimestamp: ACKNOWLEDGED_TS,
+      userModifiedMsAgo: SETTLED,
+    })
+    expect(
+      run(base, echo, { savedOrSaving: [{ uuid: NOTE_UUID }] as ServerSyncPushContextualPayload[] }).emits,
+    ).toHaveLength(0)
+  })
+
+  it('accepts a genuine newer peer revision without copying an already-clean saved note', () => {
+    const base = notePayload({
+      text: SERVER_TEXT,
+      dirty: false,
+      updatedAtTimestamp: ACKNOWLEDGED_TS,
+      userModifiedMsAgo: SETTLED,
+    })
+    const peer = notePayload({
+      text: PEER_TEXT,
+      dirty: false,
+      updatedAtTimestamp: ACKNOWLEDGED_TS + 100,
+      userModifiedMsAgo: SETTLED,
+    })
+    const result = run(base, peer, { savedOrSaving: [{ uuid: NOTE_UUID }] as ServerSyncPushContextualPayload[] })
+    expect(result.emits).toHaveLength(1)
+    expect(result.copies).toHaveLength(0)
+    expect(textOf(result.atOriginalUuid)).toBe(PEER_TEXT)
+  })
+
+  it('still hydrates an already-clean body-stripped note from its full retrieval', () => {
+    const full = notePayload({
+      text: SERVER_TEXT,
+      dirty: false,
+      updatedAtTimestamp: ACKNOWLEDGED_TS,
+      userModifiedMsAgo: SETTLED,
+    })
+    const base = createLitePayloadFromDecrypted(full)
+    const result = run(base, full, { savedOrSaving: [{ uuid: NOTE_UUID }] as ServerSyncPushContextualPayload[] })
+    expect(textOf(result.atOriginalUuid)).toBe(SERVER_TEXT)
+    expect(result.copies).toHaveLength(0)
+  })
+
+  it.each([
+    'newer-peer-write',
+    'other-vault',
+    'other-key-system',
+    'other-type',
+    'other-uuid',
+    'no-upload',
+    'missing-server-time',
+    'deleted-ack',
+  ])('preserves a genuine or unproved competing revision: %s', (scenario) => {
+    const base = notePayload({
+      text: LOCAL_EDIT,
+      dirty: true,
+      updatedAtTimestamp: ACKNOWLEDGED_TS,
+      userModifiedMsAgo: SETTLED,
+    })
+    const echo = notePayload({
+      text: PEER_TEXT,
+      dirty: false,
+      updatedAtTimestamp: scenario === 'missing-server-time' ? 0 : ACKNOWLEDGED_TS + 100,
+      userModifiedMsAgo: SETTLED,
+    })
+    const acknowledged = {
+      uuid: NOTE_UUID,
+      content_type: base.content_type,
+      deleted: false,
+      updated_at_timestamp: ACKNOWLEDGED_TS + (scenario === 'newer-peer-write' ? 99 : 100),
+      ...(scenario === 'other-vault' ? { shared_vault_uuid: 'elsewhere' } : {}),
+      ...(scenario === 'other-key-system' ? { key_system_identifier: 'other-key-system' } : {}),
+      ...(scenario === 'other-type' ? { content_type: ContentType.TYPES.Tag } : {}),
+      ...(scenario === 'other-uuid' ? { uuid: 'different-item' } : {}),
+      ...(scenario === 'deleted-ack' ? { deleted: true } : {}),
+    } as ServerSyncSavedContextualPayload
+    const result = run(base, echo, {
+      savedOrSaving: scenario === 'no-upload' ? [] : ([{ uuid: NOTE_UUID }] as ServerSyncPushContextualPayload[]),
+      acknowledged: [acknowledged],
+    })
+    expect(result.copies).toHaveLength(1)
+    expect(textOf(result.atOriginalUuid)).toBe(PEER_TEXT)
   })
 
   /**
@@ -415,14 +542,11 @@ describe('remote retrieved self-echo', () => {
   })
 
   /**
-   * The guard belongs to the `base.dirty` arm only. The `itemsSavedOrSaving` arm compares against
-   * a base that still holds its *pre-save* timestamp, so the comparison is not meaningful there —
-   * and that arm cannot revert anyway (the user has only just pushed, so the twenty-second window
-   * keeps the base). This pins the placement: move the guard above the `isSavedOrSaving` check and
-   * this test fails.
+   * A pre-save timestamp still proves that a retrieval at or below that timestamp
+   * is stale. A genuinely newer row needs an ACK or the ordinary conflict rules.
    */
-  describe('an item saved in this same sync request still goes through conflict resolution', () => {
-    it('keeps the local payload and copies the echo, exactly as before', () => {
+  describe('an item saved in this same sync request', () => {
+    it('keeps the local payload without manufacturing a conflict for its known-stale echo', () => {
       const base = notePayload({
         text: LOCAL_EDIT,
         dirty: true,
@@ -440,10 +564,9 @@ describe('remote retrieved self-echo', () => {
         savedOrSaving: [{ uuid: NOTE_UUID }] as ServerSyncPushContextualPayload[],
       })
 
-      expect(emits).toHaveLength(2)
-      expect(textOf(atOriginalUuid)).toEqual(LOCAL_EDIT)
-      expect(copies).toHaveLength(1)
-      expect(textOf(copies[0])).toEqual(SERVER_TEXT)
+      expect(emits).toHaveLength(0)
+      expect(atOriginalUuid).toBeUndefined()
+      expect(copies).toHaveLength(0)
     })
   })
 })
