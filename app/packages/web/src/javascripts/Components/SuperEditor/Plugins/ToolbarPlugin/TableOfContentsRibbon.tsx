@@ -144,7 +144,7 @@ export default function TableOfContentsRibbon({ nodeKey }: { nodeKey: string }) 
       store={store}
       aria-label="Table of contents tools"
       data-toc-ribbon={nodeKey}
-      className="super-toolbar flex flex-grow flex-wrap items-start gap-1.5 px-1 py-1"
+      className="super-toolbar flex w-full min-w-0 flex-none flex-nowrap items-start gap-1.5 overflow-x-auto overflow-y-hidden px-1 py-1"
       onKeyDownCapture={(event) => {
         if ((event.target as Element).closest('input, select, textarea')) {
           event.stopPropagation()

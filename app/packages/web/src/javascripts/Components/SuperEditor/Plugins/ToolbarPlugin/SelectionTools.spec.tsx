@@ -23,6 +23,7 @@ jest.mock('@/Components/Panes/ResponsivePaneProvider', () => ({ useResponsiveApp
 jest.mock('@/Components/Icon/Icon', () => ({
   __esModule: true,
   default: ({ type }: { type: string }) => <span data-icon={type} />,
+  isIconEmoji: () => false,
 }))
 jest.mock('@/Components/Popover/Popover', () => ({ __esModule: true, default: () => null }))
 

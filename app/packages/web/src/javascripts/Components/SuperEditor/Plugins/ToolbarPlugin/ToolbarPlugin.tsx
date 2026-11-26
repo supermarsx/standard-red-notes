@@ -3896,7 +3896,7 @@ const ToolbarPlugin = ({
               <Toolbar
                 // Mirror the normal super-group layout: spaced, captioned segment
                 // blocks instead of one flat run of buttons.
-                className="super-toolbar flex flex-grow flex-wrap items-center gap-1.5 gap-y-1 px-1 pt-1 pb-1"
+                className="super-toolbar flex min-w-0 flex-grow flex-nowrap items-start gap-1.5 overflow-x-auto overflow-y-hidden px-1 pt-1 pb-1"
                 store={contextualToolbarStore}
                 aria-label={`${effectiveContextualWidget?.label ?? ''} tools`}
               >
@@ -3925,7 +3925,7 @@ const ToolbarPlugin = ({
                 className={classNames(
                   // A little breathing room above the group blocks pushes the (scroll)
                   // content down so the horizontal scrollbar sits slightly lower.
-                  'super-toolbar flex flex-grow items-center gap-1.5 px-1 pt-1 pb-1',
+                  'super-toolbar flex min-w-0 flex-grow items-center gap-1.5 px-1 pt-1 pb-1',
                   // Default: one horizontal line of groups (each group stacks into up
                   // to 3 rows), scrolling if they overflow. Opt-out wraps instead.
                   horizontalScroll ? 'flex-nowrap overflow-x-auto' : 'flex-wrap gap-y-1',
@@ -3969,7 +3969,7 @@ const ToolbarPlugin = ({
                           >
                             <div className="super-ribbon-gallery-commands flex flex-col items-stretch justify-center gap-1">
                               {/* History and clipboard actions share Home's compact first row. */}
-                              <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                              <div className="flex min-w-0 flex-nowrap items-center gap-1.5">
                                 {HOME_PRIMARY_BUTTON_IDS.filter((id) => visibleUtilityButtonIds.has(id)).map((id) => (
                                   <Fragment key={id}>{buttonRenderers[id]}</Fragment>
                                 ))}
@@ -4055,7 +4055,7 @@ const ToolbarPlugin = ({
                                 {section.id === 'lists' && (
                                   <>
                                     <Icon type={entry.iconName} size="custom" className="super-toolbar-icon" />
-                                    <span className="ml-1.5 text-xs whitespace-nowrap">
+                                    <span className="ml-1.5 text-xs leading-none whitespace-nowrap">
                                       {translateBlockName(entry.name, t)}
                                     </span>
                                   </>
@@ -4124,22 +4124,29 @@ const ToolbarPlugin = ({
                           className="super-toolbar-group bg-contrast flex flex-shrink-0 flex-col rounded-lg px-1 py-0.5"
                         >
                           <div className="super-ribbon-commands flex flex-col items-start justify-center gap-0.5">
-                            {buttonRows.map((rowButtons, rowIndex) => (
-                              <div key={rowIndex} className="flex items-center justify-start gap-0.5">
-                                {rowButtons.map((button, buttonIndex) => {
-                                  return button.id === ToolbarButtonId.Divider ? (
-                                    <div
-                                      key={`divider-${buttonIndex}`}
-                                      aria-hidden
-                                      role="separator"
-                                      className="border-border mx-1 h-6 w-px flex-shrink-0 self-center border-l"
-                                    />
-                                  ) : (
-                                    <Fragment key={button.id}>{buttonRenderers[button.id]}</Fragment>
-                                  )
-                                })}
-                              </div>
-                            ))}
+                            {group.id === ToolbarGroupId.Page && !group.layout
+                              ? group.buttons.map((button) => (
+                                  <Fragment key={button.id}>{buttonRenderers[button.id]}</Fragment>
+                                ))
+                              : buttonRows.map((rowButtons, rowIndex) => (
+                                  <div
+                                    key={rowIndex}
+                                    className={`flex flex-shrink-0 flex-nowrap items-center justify-start gap-0.5 ${[ToolbarGroupId.Toolbar, ToolbarGroupId.FormatPainter, ToolbarGroupId.AI].includes(group.id) ? 'row-span-3 self-stretch' : ''}`}
+                                  >
+                                    {rowButtons.map((button, buttonIndex) => {
+                                      return button.id === ToolbarButtonId.Divider ? (
+                                        <div
+                                          key={`divider-${buttonIndex}`}
+                                          aria-hidden
+                                          role="separator"
+                                          className="border-border mx-1 h-6 w-px flex-shrink-0 self-center border-l"
+                                        />
+                                      ) : (
+                                        <Fragment key={button.id}>{buttonRenderers[button.id]}</Fragment>
+                                      )
+                                    })}
+                                  </div>
+                                ))}
                           </div>
                           <span
                             aria-hidden
@@ -4178,7 +4185,7 @@ const ToolbarPlugin = ({
               <>
                 {isReviewActive && (
                   <Toolbar
-                    className="super-toolbar flex flex-grow flex-wrap items-center gap-1.5 gap-y-1 px-1 pt-1 pb-1"
+                    className="super-toolbar flex min-w-0 flex-grow flex-nowrap items-start gap-1.5 overflow-x-auto overflow-y-hidden px-1 pt-1 pb-1"
                     store={toolbarStore}
                   >
                     <ReviewTools note={note} />

@@ -46,11 +46,11 @@ const InsertSectionsBar = ({ sections }: InsertSectionsBarProps): ReactElement =
         aria-label={section.caption}
         className="super-toolbar-group bg-contrast flex flex-shrink-0 flex-col rounded-lg px-1 py-0.5"
       >
-        <div className="super-ribbon-commands flex flex-col items-start justify-center gap-0.5">
+        <div className="super-ribbon-commands">
           {section.rows.map((rowButtons, rowIndex) => (
             <div
               key={rowIndex}
-              className={`flex items-center justify-start gap-0.5 ${section.fullHeight ? 'row-span-3' : ''}`}
+              className={`flex flex-shrink-0 flex-nowrap items-center justify-start gap-0.5 ${section.fullHeight ? 'row-span-3' : ''}`}
             >
               {rowButtons.map((button, buttonIndex) => (
                 <Fragment key={buttonIndex}>{button}</Fragment>

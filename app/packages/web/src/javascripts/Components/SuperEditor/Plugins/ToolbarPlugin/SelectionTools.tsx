@@ -3,7 +3,7 @@ import { $getRoot, LexicalEditor } from 'lexical'
 import { ApplicationEvent } from '@standardnotes/snjs'
 import { classNames } from '@standardnotes/utils'
 import { addToast, ToastType } from '@standardnotes/toast'
-import Icon from '@/Components/Icon/Icon'
+import Icon, { isIconEmoji } from '@/Components/Icon/Icon'
 import Popover from '@/Components/Popover/Popover'
 import { useApplication } from '@/Components/ApplicationProvider'
 import {
@@ -21,7 +21,7 @@ import { captureSelectionSnapshot } from './SelectionReplacement'
 import { superEditorPortalTarget } from '../../ownSuperEditorElements'
 
 const BTN =
-  'flex select-none items-center gap-1.5 rounded-md px-2 py-1.5 text-text transition-colors duration-75 hover:bg-passive-4 active:bg-passive-3 disabled:opacity-40'
+  'border-border bg-default text-text flex select-none items-center gap-1.5 rounded-md border px-2 py-1.5 transition-colors duration-75 hover:bg-contrast focus-visible:border-info focus-visible:outline-none disabled:opacity-40'
 
 type RunExtra = { customInstruction?: string; language?: string }
 
@@ -66,7 +66,11 @@ const ActionButton: FunctionComponent<{
       onMouseDown={(event) => event.preventDefault()}
       onClick={() => (opensPopover ? setOpen((value) => !value) : void run(action))}
     >
-      <Icon type={action.icon} size="custom" className="text-info h-5 w-5 md:h-4 md:w-4" />
+      <Icon
+        type={isIconEmoji(action.icon) ? 'assistant' : action.icon}
+        size="custom"
+        className="super-toolbar-icon shrink-0 !text-current"
+      />
       <span className="text-xs font-medium whitespace-nowrap">{action.label}</span>
     </button>
   )
@@ -95,7 +99,7 @@ const ActionButton: FunctionComponent<{
         {action.freeform ? (
           <div className="flex flex-col gap-1">
             <textarea
-              className="border-border bg-default text-foreground focus:border-info w-full resize-none rounded border px-2 py-1 text-sm outline-none"
+              className="border-border bg-default text-text focus:border-info w-full resize-none rounded border px-2 py-1 text-sm outline-none"
               rows={2}
               autoFocus
               placeholder="Ask the AI about the selection…"
@@ -126,7 +130,7 @@ const ActionButton: FunctionComponent<{
         ) : (
           <div className="flex flex-col gap-1">
             <input
-              className="border-border bg-default text-foreground focus:border-info w-full rounded border px-2 py-1 text-sm outline-none"
+              className="border-border bg-default text-text focus:border-info w-full rounded border px-2 py-1 text-sm outline-none"
               type="text"
               autoFocus
               placeholder="Language (type any, or pick below)…"
@@ -259,7 +263,7 @@ const SelectionTools: FunctionComponent<{ editor: LexicalEditor; hasSelection: b
   const disabledBase = (!hasSelection && !noteUuid) || !availability.available
 
   return (
-    <div className="flex min-w-0 items-stretch gap-1.5" aria-label="AI selection tools">
+    <div className="text-text flex h-full min-w-max items-stretch gap-1.5" aria-label="AI selection tools">
       <div
         className="border-border grid grid-cols-2 content-center gap-0.5 border-r pr-1.5"
         role="tablist"
@@ -272,19 +276,21 @@ const SelectionTools: FunctionComponent<{ editor: LexicalEditor; hasSelection: b
             role="tab"
             aria-selected={activeGroup === group.id}
             className={classNames(
-              'flex items-center gap-1.5 rounded px-2 py-1 text-left text-xs whitespace-nowrap',
-              activeGroup === group.id ? 'bg-info-faded text-info font-semibold' : 'text-passive-0 hover:bg-passive-4',
+              'focus-visible:ring-info flex items-center gap-1.5 rounded border px-2 py-1 text-left text-xs whitespace-nowrap focus-visible:ring-1 focus-visible:outline-none',
+              activeGroup === group.id
+                ? 'border-info/30 bg-info-backdrop text-info font-semibold'
+                : 'text-passive-0 hover:bg-default border-transparent',
             )}
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => setActiveGroup(group.id)}
           >
-            <Icon type={group.icon} size="small" />
+            <Icon type={group.icon} size="custom" className="super-toolbar-icon shrink-0 !text-current" />
             {group.label}
           </button>
         ))}
       </div>
       <div
-        className="grid grid-flow-col grid-rows-2 items-center gap-0.5"
+        className="grid auto-cols-max grid-flow-col grid-rows-3 items-center gap-0.5"
         role="tabpanel"
         aria-label={`${activeGroup} actions`}
       >

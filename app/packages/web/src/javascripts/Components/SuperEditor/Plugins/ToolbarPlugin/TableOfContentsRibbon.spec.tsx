@@ -149,6 +149,10 @@ it.each([true, false])('opens a full dedicated ribbon by focusing the contents b
   expect(selectedTab()).toBe('Table of contents')
   expect(container.querySelector('#super-mobile-toolbar')!.classList.contains('hidden')).toBe(false)
   expect(ribbon()).not.toBeNull()
+  expect(ribbon()!.classList.contains('flex-nowrap')).toBe(true)
+  expect(ribbon()!.classList.contains('flex-wrap')).toBe(false)
+  expect(ribbon()!.classList.contains('overflow-x-auto')).toBe(true)
+  expect(ribbon()!.classList.contains('min-w-0')).toBe(true)
   for (const group of [
     'Contents text',
     'Title typography',

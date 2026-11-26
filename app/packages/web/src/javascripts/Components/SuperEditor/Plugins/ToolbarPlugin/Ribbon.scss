@@ -1,5 +1,5 @@
 #super-mobile-toolbar {
-  --super-ribbon-row-height: calc(var(--super-toolbar-icon-size, 0.875rem) + 1.125rem);
+  --super-ribbon-row-height: calc(max(var(--super-toolbar-icon-size, 0.875rem), 1.25rem) + 1.125rem);
   --super-ribbon-command-height: calc(3 * var(--super-ribbon-row-height) + 0.25rem);
 
   &:not(.fixed) {
@@ -14,6 +14,7 @@
 .super-ribbon-commands {
   display: grid;
   grid-auto-flow: column;
+  grid-auto-columns: max-content;
   grid-template-rows: repeat(3, minmax(0, 1fr));
   align-items: center;
   column-gap: 0.75rem;
@@ -28,14 +29,14 @@
     padding: 0.125rem 0.25rem;
 
     // Every renderer shares one fixed command area and one caption baseline.
-    // Extra controls flow into columns or remain scrollable within this area.
+    // Extra controls flow into columns; the ribbon owns horizontal scrolling.
     > :first-child {
       box-sizing: border-box;
       height: var(--super-ribbon-command-height);
       min-height: var(--super-ribbon-command-height);
       max-height: var(--super-ribbon-command-height);
       flex-shrink: 0;
-      overflow: auto;
+      overflow: visible;
     }
 
     > span[aria-hidden='true'] {
@@ -44,6 +45,38 @@
       margin-top: 0.125rem;
       padding-top: 0;
       padding-bottom: 0;
+    }
+  }
+
+  #super-mobile-toolbar .super-ribbon-gallery-commands {
+    // Keep history/clipboard on row one. Let preview boxes shrink into the
+    // remaining two rows, including when a horizontal scrollbar uses space.
+    display: grid;
+    grid-template-columns: minmax(max-content, 1fr);
+    grid-template-rows: var(--super-ribbon-row-height) minmax(0, 1fr);
+    row-gap: 0.125rem;
+    overflow-x: auto;
+    overflow-y: hidden;
+
+    > :last-child {
+      min-height: 0;
+      contain: inline-size;
+    }
+
+    .super-block-style-track,
+    .super-block-style-square {
+      height: 100%;
+      min-height: 0;
+    }
+
+    .super-block-style-preview {
+      height: auto;
+      min-height: 0;
+      flex: 1 1 0;
+    }
+
+    .super-block-style-caption {
+      flex-shrink: 0;
     }
   }
 }

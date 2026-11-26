@@ -135,7 +135,7 @@ const BlockStyleSquare = ({
       aria-pressed={isActive}
       style={{ width: GALLERY_SQUARE_WIDTH }}
       className={classNames(
-        'bg-default relative flex flex-shrink-0 flex-col items-stretch gap-1 rounded border p-1.5 select-none',
+        'super-block-style-square bg-default relative flex flex-shrink-0 flex-col items-stretch gap-1 rounded border p-1.5 select-none',
         'hover:border-info hover:bg-contrast focus-visible:border-info transition-colors duration-75 focus:outline-none',
         isActive ? 'border-info ring-info ring-2' : 'border-border',
       )}
@@ -157,7 +157,7 @@ const BlockStyleSquare = ({
           inside the box — headings/large fonts shrink to fit instead of clipping. */}
       <div
         ref={previewBoxRef}
-        className="flex h-[2.9rem] items-center justify-start overflow-hidden rounded-sm px-1.5"
+        className="super-block-style-preview flex h-[2.9rem] items-center justify-start overflow-hidden rounded-sm px-1.5"
         style={{
           backgroundColor: 'var(--sn-stylekit-editor-background-color)',
           color: 'var(--sn-stylekit-editor-foreground-color)',
@@ -171,7 +171,7 @@ const BlockStyleSquare = ({
           <BlockStylePreview descriptor={descriptor} style={inlineStyle} />
         </div>
       </div>
-      <span className="flex items-center gap-1 overflow-hidden">
+      <span className="super-block-style-caption flex items-center gap-1 overflow-hidden">
         <Icon type={descriptor.iconName} size="custom" className="text-passive-1 h-3.5 w-3.5 flex-shrink-0" />
         <span className="text-passive-0 overflow-hidden text-[0.65rem] leading-none text-ellipsis whitespace-nowrap">
           {descriptor.label}
@@ -255,12 +255,12 @@ const LeadingActivePlaceholder = () => (
   <div
     aria-hidden
     style={{ width: GALLERY_SQUARE_WIDTH }}
-    className="border-border bg-default flex flex-shrink-0 flex-col items-stretch gap-1 rounded border border-dashed p-1.5 opacity-60 select-none"
+    className="super-block-style-square border-border bg-default flex flex-shrink-0 flex-col items-stretch gap-1 rounded border border-dashed p-1.5 opacity-60 select-none"
   >
-    <div className="text-passive-1 flex h-[2.9rem] items-center justify-center overflow-hidden rounded-sm px-1.5">
+    <div className="super-block-style-preview text-passive-1 flex h-[2.9rem] items-center justify-center overflow-hidden rounded-sm px-1.5">
       <span className="text-lg leading-none">—</span>
     </div>
-    <span className="flex items-center justify-center overflow-hidden">
+    <span className="super-block-style-caption flex items-center justify-center overflow-hidden">
       <span className="text-passive-1 overflow-hidden text-[0.65rem] leading-none text-ellipsis whitespace-nowrap">
         None
       </span>
@@ -348,7 +348,7 @@ export const BlockStyleGalleryBar = ({
   return (
     <div
       ref={trackRef}
-      className="flex w-full min-w-0 items-stretch gap-1.5 overflow-hidden"
+      className="super-block-style-track flex w-full min-w-0 items-stretch gap-1.5 overflow-hidden"
       onMouseDown={(event) => event.preventDefault()}
     >
       {/* Persistent LEADING "current style" indicator: the SOLE copy of the active

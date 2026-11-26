@@ -38,6 +38,9 @@ jest.mock('./AssistantChangesToolbar', () => ({
   __esModule: true,
   default: () => <button aria-label="AI changes">AI changes</button>,
 }))
+jest.mock('@/Components/Panes/ResponsivePaneProvider', () => ({
+  useResponsiveAppPane: () => ({ presentPane: () => undefined }),
+}))
 
 // Desktop layout; `alwaysShowToolbar` (below) then docks the full ribbon.
 jest.mock('@/Hooks/useMediaQuery', () => ({
@@ -63,6 +66,7 @@ class MockResizeObserver {
 }
 
 const fakeApp = {
+  hasAccount: () => false,
   getPreference: (key: string, fallback: unknown) => {
     if (key === PrefKey.AlwaysShowSuperToolbar) {
       return true
@@ -198,7 +202,8 @@ describe('the merged clipboard + formatting-tabs bar', () => {
       'morePasteOptions',
     ])
     expect(firstRow.querySelectorAll('button')[11]?.getAttribute('aria-label')).toBe('smartChecklist')
-    expect(firstRow.classList.contains('flex-wrap')).toBe(true)
+    expect(firstRow.classList.contains('flex-nowrap')).toBe(true)
+    expect(firstRow.classList.contains('flex-wrap')).toBe(false)
     for (const button of clipboard) {
       expect(button.querySelector('.sr-only')).not.toBeNull()
     }
@@ -234,6 +239,47 @@ describe('the merged clipboard + formatting-tabs bar', () => {
   it('still renders every formatting tab', async () => {
     await mount()
     expect(tabLabels()).toEqual(['Home', 'Insert', 'Layout', 'AI', 'Tools', 'View'])
+  })
+
+  it('keeps the five Page controls in aligned command cells and the orientation control works', async () => {
+    await mount()
+    await clickTab('Layout')
+    const commands = group('Page')!.firstElementChild!
+    const buttons = [...commands.querySelectorAll<HTMLButtonElement>('button')]
+    expect(buttons).toHaveLength(5)
+    expect(buttons.every((button) => button.parentElement === commands)).toBe(true)
+    const orientation = buttons.find((button) => button.textContent === 'portrait')!
+    expect(orientation).toBeDefined()
+    await act(async () => orientation.click())
+    expect(orientation.textContent).toBe('landscape')
+  })
+
+  it('lets tall AI, Painter and Customize Toolbar controls occupy the full command area', async () => {
+    await mount()
+    await clickTab('AI')
+    const ai = group('AI')!
+    const tools = ai.querySelector('[aria-label="AI selection tools"]')!
+    expect(tools.parentElement?.classList.contains('row-span-3')).toBe(true)
+    expect(tools.querySelector('[role="tabpanel"]')?.classList.contains('grid-rows-3')).toBe(true)
+    expect(tools.querySelector('[role="tab"][aria-selected="true"] svg')).not.toBeNull()
+    await clickTab('Tools')
+    for (const label of ['Format painter', 'Toolbar']) {
+      const commands = group(label)!.firstElementChild!
+      expect(commands.firstElementChild?.classList.contains('row-span-3')).toBe(true)
+    }
+  })
+
+  it('keeps Insert list rows together within the ribbon scrolling track', async () => {
+    await mount()
+    await clickTab('Insert')
+    const lists = [...container.querySelectorAll('[role="group"]')].find((element) =>
+      /list/i.test(element.getAttribute('aria-label') ?? ''),
+    )!
+    const commands = lists.firstElementChild!
+    expect(commands.children.length).toBeLessThanOrEqual(3)
+    expect([...commands.children].every((row) => row.classList.contains('flex-nowrap'))).toBe(true)
+    expect(lists.closest('[role="toolbar"]')?.classList.contains('overflow-x-auto')).toBe(true)
+    expect(commands.querySelectorAll('button').length).toBeGreaterThan(2)
   })
 
   it('still switches the ribbon groups when a tab is clicked', async () => {
