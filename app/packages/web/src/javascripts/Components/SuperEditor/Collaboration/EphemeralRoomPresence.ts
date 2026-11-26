@@ -78,6 +78,7 @@ export type EphemeralRoomPresenceOptions = {
 export class EphemeralRoomPresence {
   private readonly sessions = new Map<string, PresenceSession>()
   private readonly presenceIdByClientId = new Map<number, string>()
+  private readonly retiredPresenceIds = new Set<string>()
   private expiryTimeout: ReturnType<typeof setTimeout> | undefined
   /** Departures held back for the applicable reconnect grace, keyed by user. */
   private readonly heldDepartures = new Map<string, HeldDeparture>()
@@ -167,6 +168,7 @@ export class EphemeralRoomPresence {
     this.heldDepartures.clear()
     this.sessions.clear()
     this.presenceIdByClientId.clear()
+    this.retiredPresenceIds.clear()
   }
 
   get size(): number {
@@ -174,8 +176,8 @@ export class EphemeralRoomPresence {
   }
 
   /** Whether this presence session has been announced here before; false means someone has just arrived. */
-  knows(presenceId: string): boolean {
-    return this.sessions.has(presenceId)
+  knows(presenceId: string, clientId?: number): boolean {
+    return this.sessions.has(presenceId) || (clientId !== undefined && this.presenceIdByClientId.has(clientId))
   }
 
   private acceptJoined(frame: Extract<PresenceFrame, { action: 'joined' }>): boolean {
@@ -191,6 +193,9 @@ export class EphemeralRoomPresence {
       return false
     }
 
+    if (this.retiredPresenceIds.has(frame.presenceId)) {
+      return false
+    }
     const existing = this.sessions.get(frame.presenceId)
     if (existing) {
       if (existing.clientId !== frame.clientId || existing.userUuid !== frame.userUuid) {
@@ -202,13 +207,31 @@ export class EphemeralRoomPresence {
       return true
     }
 
-    if (this.sessions.size >= MAX_PRESENCE_SESSIONS || this.presenceIdByClientId.has(frame.clientId)) {
+    const previousId = this.presenceIdByClientId.get(frame.clientId)
+    const previous = previousId ? this.sessions.get(previousId) : undefined
+    if (previous && previous.userUuid !== frame.userUuid) {
       return false
+    }
+    if (!previous && this.sessions.size >= MAX_PRESENCE_SESSIONS) {
+      return false
+    }
+    // Renewal overlaps two authenticated leases for one unchanged Yjs editor.
+    // Retire the old presence silently; its later leave must not remove the replacement.
+    if (previous) {
+      this.sessions.delete(previous.presenceId)
+      this.retiredPresenceIds.add(previous.presenceId)
+      if (this.retiredPresenceIds.size > MAX_PRESENCE_SESSIONS) {
+        const oldest = this.retiredPresenceIds.values().next().value
+        if (oldest) {
+          this.retiredPresenceIds.delete(oldest)
+        }
+      }
     }
 
     // R31: this user's own withheld departure means the tab was only away, so neither the
     // "left" nor a matching "joined" is worth telling anyone about.
-    const resumed = this.claimHeldDeparture(frame.userUuid)
+    const resumed =
+      previous?.joinedActivityEmitted && previous.label ? previous : this.claimHeldDeparture(frame.userUuid)
     this.sessions.set(frame.presenceId, {
       presenceId: frame.presenceId,
       userUuid: frame.userUuid,

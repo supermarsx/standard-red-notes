@@ -41,6 +41,33 @@ const leftFrame = (
 })
 
 describe('EphemeralRoomPresence', () => {
+  it('keeps an editor present across overlapping lease renewal without departure or arrival notifications', () => {
+    const activities = jest.fn()
+    const terminal = jest.fn()
+    const presence = new EphemeralRoomPresence({
+      room,
+      roomEpoch,
+      localClientId: 7,
+      resolveEncryptedAwarenessIdentity: () => ({ userUuid: 'user-1', label: 'Alice' }),
+      onActivity: activities,
+      onTerminalClient: terminal,
+    })
+    expect(presence.accept(joinedFrame())).toBe(true)
+    activities.mockClear()
+    expect(presence.knows('renewed-lease', remoteClientId)).toBe(true)
+    expect(presence.accept(joinedFrame({ presenceId: 'other-user', userUuid: 'different-user' }))).toBe(false)
+    expect(presence.accept(joinedFrame({ presenceId: 'renewed-lease' }))).toBe(true)
+    // A delayed heartbeat from the retired lease cannot replace the new one.
+    expect(presence.accept(joinedFrame())).toBe(false)
+    expect(presence.accept(leftFrame())).toBe(false)
+    expect(presence.size).toBe(1)
+    expect(presence.accept(joinedFrame({ presenceId: 'renewed-lease' }))).toBe(true)
+    expect(activities).not.toHaveBeenCalled()
+    expect(terminal).not.toHaveBeenCalled()
+    expect(presence.accept(leftFrame({ presenceId: 'renewed-lease' }))).toBe(true)
+    expect(activities).toHaveBeenCalledWith(expect.objectContaining({ action: 'left', userUuid: 'user-1' }))
+    presence.clear()
+  })
   beforeEach(() => jest.useFakeTimers())
   afterEach(() => {
     jest.clearAllTimers()

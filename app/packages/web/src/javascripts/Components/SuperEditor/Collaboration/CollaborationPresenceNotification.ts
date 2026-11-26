@@ -3,8 +3,13 @@ import type { CollaborationPresenceActivity } from './EphemeralRoomPresence'
 
 /** Render one memory-only in-app activity notification. No item is persisted. */
 export function showCollaborationPresenceActivity(
-  activity: Pick<CollaborationPresenceActivity, 'action' | 'label'>,
+  activity: Pick<CollaborationPresenceActivity, 'action' | 'label'> &
+    Partial<Pick<CollaborationPresenceActivity, 'userUuid'>>,
+  localUserUuid?: string,
 ): void {
+  if (localUserUuid && activity.userUuid === localUserUuid) {
+    return
+  }
   try {
     addToast({
       type: ToastType.Regular,

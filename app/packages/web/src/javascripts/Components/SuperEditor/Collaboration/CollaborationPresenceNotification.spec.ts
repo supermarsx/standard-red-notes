@@ -7,6 +7,13 @@ jest.mock('@standardnotes/toast', () => ({
 }))
 
 describe('showCollaborationPresenceActivity', () => {
+  it('suppresses other sessions belonging to this account, without comparing display names', () => {
+    showCollaborationPresenceActivity({ action: 'joined', label: 'Me', userUuid: 'self' }, 'self')
+    showCollaborationPresenceActivity({ action: 'left', label: 'Me', userUuid: 'self' }, 'self')
+    expect(addToast).not.toHaveBeenCalled()
+    showCollaborationPresenceActivity({ action: 'joined', label: 'Me', userUuid: 'another-user' }, 'self')
+    expect(addToast).toHaveBeenCalledTimes(1)
+  })
   it('renders joined and left transitions as transient in-app notifications', () => {
     showCollaborationPresenceActivity({ action: 'joined', label: 'Alice' })
     showCollaborationPresenceActivity({ action: 'left', label: 'Alice' })

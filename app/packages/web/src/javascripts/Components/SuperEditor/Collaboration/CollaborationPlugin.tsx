@@ -216,7 +216,7 @@ const AvailableSuperCollaborationPlugin: FunctionComponent<Props> = ({
           ...(config.editorLease.setProviderCanonicalOwnership
             ? { setCanonicalOwnership: config.editorLease.setProviderCanonicalOwnership }
             : {}),
-          onPresenceActivity: showCollaborationPresenceActivity,
+          onPresenceActivity: (activity) => showCollaborationPresenceActivity(activity, config.userUuid),
         },
       )
       trackEditorResumeProvider(editor, provider)

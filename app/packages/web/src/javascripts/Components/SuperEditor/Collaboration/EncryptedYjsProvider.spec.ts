@@ -4558,6 +4558,20 @@ describe('EncryptedYjsProvider presence between people who are both here', () =>
       expect(countAwareness()).toBe(before + 1)
 
       // The gateway also echoes this client's own join; that is nobody arriving.
+      inbound.deliver({ ...joined, presenceId: 'replacement-lease-presence' })
+      inbound.deliver({
+        t: 'room-presence',
+        room,
+        roomEpoch: joined.roomEpoch,
+        protocolVersion: 3,
+        action: 'left',
+        presenceId: joined.presenceId,
+        clientId: joined.clientId,
+        userUuid: joined.userUuid,
+        reason: 'clean-leave',
+      })
+      await provider.flush()
+      expect(countAwareness()).toBe(before + 1)
       inbound.deliver({ ...joined, presenceId: 'own-presence', clientId: local })
       await provider.flush()
       expect(countAwareness()).toBe(before + 1)

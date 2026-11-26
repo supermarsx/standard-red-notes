@@ -2110,7 +2110,8 @@ export class EncryptedYjsProvider implements Provider {
             // carries the server's presence TTL (R31).
             this.adoptPresenceHeartbeatInterval(frame.ttlMilliseconds)
           }
-          const arrival = frame.action === 'joined' && this.ephemeralPresence?.knows(frame.presenceId) === false
+          const arrival =
+            frame.action === 'joined' && this.ephemeralPresence?.knows(frame.presenceId, frame.clientId) === false
           const accepted = this.ephemeralPresence?.accept(frame)
           if (arrival && accepted) {
             // Awareness is otherwise sent only when it changes and renewed every 15 s, so
