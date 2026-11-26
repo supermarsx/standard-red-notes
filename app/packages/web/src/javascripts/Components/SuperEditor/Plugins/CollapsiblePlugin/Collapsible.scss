@@ -9,13 +9,13 @@
 
 .Collapsible__container {
   background: var(--sn-stylekit-contrast-background-color);
-  border: 1px solid var(--sn-stylekit-contrast-border-color);
+  border: 1px solid var(--sn-stylekit-border-color);
   border-radius: 10px;
   margin-bottom: 8px;
 }
 
 .Collapsible__container .Collapsible__container {
-  background-color: rgba(255, 255, 255, 0.05);
+  background-color: var(--sn-stylekit-background-color);
 }
 
 // The existing box supplies the divider; a little extra space keeps a closed

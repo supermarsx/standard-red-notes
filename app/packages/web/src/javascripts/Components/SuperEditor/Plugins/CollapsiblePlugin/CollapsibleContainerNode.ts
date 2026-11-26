@@ -7,6 +7,7 @@
  */
 
 import {
+  $getNodeByKey,
   DOMConversionMap,
   DOMConversionOutput,
   DOMExportOutput,
@@ -55,9 +56,24 @@ export class CollapsibleContainerNode extends ElementNode {
     dom.classList.add('Collapsible__container')
     dom.open = this.__open
     dom.addEventListener('toggle', () => {
-      const open = editor.getEditorState().read(() => this.getOpen())
+      if (!editor.isEditable()) {
+        return
+      }
+      const open = editor.getEditorState().read(() => {
+        const node = $getNodeByKey(this.getKey())
+        return $isCollapsibleContainerNode(node) ? node.getOpen() : undefined
+      })
+      if (open === undefined) {
+        return
+      }
       if (open !== dom.open) {
-        editor.update(() => this.toggleOpen())
+        const nextOpen = dom.open
+        editor.update(() => {
+          const node = $getNodeByKey(this.getKey())
+          if ($isCollapsibleContainerNode(node)) {
+            node.setOpen(nextOpen)
+          }
+        })
       }
     })
     return dom
@@ -107,7 +123,7 @@ export class CollapsibleContainerNode extends ElementNode {
   }
 
   getOpen(): boolean {
-    return this.__open
+    return this.getLatest().__open
   }
 
   toggleOpen(): void {

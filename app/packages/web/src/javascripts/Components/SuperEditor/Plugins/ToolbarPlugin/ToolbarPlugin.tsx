@@ -267,6 +267,7 @@ import { useTranslation } from 'react-i18next'
 import BlockStyleGalleryBar from './BlockStyleGallery'
 import InsertSectionsBar from './InsertSectionsBar'
 import InsertImagesButton from './InsertImagesButton'
+import InsertAccordionButton from './InsertAccordionButton'
 import TypographyStyleEditorModal from './TypographyStyleEditorModal'
 import {
   GalleryBlockDescriptor,
@@ -4045,23 +4046,28 @@ const ToolbarPlugin = ({
                               : translateBlockCategory(INSERT_SECTION_CAPTION_CATEGORY[section.id], t)
                           const buttons: ReactNode[] = section.entries
                             .filter((entry) => entry.key !== 'ImageFromUrl')
-                            .map((entry) => (
-                              <ToolbarButton
-                                key={entry.key}
-                                name={translateBlockName(entry.name, t)}
-                                iconName={entry.iconName}
-                                onSelect={() => entry.onSelect(editor, blockCatalogContext)}
-                              >
-                                {section.id === 'lists' && (
-                                  <>
-                                    <Icon type={entry.iconName} size="custom" className="super-toolbar-icon" />
-                                    <span className="ml-1.5 text-xs leading-none whitespace-nowrap">
-                                      {translateBlockName(entry.name, t)}
-                                    </span>
-                                  </>
-                                )}
-                              </ToolbarButton>
-                            ))
+                            .map((entry) => {
+                              if (entry.key === 'Collapsible') {
+                                return <InsertAccordionButton key={entry.key} editor={activeEditor} />
+                              }
+                              return (
+                                <ToolbarButton
+                                  key={entry.key}
+                                  name={translateBlockName(entry.name, t)}
+                                  iconName={entry.iconName}
+                                  onSelect={() => entry.onSelect(editor, blockCatalogContext)}
+                                >
+                                  {section.id === 'lists' && (
+                                    <>
+                                      <Icon type={entry.iconName} size="custom" className="super-toolbar-icon" />
+                                      <span className="ml-1.5 text-xs leading-none whitespace-nowrap">
+                                        {translateBlockName(entry.name, t)}
+                                      </span>
+                                    </>
+                                  )}
+                                </ToolbarButton>
+                              )
+                            })
                           if (section.id === 'others') {
                             buttons.push(...actionButtons)
                           }

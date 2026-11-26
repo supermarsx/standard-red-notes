@@ -6,8 +6,8 @@ import { BlockPickerOption } from '../BlockPickerPlugin/BlockPickerOption'
 export const CollapsibleBlock = {
   name: 'Collapsible',
   iconName: 'details-block' as IconType,
-  keywords: ['collapse', 'collapsible', 'toggle'],
-  onSelect: (editor: LexicalEditor) => editor.dispatchCommand(INSERT_COLLAPSIBLE_COMMAND, undefined),
+  keywords: ['accordion', 'zone', 'section', 'collapse', 'collapsible', 'toggle'],
+  onSelect: (editor: LexicalEditor) => editor.dispatchCommand(INSERT_COLLAPSIBLE_COMMAND, { wrapSelection: true }),
 }
 
 export function GetCollapsibleBlockOption(editor: LexicalEditor) {

@@ -9,7 +9,7 @@
 import './Collapsible.scss'
 
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
-import { $findMatchingParent, mergeRegister, $insertNodeToNearestRoot } from '@lexical/utils'
+import { $findMatchingParent, mergeRegister } from '@lexical/utils'
 import {
   $createParagraphNode,
   $getSelection,
@@ -24,19 +24,12 @@ import {
 } from 'lexical'
 import { useEffect } from 'react'
 
-import {
-  $createCollapsibleContainerNode,
-  $isCollapsibleContainerNode,
-  CollapsibleContainerNode,
-} from './CollapsibleContainerNode'
-import {
-  $createCollapsibleContentNode,
-  $isCollapsibleContentNode,
-  CollapsibleContentNode,
-} from './CollapsibleContentNode'
-import { $createCollapsibleTitleNode, $isCollapsibleTitleNode, CollapsibleTitleNode } from './CollapsibleTitleNode'
+import { $isCollapsibleContainerNode, CollapsibleContainerNode } from './CollapsibleContainerNode'
+import { $isCollapsibleContentNode, CollapsibleContentNode } from './CollapsibleContentNode'
+import { $isCollapsibleTitleNode, CollapsibleTitleNode } from './CollapsibleTitleNode'
+import { $insertAccordion, AccordionOptions } from './accordionActions'
 
-export const INSERT_COLLAPSIBLE_COMMAND = createCommand<void>()
+export const INSERT_COLLAPSIBLE_COMMAND = createCommand<AccordionOptions | void>()
 
 export default function CollapsiblePlugin(): React.JSX.Element | null {
   const [editor] = useLexicalComposerContext()
@@ -162,19 +155,11 @@ export default function CollapsiblePlugin(): React.JSX.Element | null {
       ),
       editor.registerCommand(
         INSERT_COLLAPSIBLE_COMMAND,
-        () => {
-          editor.update(() => {
-            const title = $createCollapsibleTitleNode()
-            const paragraph = $createParagraphNode()
-            $insertNodeToNearestRoot(
-              $createCollapsibleContainerNode(true).append(
-                title.append(paragraph),
-                $createCollapsibleContentNode().append($createParagraphNode()),
-              ),
-            )
-            paragraph.select()
-          })
-          return true
+        (options) => {
+          if (!editor.isEditable()) {
+            return false
+          }
+          return $insertAccordion(options || {})
         },
         COMMAND_PRIORITY_LOW,
       ),
