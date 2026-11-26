@@ -23,6 +23,9 @@ export type TabTarget = { kind: 'view'; id: string } | { kind: 'controller'; run
 
 type Props = {
   compact?: boolean
+  density?: 'full' | 'compact' | 'minimal'
+  onMouseEnter?: () => void
+  onMouseLeave?: () => void
   layoutOptions?: PaneLayoutOptions
   controllers: Controller[]
   pendingControllerRuntimeIds?: ReadonlySet<string>
@@ -151,6 +154,9 @@ const NoteTabBar: FunctionComponent<Props> = ({
   lockedTabUuids,
   onToggleTabLock,
   compact = false,
+  density = compact ? 'compact' : 'full',
+  onMouseEnter,
+  onMouseLeave,
   layoutOptions,
 }) => {
   const [contextMenuOpen, setContextMenuOpen] = useState(false)
@@ -249,6 +255,9 @@ const NoteTabBar: FunctionComponent<Props> = ({
       role="tablist"
       aria-label="Open notes"
       data-compact={compact && !renamingRuntimeId && !contextMenuOpen ? 'true' : undefined}
+      data-density={density}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
     >
       {viewTabs.map((tab) => {
         const isActive = tab.id === activeViewTabId

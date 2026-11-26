@@ -98,6 +98,25 @@ $heading-height: 75px;
 
   // Retain the same title input, status and controls while writing. Only layout
   // changes: focus, the title draft and editor selection stay on their owners.
+  transition: padding 220ms ease;
+
+  .title > .input {
+    transition:
+      font-size 220ms ease,
+      line-height 220ms ease,
+      padding 220ms ease;
+  }
+
+  [data-note-title-details] {
+    max-height: 12rem;
+    opacity: 1;
+    visibility: visible;
+    overflow: hidden;
+    transition:
+      max-height 220ms ease,
+      opacity 180ms ease;
+  }
+
   &[data-note-header-compact='true'] {
     padding-top: 2px;
     padding-bottom: 2px;
@@ -126,7 +145,10 @@ $heading-height: 75px;
     }
 
     [data-note-title-details] {
-      display: none;
+      max-height: 0;
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
     }
   }
 }
@@ -134,7 +156,27 @@ $heading-height: 75px;
 // The tab strip expands on pointer hover or keyboard focus. Locked-tab state
 // remains visible in the compact strip, and full names remain accessible.
 @media (min-width: 768px) {
-  .note-tab-bar[data-compact='true']:not(:hover):not(:focus-within):not(:has([aria-expanded='true'])) {
+  .note-tab-bar,
+  .note-tab-bar [role='tab'],
+  .note-tab-bar [data-note-tab-label] {
+    transition:
+      padding 220ms ease,
+      min-height 220ms ease,
+      max-width 220ms ease,
+      font-size 220ms ease;
+  }
+
+  .content-title-bar[data-note-header-density='minimal'] {
+    padding-top: 1px;
+    padding-bottom: 1px;
+
+    .title > .input {
+      font-size: 0.8125rem;
+      line-height: 1.25;
+    }
+  }
+
+  .note-tab-bar[data-compact='true']:not(:focus-within):not(:has([aria-expanded='true'])) {
     padding-top: 2px;
     padding-bottom: 2px;
     gap: 2px;
@@ -164,6 +206,36 @@ $heading-height: 75px;
       min-width: 22px;
       padding: 2px;
     }
+
+    &[data-density='minimal'] {
+      [role='tab'] {
+        min-height: 18px;
+        padding: 0 4px;
+      }
+
+      [data-note-tab-label] {
+        max-width: 2.5rem;
+      }
+
+      [role='tab'][aria-selected='true'] [data-note-tab-label] {
+        max-width: 6rem;
+      }
+
+      > button {
+        height: 18px;
+      }
+    }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .content-title-bar,
+  .content-title-bar .title > .input,
+  .content-title-bar [data-note-title-details],
+  .note-tab-bar,
+  .note-tab-bar [role='tab'],
+  .note-tab-bar [data-note-tab-label] {
+    transition: none;
   }
 }
 

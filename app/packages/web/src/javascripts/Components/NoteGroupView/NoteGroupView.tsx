@@ -13,6 +13,7 @@ import { WebApplication } from '@/Application/WebApplication'
 import Icon from '../Icon/Icon'
 import { FocusEvent, FormEvent } from 'react'
 import { readEditorView } from '@/View/editorViewPreferences'
+import { WritingChromeController, WritingChromeStage } from '@/View/WritingChromeController'
 import NoteTabBar, { TabTarget } from './NoteTabBar'
 import { getTileGridStyle, TileLayout } from './TileLayout'
 import { decisionForConflictTab } from './conflictTabDecision'
@@ -57,6 +58,7 @@ const persistTileLayout = (layout: TileLayout): void => {
 
 type State = {
   compactTabs: boolean
+  tabDensity: WritingChromeStage
   showMultipleSelectedNotes: boolean
   showMultipleSelectedFiles: boolean
   openingController: boolean
@@ -115,6 +117,7 @@ class NoteGroupView extends AbstractComponent<Props, State> {
     const { itemControllerGroup, paneController, notesController, itemListController } = props.application
     this.state = {
       compactTabs: false,
+      tabDensity: 'full',
       showMultipleSelectedNotes: (notesController?.selectedNotesCount ?? 0) > 1,
       showMultipleSelectedFiles: (itemListController?.selectedFilesCount ?? 0) > 1,
       controllers: itemControllerGroup.itemControllers.slice(),
@@ -262,9 +265,23 @@ class NoteGroupView extends AbstractComponent<Props, State> {
     const item = this.state.controllers.find((controller) => controller.item?.uuid === uuid)?.item
     const compactTabs =
       Boolean(target.closest('[data-note-editor-body]')) && readEditorView(item, this.application).compactTabs
-    if (compactTabs !== this.state.compactTabs) {
-      this.setState({ compactTabs })
+    if (compactTabs) {
+      this.tabsChrome.release()
+    } else {
+      this.tabsChrome.focus()
     }
+  }
+
+  private tabsChrome = new WritingChromeController((stage) =>
+    this.setState({ compactTabs: stage !== 'full', tabDensity: stage }),
+  )
+
+  private canCompactTabs = () =>
+    readEditorView(this.application.itemControllerGroup.activeItemViewController?.item, this.application).compactTabs
+
+  override componentWillUnmount(): void {
+    this.tabsChrome.dispose()
+    super.componentWillUnmount()
   }
 
   private setActiveController = (controller: NoteViewController | FileViewController) => {
@@ -537,9 +554,25 @@ class NoteGroupView extends AbstractComponent<Props, State> {
             className="flex h-full w-full flex-col"
             onFocusCapture={this.onWorkspaceFocus}
             onInputCapture={this.onWorkspaceFocus}
+            onBlurCapture={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget as Node) && this.canCompactTabs()) {
+                this.tabsChrome.release()
+              }
+            }}
           >
             <NoteTabBar
               compact={this.state.compactTabs}
+              density={this.state.tabDensity}
+              onMouseEnter={() => {
+                if (this.canCompactTabs()) {
+                  this.tabsChrome.hoverStart()
+                }
+              }}
+              onMouseLeave={() => {
+                if (this.canCompactTabs()) {
+                  this.tabsChrome.hoverEnd()
+                }
+              }}
               layoutOptions={{
                 layout: this.state.tileLayout,
                 tileCount: visibleControllers.length,

@@ -237,12 +237,14 @@ describe('editor tab bar with a tab open', () => {
 
 describe('compact workspace controls', () => {
   beforeEach(() => {
+    jest.useFakeTimers()
     global.ResizeObserver = class {
       observe() {}
       unobserve() {}
       disconnect() {}
     } as unknown as typeof ResizeObserver
   })
+  afterEach(() => jest.useRealTimers())
   it('compacts during body focus and input, and expands when the tab strip receives focus', () => {
     const { application } = makeApplication([{ runtimeId: 'a', item: { uuid: 'a', title: 'Alpha' } }])
     mount(createElement(NoteGroupView, { application }), application)
@@ -252,10 +254,25 @@ describe('compact workspace controls', () => {
     body.append(input)
     container.querySelector('.grid')!.append(body)
     act(() => input.focus())
+    expect(container.querySelector('.note-tab-bar')?.hasAttribute('data-compact')).toBe(false)
+    act(() => jest.advanceTimersByTime(5000))
     expect(container.querySelector('.note-tab-bar')?.getAttribute('data-compact')).toBe('true')
+    expect(container.querySelector('.note-tab-bar')?.getAttribute('data-density')).toBe('compact')
+    act(() => jest.advanceTimersByTime(5000))
+    expect(container.querySelector('.note-tab-bar')?.getAttribute('data-density')).toBe('minimal')
+    const bar = container.querySelector('.note-tab-bar')!
+    act(() => bar.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })))
+    act(() => jest.advanceTimersByTime(1999))
+    expect(bar.getAttribute('data-density')).toBe('minimal')
+    act(() => jest.advanceTimersByTime(1))
+    expect(bar.getAttribute('data-density')).toBe('full')
+    act(() => bar.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: input })))
+    act(() => jest.advanceTimersByTime(2000))
+    expect(bar.getAttribute('data-density')).toBe('minimal')
     act(() => (addButton() as HTMLButtonElement).focus())
     expect(container.querySelector('.note-tab-bar')?.hasAttribute('data-compact')).toBe(false)
     act(() => input.dispatchEvent(new Event('input', { bubbles: true })))
+    act(() => jest.advanceTimersByTime(5000))
     expect(container.querySelector('.note-tab-bar')?.getAttribute('data-compact')).toBe('true')
   })
 

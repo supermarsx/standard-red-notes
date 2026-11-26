@@ -88,6 +88,7 @@ import { EditorContentWithSafeAreaPadding } from './EditorContentWithSafeAreaPad
 import { getNoteCustomBackgroundColor, getNoteCustomTextColor } from '@/Utils/NoteAppearance'
 import HeroHeaderBanner from '../../HeroHeader/HeroHeaderBanner'
 import { readEditorView } from '@/View/editorViewPreferences'
+import { WritingChromeController, WritingChromeStage } from '@/View/WritingChromeController'
 import { getNoteHeroHeader, HeroHeader } from '../../HeroHeader/heroHeader'
 import { readNoteCoversEnabled, writeNoteCoversEnabled } from '../../HeroHeader/noteCoversPreference'
 import { addToast, ToastType } from '@standardnotes/toast'
@@ -130,6 +131,7 @@ type State = {
   customEditorFont?: string
   editorFocused?: boolean
   headerCompact: boolean
+  headerDensity: WritingChromeStage
   paneGestureEnabled?: boolean
   updateSavingIndicator?: boolean
   editorFeatureIdentifier?: string
@@ -196,6 +198,7 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
       editorStateDidLoad: false,
       editorTitle: '',
       headerCompact: false,
+      headerDensity: 'full',
       editorLineWidth: PrefDefaults[LocalPrefKey.EditorLineWidth],
       isDesktop: isDesktopApplication(),
       noteStatus: undefined,
@@ -543,6 +546,7 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
   }
 
   override componentWillUnmount(): void {
+    this.headerChrome.dispose()
     this.scrollListenerTarget?.removeEventListener('scroll', this.onNoteContentScroll, true)
     this.scrollListenerTarget = null
 
@@ -888,9 +892,7 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
   }
 
   onTitleFocus = (event: FocusEvent<HTMLInputElement>) => {
-    if (this.state.headerCompact) {
-      this.setState({ headerCompact: false })
-    }
+    this.headerChrome.focus()
     this.titleEditedSinceFocus = false
     event.target.select()
   }
@@ -1297,16 +1299,22 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
   }
 
   onEditorFocus = () => {
-    this.setState({ editorFocused: true, headerCompact: readEditorView(this.note, this.application).compactTitle })
+    this.setState({ editorFocused: true })
+    if (readEditorView(this.note, this.application).compactTitle) {
+      this.headerChrome.release()
+    }
   }
+
+  private headerChrome = new WritingChromeController((stage) =>
+    this.setState({ headerCompact: stage !== 'full', headerDensity: stage }),
+  )
 
   private onNoteBodyInteraction = (event: FocusEvent | import('react').FormEvent) => {
     if (
       this.editorContentRef.current?.contains(event.target as Node) &&
-      !this.state.headerCompact &&
       readEditorView(this.note, this.application).compactTitle
     ) {
-      this.setState({ headerCompact: true })
+      this.headerChrome.release()
     }
   }
 
@@ -1447,6 +1455,18 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
           <div
             id="editor-title-bar"
             data-note-header-compact={compactHeader ? 'true' : undefined}
+            data-note-header-density={compactHeader ? this.state.headerDensity : 'full'}
+            onMouseEnter={this.headerChrome.hoverStart}
+            onMouseLeave={this.headerChrome.hoverEnd}
+            onFocusCapture={this.headerChrome.focus}
+            onBlurCapture={(event) => {
+              if (
+                !event.currentTarget.contains(event.relatedTarget as Node) &&
+                readEditorView(this.note, this.application).compactTitle
+              ) {
+                this.headerChrome.release()
+              }
+            }}
             // No `pt-*` here: `.content-title-bar` in _editor.scss is unlayered and
             // Tailwind v4 utilities are not, so the SCSS padding wins regardless of
             // specificity. A utility here would read as setting the top padding and
