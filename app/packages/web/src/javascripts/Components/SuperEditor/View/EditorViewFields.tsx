@@ -56,11 +56,47 @@ export function EditorViewFields({
     check('commentsVisible', 'Show comments panel'),
     check('compactTitle', 'Compact title while writing'),
     check('compactTabs', 'Compact note tabs while writing'),
+    <label className="flex items-center justify-between gap-2 text-xs">
+      Checklist box sizing
+      <select
+        className="border-border bg-default text-text rounded border px-1 py-0.5"
+        value={value.checklistBoxSizing}
+        onChange={(event) => onChange({ checklistBoxSizing: event.target.value as 'font' | 'fixed' })}
+      >
+        <option value="font">Match item font</option>
+        <option value="fixed">Fixed size</option>
+      </select>
+    </label>,
+    <label className="flex items-center justify-between gap-2 text-xs">
+      Box scale (%)
+      <input
+        type="number"
+        min={50}
+        max={200}
+        step={5}
+        disabled={value.checklistBoxSizing !== 'font'}
+        className="border-border bg-default text-text w-20 rounded border px-2 py-1 disabled:opacity-40"
+        value={value.checklistBoxScale}
+        onChange={(event) => event.target.value && onChange({ checklistBoxScale: Number(event.target.value) })}
+      />
+    </label>,
+    <label className="flex items-center justify-between gap-2 text-xs">
+      Fixed box size (px)
+      <input
+        type="number"
+        min={10}
+        max={64}
+        disabled={value.checklistBoxSizing !== 'fixed'}
+        className="border-border bg-default text-text w-20 rounded border px-2 py-1 disabled:opacity-40"
+        value={value.checklistBoxSize}
+        onChange={(event) => event.target.value && onChange({ checklistBoxSize: Number(event.target.value) })}
+      />
+    </label>,
   ]
   if (ribbon) {
     return (
       <>
-        {['Contents', 'Contents size', 'Panels and writing'].map((label, index) => (
+        {['Contents', 'Contents size', 'Panels and writing', 'Checklist boxes'].map((label, index) => (
           <RibbonGroup key={label} label={label}>
             {fields.slice(index * 3, index * 3 + 3).map((field, position) => (
               <Fragment key={position}>{field}</Fragment>

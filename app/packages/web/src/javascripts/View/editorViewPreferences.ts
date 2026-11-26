@@ -16,6 +16,9 @@ export type EditorViewPreferences = {
   commentsVisible: boolean
   compactTitle: boolean
   compactTabs: boolean
+  checklistBoxSizing: 'font' | 'fixed'
+  checklistBoxScale: number
+  checklistBoxSize: number
 }
 export const DEFAULT_EDITOR_VIEW: EditorViewPreferences = {
   tocVisible: false,
@@ -29,6 +32,9 @@ export const DEFAULT_EDITOR_VIEW: EditorViewPreferences = {
   commentsVisible: false,
   compactTitle: true,
   compactTabs: true,
+  checklistBoxSizing: 'font',
+  checklistBoxScale: 100,
+  checklistBoxSize: 18,
 }
 export function normalizeEditorView(value: unknown): EditorViewPreferences {
   const source = value && typeof value === 'object' ? (value as Partial<EditorViewPreferences>) : {}
@@ -48,11 +54,16 @@ export function normalizeEditorView(value: unknown): EditorViewPreferences {
   if (source.tocMode === 'left' || source.tocMode === 'right' || source.tocMode === 'floating') {
     next.tocMode = source.tocMode
   }
+  if (source.checklistBoxSizing === 'font' || source.checklistBoxSizing === 'fixed') {
+    next.checklistBoxSizing = source.checklistBoxSizing
+  }
   for (const [key, min, max] of [
     ['tocWidth', 200, 600],
     ['tocHeight', 160, 900],
     ['tocX', 0, 10000],
     ['tocY', 0, 10000],
+    ['checklistBoxScale', 50, 200],
+    ['checklistBoxSize', 10, 64],
   ] as const) {
     const number = source[key]
     if (typeof number === 'number' && Number.isFinite(number)) {

@@ -3,17 +3,29 @@ import { useLexicalEditable } from '@lexical/react/useLexicalEditable'
 import { EditorViewFields } from './EditorViewFields'
 import { useNoteViewPreferences } from './useNoteViewPreferences'
 import { useEditorControlsState } from '../EditorControlsContext'
-import { loadNoteLayout, saveNoteLayout } from '../Layout/layoutSettings'
+import { loadNoteLayout, saveNoteLayout, NOTE_LAYOUT_SETTINGS_CHANGED_EVENT } from '../Layout/layoutSettings'
 import { RibbonGroup } from '../Plugins/ToolbarPlugin/RibbonGroup'
 import { useApplication } from '@/Components/ApplicationProvider'
 import { EDITOR_VIEW_DEFAULTS_KEY } from '@/View/editorViewPreferences'
+import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
+import { installChecklistBoxSizing } from './checklistBoxSizing'
 
 export function NoteViewPreferencesBridge({ noteUuid }: { noteUuid?: string }) {
+  const [editor] = useLexicalComposerContext()
   const application = useApplication()
   const editable = useLexicalEditable()
   const { settings, overrides } = useNoteViewPreferences(noteUuid, editable)
   const controls = useEditorControlsState()
   const defaultsConfigured = application.getPreference?.(EDITOR_VIEW_DEFAULTS_KEY, undefined) !== undefined
+  useEffect(
+    () =>
+      installChecklistBoxSizing(editor, {
+        checklistBoxSizing: settings.checklistBoxSizing,
+        checklistBoxScale: settings.checklistBoxScale,
+        checklistBoxSize: settings.checklistBoxSize,
+      }),
+    [editor, settings.checklistBoxSizing, settings.checklistBoxScale, settings.checklistBoxSize],
+  )
   useEffect(() => {
     if (defaultsConfigured || overrides.commentsVisible !== undefined || settings.commentsVisible) {
       controls.setCommentsLayout({ commentsOpen: settings.commentsVisible })
@@ -31,7 +43,7 @@ export default function ViewRibbon({ noteUuid }: { noteUuid?: string }) {
     <div
       role="toolbar"
       aria-label="View tools"
-      className="super-toolbar flex w-full flex-wrap items-start gap-1.5 px-1 py-1"
+      className="super-toolbar flex w-full min-w-0 flex-none flex-nowrap items-start gap-1.5 overflow-x-auto overflow-y-hidden px-1 py-1"
     >
       <EditorViewFields
         ribbon
@@ -51,6 +63,7 @@ export default function ViewRibbon({ noteUuid }: { noteUuid?: string }) {
               checked={layout[key]}
               onChange={(event) => {
                 saveNoteLayout(noteUuid, { ...loadNoteLayout(noteUuid), [key]: event.target.checked })
+                window.dispatchEvent(new Event(NOTE_LAYOUT_SETTINGS_CHANGED_EVENT))
               }}
             />
             {key === 'lineNumbers' ? 'Line numbers' : 'Document minimap'}

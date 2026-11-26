@@ -7,10 +7,13 @@ import { RichTextPlugin } from '@lexical/react/LexicalRichTextPlugin'
 import { ContentEditable } from '@lexical/react/LexicalContentEditable'
 import { LexicalErrorBoundary } from '@lexical/react/LexicalErrorBoundary'
 import { HeadingNode, $createHeadingNode } from '@lexical/rich-text'
-import { $getRoot, $createTextNode, LexicalEditor } from 'lexical'
+import { $createListNode, $createListItemNode, ListNode, ListItemNode } from '@lexical/list'
+import { $getRoot, $createTextNode, LexicalEditor, TextNode } from 'lexical'
 import ApplicationProvider from '@/Components/ApplicationProvider'
 import { EditorControlsProvider, useEditorControlsState } from '../EditorControlsContext'
 import NavigationSidebar from '../Plugins/NavigationSidebarPlugin/NavigationSidebarPlugin'
+import { EditorNavigationAids } from '../Plugins/EditorNavigationAids/EditorNavigationAids'
+import { loadNoteLayout } from '../Layout/layoutSettings'
 import ViewRibbon, { NoteViewPreferencesBridge } from './ViewRibbon'
 import { DEFAULT_EDITOR_VIEW, NOTE_VIEW_KEY, EditorViewPreferences } from '@/View/editorViewPreferences'
 
@@ -75,7 +78,7 @@ function Note({ id }: { id: keyof typeof notes }) {
         <LexicalComposer
           initialConfig={{
             namespace: id,
-            nodes: [HeadingNode],
+            nodes: [HeadingNode, ListNode, ListItemNode],
             editorState: () => $getRoot().append($createHeadingNode('h1').append($createTextNode(`${id} heading`))),
             onError: (error) => {
               throw error
@@ -85,11 +88,13 @@ function Note({ id }: { id: keyof typeof notes }) {
           <ViewRibbon noteUuid={id} />
           <div className="relative flex" data-outline-host="">
             <NavigationSidebar noteUuid={id} />
-            <RichTextPlugin
-              contentEditable={<ContentEditable />}
-              placeholder={null}
-              ErrorBoundary={LexicalErrorBoundary}
-            />
+            <EditorNavigationAids noteUuid={id}>
+              <RichTextPlugin
+                contentEditable={<ContentEditable />}
+                placeholder={null}
+                ErrorBoundary={LexicalErrorBoundary}
+              />
+            </EditorNavigationAids>
           </div>
           <NoteViewPreferencesBridge noteUuid={id} />
           <Capture id={id} />
@@ -201,4 +206,104 @@ it('leaves read-mode view controls usable without writing to the note', async ()
   expect(section().querySelector('[data-navigation-sidebar]')).not.toBeNull()
   expect(patch).not.toHaveBeenCalled()
   expect(notes.first.view).toEqual({})
+})
+
+it('sizes checklist boxes to each item font and saves configurable fixed sizing without editing the body', async () => {
+  await render()
+  const editor = editors.get('first')!
+  await act(async () =>
+    editor.update(
+      () => {
+        $getRoot().append(
+          $createListNode('check').append(
+            $createListItemNode(false).append($createTextNode('Small task').setStyle('font-size: 12px')),
+            $createListItemNode(true).append($createTextNode('Large task').setStyle('font-size: 32px')),
+          ),
+        )
+      },
+      { discrete: true },
+    ),
+  )
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 40))
+  })
+  const rows = [...editor.getRootElement()!.querySelectorAll<HTMLElement>('li')]
+  expect(rows.map((row) => row.style.getPropertyValue('--checkbox-size'))).toEqual(['12px', '32px'])
+  await act(async () =>
+    editor.update(
+      () =>
+        $getRoot()
+          .getLastChild<ListNode>()!
+          .getLastChild<ListItemNode>()!
+          .getFirstChild<TextNode>()!
+          .setStyle('font-size: 48px'),
+      { discrete: true },
+    ),
+  )
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 40))
+  })
+  expect(rows.map((row) => row.style.getPropertyValue('--checkbox-size'))).toEqual(['12px', '48px'])
+  const before = editor.getEditorState().toJSON()
+  const mode = [...section().querySelectorAll('label')]
+    .find((label) => label.textContent?.includes('Checklist box sizing'))!
+    .querySelector('select')!
+  await act(async () => {
+    mode.value = 'fixed'
+    mode.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+  expect(rows.map((row) => row.style.getPropertyValue('--checkbox-size'))).toEqual(['18px', '18px'])
+  expect(notes.first.view.checklistBoxSizing).toBe('fixed')
+  expect(editor.getEditorState().toJSON()).toEqual(before)
+})
+
+it('enables line numbers and a drawn, navigable minimap from the real View controls for this note', async () => {
+  const context = { scale: jest.fn(), fillRect: jest.fn(), fillStyle: '' }
+  const canvasContext = jest.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context as never)
+  const originalRects = Object.getOwnPropertyDescriptor(Range.prototype, 'getClientRects')
+  Object.defineProperty(Range.prototype, 'getClientRects', {
+    configurable: true,
+    value: () => [new DOMRect(0, 12, 100, 20)],
+  })
+  try {
+    await render()
+    const editor = editors.get('first')!
+    const editorRoot = editor.getRootElement()!
+    const originalState = editor.getEditorState().toJSON()
+    const shell = section().querySelector<HTMLElement>('.srn-editor-navigation-aids')!
+    Object.defineProperties(editorRoot, {
+      clientHeight: { value: 200 },
+      scrollHeight: { value: 1000 },
+      clientWidth: { value: 400 },
+    })
+    Object.defineProperty(shell, 'clientHeight', { value: 600 })
+    editorRoot.style.overflowY = 'auto'
+    editorRoot.scrollTo = jest.fn()
+    await act(async () => checkbox('Line numbers').click())
+    expect(section().querySelector('.srn-line-gutter')).not.toBeNull()
+    await act(async () => checkbox('Document minimap').click())
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 180))
+    })
+    expect(section().querySelector('.srn-line-gutter')?.textContent).toBe('1')
+    expect(context.fillRect).toHaveBeenCalled()
+    const minimap = section().querySelector<HTMLButtonElement>('.srn-note-minimap')!
+    expect(minimap).not.toBeNull()
+    await act(async () => minimap.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true })))
+    expect(editorRoot.scrollTo).toHaveBeenCalledWith({ top: 800, behavior: 'auto' })
+    expect(section('second').querySelector('.srn-note-minimap')).toBeNull()
+    expect(loadNoteLayout('first')).toMatchObject({ lineNumbers: true, minimap: true })
+    expect(editor.getEditorState().toJSON()).toEqual(originalState)
+    await act(async () => checkbox('Line numbers').click())
+    expect(section().querySelector('.srn-line-gutter')).toBeNull()
+    expect(section().querySelector('.srn-note-minimap')).not.toBeNull()
+  } finally {
+    await act(async () => root.render(null))
+    canvasContext.mockRestore()
+    if (originalRects) {
+      Object.defineProperty(Range.prototype, 'getClientRects', originalRects)
+    } else {
+      Reflect.deleteProperty(Range.prototype, 'getClientRects')
+    }
+  }
 })
